@@ -7,11 +7,11 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
     let has_rung = app.doc.selected_rung_idx.is_some();
     let palette = app.theme.palette();
 
-    // --- 1. Top Box: Modern Icon Grid for Ladder Tools ---
+    // --- 1. Top Box: Modern Icon Grid for Network Tools ---
     ui.group(|ui| {
         ui.set_width(ui.available_width());
         ui.label(
-            RichText::new("Ladder Tools")
+            RichText::new("Network Tools")
                 .color(palette.accent_heading)
                 .strong(),
         );
@@ -56,19 +56,19 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
 
         ui.add_space(4.0);
 
-        // Row 2: New Rung / Delete Rung
+        // Row 2: New Network / Delete Network
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             if modern_tool_tile(
                 ui,
                 VectorIcon::NewRung,
-                "New Rung",
+                "New Network",
                 palette.accent_ok,
                 true,
                 half_w,
                 palette,
             )
-            .on_hover_text("Append a new rung to the ladder program")
+            .on_hover_text("Append a new network to the ladder program")
             .clicked()
             {
                 app.doc.add_rung();
@@ -83,7 +83,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 half_w,
                 palette,
             )
-            .on_hover_text("Delete selected rung")
+            .on_hover_text("Delete selected network")
             .clicked()
             {
                 if let Some(idx) = app.doc.selected_rung_idx {
@@ -106,7 +106,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 half_w,
                 palette,
             )
-            .on_hover_text("Move selected rung up")
+            .on_hover_text("Move selected network up")
             .clicked()
             {
                 if let Some(idx) = app.doc.selected_rung_idx {
@@ -123,7 +123,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 half_w,
                 palette,
             )
-            .on_hover_text("Move selected rung down")
+            .on_hover_text("Move selected network down")
             .clicked()
             {
                 if let Some(idx) = app.doc.selected_rung_idx {
@@ -146,7 +146,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 half_w,
                 palette,
             )
-            .on_hover_text("Duplicate rung above current rung")
+            .on_hover_text("Duplicate network above current network")
             .clicked()
             {
                 if let Some(idx) = app.doc.selected_rung_idx {
@@ -163,7 +163,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 half_w,
                 palette,
             )
-            .on_hover_text("Paste/Duplicate rung below current rung")
+            .on_hover_text("Paste/Duplicate network below current network")
             .clicked()
             {
                 if let Some(idx) = app.doc.selected_rung_idx {
@@ -175,17 +175,17 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
 
         ui.add_space(4.0);
 
-        // Full-width Copy Rung button
+        // Full-width Copy Network button
         if modern_tool_tile(
             ui,
             VectorIcon::CopyRung,
-            "Copy Selected Rung to Clipboard",
+            "Copy Selected Network",
             palette.accent_warn,
             has_rung,
             avail_w,
             palette,
         )
-        .on_hover_text("Copy selected rung for pasting elsewhere")
+        .on_hover_text("Copy selected network for pasting elsewhere")
         .clicked()
         {
             app.copied_rung_idx = app.doc.selected_rung_idx;
@@ -247,44 +247,6 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 4.0;
 
-            component_tool_button(
-                ui,
-                app,
-                VectorIcon::Comment,
-                "Rung Comment",
-                ActiveTool::Comment,
-                palette.accent_ok,
-            );
-
-            component_tool_button(
-                ui,
-                app,
-                VectorIcon::ContactNo,
-                "Contact (NO)",
-                ActiveTool::ContactNo,
-                palette.accent_warn,
-            );
-
-            component_tool_button(
-                ui,
-                app,
-                VectorIcon::ContactNc,
-                "Contact (NC)",
-                ActiveTool::ContactNc,
-                palette.accent_warn,
-            );
-
-            component_tool_button(
-                ui,
-                app,
-                VectorIcon::Coil,
-                "Output Coil",
-                ActiveTool::CoilNormal,
-                palette.accent_heading,
-            );
-
-            ui.add_space(2.0);
-
             // 1. IEC Bit Logic
             category_menu(
                 ui,
@@ -304,6 +266,9 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     popup_tool_item(ui, app, "Reset Coil — (R)", ActiveTool::CoilReset);
                     popup_tool_item(ui, app, "Positive Edge Coil — (P)", ActiveTool::CoilP);
                     popup_tool_item(ui, app, "Negative Edge Coil — (N)", ActiveTool::CoilN);
+                    ui.separator();
+                    popup_tool_item(ui, app, "SR — Set-Dominant Bistable FB", ActiveTool::Sr);
+                    popup_tool_item(ui, app, "RS — Reset-Dominant Bistable FB", ActiveTool::Rs);
                     ui.separator();
                     popup_tool_item(ui, app, "Master Control Relay (MCR)", ActiveTool::MasterRelay);
                     popup_tool_item(ui, app, "Parallel Branch", ActiveTool::Branch);
@@ -334,7 +299,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
             category_menu(
                 ui,
                 VectorIcon::PulseEdge,
-                "IEC Edge Triggers (TRIG)",
+                "IEC Edge Triggers",
                 palette.accent_ok,
                 palette,
                 |ui| {
@@ -361,7 +326,20 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 },
             );
 
-            // 5. Hardware & Extensions
+            // 5. IEC Program Flow
+            category_menu(
+                ui,
+                VectorIcon::MoveUp,
+                "IEC Program Flow",
+                palette.accent_heading,
+                palette,
+                |ui| {
+                    popup_tool_item(ui, app, "JMP — Jump to Label", ActiveTool::Jump);
+                    popup_tool_item(ui, app, "LBL — Target Label", ActiveTool::Label);
+                },
+            );
+
+            // 6. Hardware & Extensions
             category_menu(
                 ui,
                 VectorIcon::SerialComm,
@@ -380,30 +358,6 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
             );
         });
     });
-}
-
-fn component_tool_button(
-    ui: &mut Ui,
-    app: &mut CanvasApp,
-    icon: VectorIcon,
-    label: &str,
-    tool: ActiveTool,
-    accent: Color32,
-) {
-    let is_sel = app.active_tool == tool;
-    let resp = modern_component_button(ui, icon, label, accent, is_sel, app.theme.palette())
-        .on_hover_text("Click to select tool, or click & drag onto any rung or element");
-
-    if resp.drag_started() || (resp.dragged() && app.canvas.dragging_tool.is_none()) {
-        app.canvas.start_tool_drag(tool, label);
-    }
-    if resp.clicked() {
-        if app.active_tool == tool {
-            app.active_tool = ActiveTool::Select;
-        } else {
-            app.active_tool = tool;
-        }
-    }
 }
 
 fn popup_tool_item(ui: &mut Ui, app: &mut CanvasApp, label: &str, tool: ActiveTool) {

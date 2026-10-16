@@ -139,6 +139,16 @@ impl IlParser {
                         out.push_str(&format!("    {} : F_TRIG;\n", el.name));
                     }
                 }
+                TypeTag::Sr => {
+                    if declared.insert(el.name.clone()) {
+                        out.push_str(&format!("    {} : SR;\n", el.name));
+                    }
+                }
+                TypeTag::Rs => {
+                    if declared.insert(el.name.clone()) {
+                        out.push_str(&format!("    {} : RS;\n", el.name));
+                    }
+                }
                 TypeTag::Move | TypeTag::Math | TypeTag::Compare => {
                     if declared.insert(el.name.clone()) && !el.name.starts_with('X') && !el.name.starts_with('Y') {
                         out.push_str(&format!("    {} : INT := 0; (* Internal Register *)\n", el.name));
@@ -339,6 +349,24 @@ impl IlParser {
                 }
                 TypeTag::MasterRelay => {
                     out.push_str("    MC\n");
+                    first = false;
+                }
+                TypeTag::Sr => {
+                    let r_target = if !el.target_reg.is_empty() { &el.target_reg } else { "FALSE" };
+                    out.push_str(&format!("    CAL  {}(S1 := TRUE, R := {})\n", el.name, r_target));
+                    first = false;
+                }
+                TypeTag::Rs => {
+                    let r_target = if !el.target_reg.is_empty() { &el.target_reg } else { "FALSE" };
+                    out.push_str(&format!("    CAL  {}(S := TRUE, R1 := {})\n", el.name, r_target));
+                    first = false;
+                }
+                TypeTag::Jump => {
+                    out.push_str(&format!("    JMPC {}\n", el.name));
+                    first = false;
+                }
+                TypeTag::Label => {
+                    out.push_str(&format!("{}:\n", el.name));
                     first = false;
                 }
                 TypeTag::Wire => {
@@ -702,6 +730,38 @@ impl IlParser {
                         ..Default::default()
                     });
                 }
+                if cal_name.contains("SR") || fb_presets.get(cal_name).map(|(t, _)| *t == TypeTag::Sr).unwrap_or(false) {
+                    let r_tag = if let Some(idx) = rest.find("R :=") {
+                        let r_part = &rest[idx + "R :=".len()..];
+                        r_part.split(|c: char| c == ',' || c == ')').next().unwrap_or("").trim().to_string()
+                    } else {
+                        String::new()
+                    };
+                    return Some(LadderElement {
+                        id,
+                        element_type: TypeTag::Sr,
+                        name: cal_name.to_string(),
+                        symbol: cal_name.to_string(),
+                        target_reg: r_tag,
+                        ..Default::default()
+                    });
+                }
+                if cal_name.contains("RS") || fb_presets.get(cal_name).map(|(t, _)| *t == TypeTag::Rs).unwrap_or(false) {
+                    let r1_tag = if let Some(idx) = rest.find("R1 :=") {
+                        let r_part = &rest[idx + "R1 :=".len()..];
+                        r_part.split(|c: char| c == ',' || c == ')').next().unwrap_or("").trim().to_string()
+                    } else {
+                        String::new()
+                    };
+                    return Some(LadderElement {
+                        id,
+                        element_type: TypeTag::Rs,
+                        name: cal_name.to_string(),
+                        symbol: cal_name.to_string(),
+                        target_reg: r1_tag,
+                        ..Default::default()
+                    });
+                }
 
                 None
             }
@@ -786,8 +846,62 @@ impl IlParser {
                 symbol: "MR".to_string(),
                 ..Default::default()
             }),
+            "SR" => {
+                let name = parts.get(1).unwrap_or(&"SR1").trim_matches(';');
+                let r_reg = parts.get(2).unwrap_or(&"").trim_matches(';');
+                Some(LadderElement {
+                    id,
+                    element_type: TypeTag::Sr,
+                    name: name.to_string(),
+                    symbol: name.to_string(),
+                    target_reg: r_reg.to_string(),
+                    ..Default::default()
+                })
+            }
+            "RS" => {
+                let name = parts.get(1).unwrap_or(&"RS1").trim_matches(';');
+                let r1_reg = parts.get(2).unwrap_or(&"").trim_matches(';');
+                Some(LadderElement {
+                    id,
+                    element_type: TypeTag::Rs,
+                    name: name.to_string(),
+                    symbol: name.to_string(),
+                    target_reg: r1_reg.to_string(),
+                    ..Default::default()
+                })
+            }
+            "JMP" | "JMPC" | "JMPCN" => {
+                let name = parts.get(1).unwrap_or(&"LBL1").trim_matches(';');
+                Some(LadderElement {
+                    id,
+                    element_type: TypeTag::Jump,
+                    name: name.to_string(),
+                    symbol: name.to_string(),
+                    ..Default::default()
+                })
+            }
+            "LBL" | "LABEL" => {
+                let name = parts.get(1).unwrap_or(&"LBL1").trim_matches(';');
+                Some(LadderElement {
+                    id,
+                    element_type: TypeTag::Label,
+                    name: name.to_string(),
+                    symbol: name.to_string(),
+                    ..Default::default()
+                })
+            }
             "SHORT" | "WIRE" => Some(LadderElement::new_wire(id)),
             "OPEN" => Some(LadderElement::new_open(id)),
+            _ if op.ends_with(':') => {
+                let lbl = op.trim_end_matches(':');
+                Some(LadderElement {
+                    id,
+                    element_type: TypeTag::Label,
+                    name: lbl.to_string(),
+                    symbol: lbl.to_string(),
+                    ..Default::default()
+                })
+            }
             _ => None,
         }
     }
@@ -903,6 +1017,10 @@ impl IlParser {
                         10
                     };
                     fb_presets.insert(name, (TypeTag::Ctu, pv));
+                } else if ty.starts_with("SR") {
+                    fb_presets.insert(name, (TypeTag::Sr, 0));
+                } else if ty.starts_with("RS") {
+                    fb_presets.insert(name, (TypeTag::Rs, 0));
                 }
             }
         }

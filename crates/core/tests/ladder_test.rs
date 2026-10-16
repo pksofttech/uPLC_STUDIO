@@ -1,5 +1,5 @@
 use my_canvas_core::{
-    ContactMode, Document, IlParser, InsertPosition, LadderElement, LadderProgram, LdParser, SimState, TypeTag,
+    CoilMode, ContactMode, Document, IlParser, InsertPosition, LadderElement, LadderProgram, LdParser, SimState, TypeTag,
 };
 
 #[test]
@@ -575,6 +575,7 @@ fn test_load_all_example_il_files() {
         "04_counter_batch_pack",
         "05_auto_door_control",
         "06_math_compare_analog",
+        "07_all_iec_components",
     ];
 
     for base in files {
@@ -680,7 +681,439 @@ fn test_iec_61131_3_transitions_and_function_blocks() {
     assert_eq!(loaded.rungs[1].elements[0].contact_mode, ContactMode::NegativeTransition);
     assert_eq!(loaded.rungs[2].elements[1].element_type, TypeTag::Tp);
 }
+#[test]
+fn test_simulation_mode_transitions_and_safety() {
+    let mut doc = Document::default();
 
+    // 1. Initial State: Stopped
+    assert!(doc.simulator.is_stopped());
+    assert!(!doc.simulator.is_running());
+    assert!(!doc.simulator.is_active());
+    assert_eq!(doc.simulator.scan_count, 0);
 
+    // 2. Transition: Stopped -> Running
+    doc.start_simulation();
+    assert!(doc.simulator.is_running());
+    assert!(doc.simulator.is_active());
+    assert!(!doc.simulator.is_stopped());
+    // Initial scan executed immediately on start
+    assert_eq!(doc.simulator.scan_count, 1);
 
+    // Latch motor circuit: Start button X0 = true
+    doc.simulator.set_input("X0", true);
+    doc.step_simulation(10);
+    assert_eq!(doc.simulator.get_var_value("Y0"), true);
+    assert!(doc.program.rungs[0].is_energized);
 
+    // Release X0: Y0 stays latched ON
+    doc.simulator.set_input("X0", false);
+    doc.step_simulation(10);
+    assert_eq!(doc.simulator.get_var_value("Y0"), true);
+
+    // 3. Transition: Running -> Stopped (Emergency / Safe Stop)
+    // Standard PLC Safety Rule: All physical outputs MUST turn OFF immediately!
+    doc.stop_simulation();
+    assert!(doc.simulator.is_stopped());
+    assert!(!doc.simulator.is_running());
+    assert!(!doc.simulator.is_active());
+
+    // Verify all physical outputs are safely de-energized
+    assert_eq!(doc.simulator.get_var_value("Y0"), false);
+    assert_eq!(doc.simulator.get_var_value("Y1"), false);
+    assert!(!doc.program.rungs[0].is_energized);
+    assert!(!doc.program.rungs[0].elements[0].is_energized);
+
+    // 4. Transition: Stopped -> Step mode
+    doc.single_step_simulation(10);
+    assert!(doc.simulator.is_step());
+    assert!(doc.simulator.is_active());
+    assert!(!doc.simulator.is_running());
+
+    // In step mode, toggling input immediately evaluates the current scan step
+    let old_scans = doc.simulator.scan_count;
+    doc.toggle_input("X0");
+    assert_eq!(doc.simulator.get_var_value("X0"), true);
+    // Since X0 is now true, motor Y0 energizes in this step
+    assert_eq!(doc.simulator.get_var_value("Y0"), true);
+    assert!(doc.program.rungs[0].is_energized);
+
+    // Step scan count updated
+    assert!(doc.simulator.scan_count >= old_scans);
+
+    // 5. Transition: Step -> Running (Resume continuous)
+    doc.toggle_simulation();
+    assert!(doc.simulator.is_running());
+    assert!(doc.simulator.is_active());
+
+    // 6. Transition: Running -> Reset
+    doc.reset_simulation();
+    assert!(doc.simulator.is_stopped());
+    assert!(!doc.simulator.is_active());
+    assert_eq!(doc.simulator.scan_count, 0);
+    assert_eq!(doc.simulator.simulation_time_ms, 0);
+    assert_eq!(doc.simulator.get_var_value("Y0"), false);
+    assert_eq!(doc.simulator.get_var_value("Y1"), false);
+    assert!(!doc.program.rungs[0].is_energized);
+}
+
+#[test]
+fn test_ld_move_st_inline_execution_and_roundtrip() {
+    let il_script = r#"
+PROGRAM
+RUNG
+    LD   X00
+    MOVE V00 10
+    ST   Y00
+END
+END
+"#;
+
+    let mut prog = IlParser::parse(il_script).expect("Should parse LD -> MOVE -> ST successfully");
+    assert_eq!(prog.rungs.len(), 1);
+    assert_eq!(prog.rungs[0].elements.len(), 3);
+
+    // Element 0: Contact X00
+    assert_eq!(prog.rungs[0].elements[0].element_type, TypeTag::Contact);
+    assert_eq!(prog.rungs[0].elements[0].name, "X00");
+
+    // Element 1: MOVE V00 10
+    assert_eq!(prog.rungs[0].elements[1].element_type, TypeTag::Move);
+    assert_eq!(prog.rungs[0].elements[1].name, "V00");
+    assert_eq!(prog.rungs[0].elements[1].preset_value, 10);
+
+    // Element 2: Coil Y00
+    assert_eq!(prog.rungs[0].elements[2].element_type, TypeTag::Coil);
+    assert_eq!(prog.rungs[0].elements[2].name, "Y00");
+
+    // Test simulation execution
+    let mut sim = my_canvas_core::PlcSimulator::default();
+    sim.start(&mut prog);
+
+    // Scan 1: X00 is false -> MOVE does not write, Y00 is false
+    assert_eq!(*sim.registers.get("V00").unwrap_or(&0), 0);
+    assert_eq!(sim.get_var_value("Y00"), false);
+    assert!(!prog.rungs[0].is_energized);
+    assert!(!prog.rungs[0].elements[1].is_energized);
+
+    // Scan 2: Set X00 = true -> MOVE copies 10 to V00, power flows through ENO, Y00 energizes!
+    sim.set_input("X00", true);
+    sim.step_scan(&mut prog, 10);
+
+    assert_eq!(*sim.registers.get("V00").unwrap_or(&0), 10);
+    assert_eq!(sim.get_var_value("Y00"), true);
+    assert!(prog.rungs[0].is_energized);
+    assert!(prog.rungs[0].elements[1].is_energized); // Move block is energized
+    assert!(prog.rungs[0].elements[2].is_energized); // Coil is energized
+
+    // Test Export roundtrip
+    let exported = IlParser::export_il(&prog);
+    assert!(exported.contains("LD   X00") || exported.contains("LD\tX00"));
+    assert!(exported.contains("MOVE V00 10") || exported.contains("MOVE\tV00 10"));
+    assert!(exported.contains("ST   Y00") || exported.contains("ST\tY00"));
+}
+
+#[test]
+fn test_all_iec_components_comprehensive_matrix() {
+    let mut prog = LadderProgram::new_empty();
+    prog.rungs.clear();
+
+    // Rung 0: All Contact Modes into Coils
+    let mut r0 = my_canvas_core::Rung::new(0);
+    r0.elements.push(LadderElement::new_contact(1, "X0", "PB_NO", ContactMode::NormallyOpen));
+    r0.elements.push(LadderElement::new_contact(2, "X1", "PB_NC", ContactMode::NormallyClosed));
+    r0.elements.push(LadderElement::new_contact(3, "X2", "PB_P", ContactMode::PositiveTransition));
+    r0.elements.push(LadderElement::new_contact(4, "X3", "PB_N", ContactMode::NegativeTransition));
+    r0.elements.push(LadderElement::new_coil(5, "Y0", "OUT_NORM", CoilMode::Normal));
+    prog.rungs.push(r0);
+
+    // Rung 1: Set & Reset Latch Coils
+    let mut r1 = my_canvas_core::Rung::new(1);
+    r1.elements.push(LadderElement::new_contact(6, "X4", "SET_BTN", ContactMode::NormallyOpen));
+    r1.elements.push(LadderElement::new_coil(7, "M0", "LATCH_M0", CoilMode::SetLatch));
+    prog.rungs.push(r1);
+
+    let mut r2 = my_canvas_core::Rung::new(2);
+    r2.elements.push(LadderElement::new_contact(8, "X5", "RST_BTN", ContactMode::NormallyOpen));
+    r2.elements.push(LadderElement::new_coil(9, "M0", "UNLATCH_M0", CoilMode::ResetUnlatch));
+    prog.rungs.push(r2);
+
+    // Rung 3: Timers (TON, TOF, TP)
+    let mut r3 = my_canvas_core::Rung::new(3);
+    r3.elements.push(LadderElement::new_contact(10, "X6", "TMR_EN", ContactMode::NormallyOpen));
+    let mut ton_el = LadderElement::new_contact(11, "T0", "TIMER_ON", ContactMode::NormallyOpen);
+    ton_el.element_type = TypeTag::Ton;
+    ton_el.preset_value = 500;
+    r3.elements.push(ton_el);
+    r3.elements.push(LadderElement::new_coil(12, "Y1", "TMR_OUT", CoilMode::Normal));
+    prog.rungs.push(r3);
+
+    let mut r4 = my_canvas_core::Rung::new(4);
+    r4.elements.push(LadderElement::new_contact(13, "X7", "TOF_EN", ContactMode::NormallyOpen));
+    let mut tof_el = LadderElement::new_contact(14, "T1", "TIMER_OFF", ContactMode::NormallyOpen);
+    tof_el.element_type = TypeTag::Tof;
+    tof_el.preset_value = 1000;
+    r4.elements.push(tof_el);
+    r4.elements.push(LadderElement::new_coil(15, "Y2", "TOF_OUT", CoilMode::Normal));
+    prog.rungs.push(r4);
+
+    let mut r5 = my_canvas_core::Rung::new(5);
+    r5.elements.push(LadderElement::new_contact(16, "X0", "TP_EN", ContactMode::NormallyOpen));
+    let mut tp_el = LadderElement::new_contact(17, "T2", "TIMER_PULSE", ContactMode::NormallyOpen);
+    tp_el.element_type = TypeTag::Tp;
+    tp_el.preset_value = 250;
+    r5.elements.push(tp_el);
+    r5.elements.push(LadderElement::new_coil(18, "Y3", "TP_OUT", CoilMode::Normal));
+    prog.rungs.push(r5);
+
+    // Rung 6: Counters (CTU, CTD, CTUD)
+    let mut r6 = my_canvas_core::Rung::new(6);
+    r6.elements.push(LadderElement::new_contact(19, "X1", "PULSE_IN", ContactMode::NormallyOpen));
+    let mut ctu_el = LadderElement::new_contact(20, "C0", "COUNT_UP", ContactMode::NormallyOpen);
+    ctu_el.element_type = TypeTag::Ctu;
+    ctu_el.preset_value = 5;
+    r6.elements.push(ctu_el);
+    r6.elements.push(LadderElement::new_coil(21, "Y4", "CTU_OUT", CoilMode::Normal));
+    prog.rungs.push(r6);
+
+    // Rung 7: Edge Detection Function Blocks (R_TRIG, F_TRIG)
+    let mut r7 = my_canvas_core::Rung::new(7);
+    r7.elements.push(LadderElement::new_contact(22, "X2", "TRIG_IN", ContactMode::NormallyOpen));
+    let mut rtrig_el = LadderElement::new_contact(23, "RTRIG_1", "R_TRIG_1", ContactMode::NormallyOpen);
+    rtrig_el.element_type = TypeTag::RTrig;
+    r7.elements.push(rtrig_el);
+    r7.elements.push(LadderElement::new_coil(24, "Y5", "PULSE_OUT", CoilMode::Normal));
+    prog.rungs.push(r7);
+
+    // Rung 8: Compare, Math & Move
+    let mut r8 = my_canvas_core::Rung::new(8);
+    r8.elements.push(LadderElement::new_contact(25, "X3", "CALC_EN", ContactMode::NormallyOpen));
+    let mut cmp_el = LadderElement::new_contact(26, "V0", "CMP_V0", ContactMode::NormallyOpen);
+    cmp_el.element_type = TypeTag::Compare;
+    cmp_el.compare_op = ">=".to_string();
+    cmp_el.preset_value = 10;
+    r8.elements.push(cmp_el);
+
+    let mut move_el = LadderElement::new_contact(27, "V1", "MOVE_V1", ContactMode::NormallyOpen);
+    move_el.element_type = TypeTag::Move;
+    move_el.preset_value = 99;
+    r8.elements.push(move_el);
+    r8.elements.push(LadderElement::new_coil(28, "Y6", "CALC_OUT", CoilMode::Normal));
+    prog.rungs.push(r8);
+
+    // Verify all 9 networks validate and export
+    assert_eq!(prog.rungs.len(), 9);
+    let il = IlParser::export_il(&prog);
+    assert!(il.contains("PROGRAM"));
+    assert!(il.contains("VAR"));
+    assert!(il.contains("END_VAR"));
+
+    // Verify simulation scan executes across all 9 IEC rungs without error
+    let mut sim = my_canvas_core::PlcSimulator::default();
+    sim.start(&mut prog);
+    assert_eq!(sim.scan_count, 1);
+    sim.step_scan(&mut prog, 50);
+    assert_eq!(sim.scan_count, 2);
+}
+
+#[test]
+fn test_bistable_sr_and_rs() {
+    use my_canvas_core::{ContactMode, LadderElement, LadderProgram, PlcSimulator, Rung, TypeTag};
+
+    // --- 1. Test SR (Set dominant) ---
+    // Rung: Contact X0 (S1) -> SR (target_reg: "X1", name: "M0")
+    let mut prog = LadderProgram::default();
+    let mut r0 = Rung::new(0);
+    r0.elements.push(LadderElement::new_contact(1, "X0", "SET", ContactMode::NormallyOpen));
+    let mut sr_el = LadderElement::new_contact(2, "M0", "SR_FB", ContactMode::NormallyOpen);
+    sr_el.element_type = TypeTag::Sr;
+    sr_el.target_reg = "X1".to_string(); // Reset input
+    r0.elements.push(sr_el);
+    prog.rungs.push(r0);
+
+    let mut sim = PlcSimulator::default();
+
+    // S1=0, R=0 => Q=0
+    sim.set_input("X0", false);
+    sim.set_input("X1", false);
+    sim.step_scan(&mut prog, 10);
+    assert!(!sim.get_var_value("M0"));
+
+    // S1=1, R=0 => Q=1 (Set)
+    sim.set_input("X0", true);
+    sim.step_scan(&mut prog, 10);
+    assert!(sim.get_var_value("M0"));
+
+    // S1=0, R=0 => Q=1 (Latched)
+    sim.set_input("X0", false);
+    sim.step_scan(&mut prog, 10);
+    assert!(sim.get_var_value("M0"));
+
+    // S1=0, R=1 => Q=0 (Reset)
+    sim.set_input("X1", true);
+    sim.step_scan(&mut prog, 10);
+    assert!(!sim.get_var_value("M0"));
+
+    // S1=1, R=1 => Q=1 (Set-dominant!)
+    sim.set_input("X0", true);
+    sim.set_input("X1", true);
+    sim.step_scan(&mut prog, 10);
+    assert!(sim.get_var_value("M0"), "SR must be Set-dominant when S1 and R are both TRUE");
+
+    // --- 2. Test RS (Reset dominant) ---
+    let mut prog_rs = LadderProgram::default();
+    let mut r_rs = Rung::new(0);
+    r_rs.elements.push(LadderElement::new_contact(10, "X2", "SET", ContactMode::NormallyOpen));
+    let mut rs_el = LadderElement::new_contact(11, "M1", "RS_FB", ContactMode::NormallyOpen);
+    rs_el.element_type = TypeTag::Rs;
+    rs_el.target_reg = "X3".to_string(); // Reset input
+    r_rs.elements.push(rs_el);
+    prog_rs.rungs.push(r_rs);
+
+    let mut sim_rs = PlcSimulator::default();
+
+    // S=1, R1=0 => Q=1
+    sim_rs.set_input("X2", true);
+    sim_rs.set_input("X3", false);
+    sim_rs.step_scan(&mut prog_rs, 10);
+    assert!(sim_rs.get_var_value("M1"));
+
+    // S=0, R1=0 => Q=1 (Latched)
+    sim_rs.set_input("X2", false);
+    sim_rs.step_scan(&mut prog_rs, 10);
+    assert!(sim_rs.get_var_value("M1"));
+
+    // S=1, R1=1 => Q=0 (Reset-dominant!)
+    sim_rs.set_input("X2", true);
+    sim_rs.set_input("X3", true);
+    sim_rs.step_scan(&mut prog_rs, 10);
+    assert!(!sim_rs.get_var_value("M1"), "RS must be Reset-dominant when S and R1 are both TRUE");
+}
+
+#[test]
+fn test_jump_and_label_flow() {
+    use my_canvas_core::{CoilMode, ContactMode, LadderElement, LadderProgram, PlcSimulator, Rung, TypeTag};
+
+    let mut prog = LadderProgram::default();
+
+    // Rung 0: If X0 is ON, JMP to LBL_SKIP
+    let mut r0 = Rung::new(0);
+    r0.elements.push(LadderElement::new_contact(1, "X0", "COND_JMP", ContactMode::NormallyOpen));
+    let mut jmp = LadderElement::new_contact(2, "LBL_SKIP", "JMP", ContactMode::NormallyOpen);
+    jmp.element_type = TypeTag::Jump;
+    r0.elements.push(jmp);
+    prog.rungs.push(r0);
+
+    // Rung 1: Middle rung (should be skipped when X0 is ON)
+    let mut r1 = Rung::new(1);
+    r1.elements.push(LadderElement::new_contact(3, "X1", "ALWAYS_ON", ContactMode::NormallyOpen));
+    r1.elements.push(LadderElement::new_coil(4, "Y1", "MIDDLE_COIL", CoilMode::Normal));
+    prog.rungs.push(r1);
+
+    // Rung 2: Destination Label LBL_SKIP, then turn on Y2
+    let mut r2 = Rung::new(2);
+    let mut lbl = LadderElement::new_contact(5, "LBL_SKIP", "LBL", ContactMode::NormallyOpen);
+    lbl.element_type = TypeTag::Label;
+    r2.elements.push(lbl);
+    r2.elements.push(LadderElement::new_contact(6, "X2", "LANDING_IN", ContactMode::NormallyOpen));
+    r2.elements.push(LadderElement::new_coil(7, "Y2", "LANDING_OUT", CoilMode::Normal));
+    prog.rungs.push(r2);
+
+    let mut sim = PlcSimulator::default();
+    sim.set_input("X1", true);
+    sim.set_input("X2", true);
+
+    // Case A: X0 is FALSE -> No Jump -> Y1 turns ON, Y2 turns ON
+    sim.set_input("X0", false);
+    sim.step_scan(&mut prog, 10);
+    assert!(sim.get_var_value("Y1"), "Y1 should be ON when Jump is not taken");
+    assert!(sim.get_var_value("Y2"), "Y2 should be ON");
+
+    // Case B: X0 is TRUE -> Jump taken -> Rung 1 skipped -> Y1 remains FALSE
+    sim.set_var_value("Y1", false);
+    sim.set_input("X0", true);
+    sim.step_scan(&mut prog, 10);
+    assert!(!sim.get_var_value("Y1"), "Y1 should NOT be energized when jumped over");
+    assert!(sim.get_var_value("Y2"), "Landing rung Y2 should be executed");
+}
+
+#[test]
+fn test_iec_il_sr_rs_jmp_roundtrip() {
+    use my_canvas_core::{ContactMode, IlParser, LadderElement, LadderProgram, Rung, TypeTag};
+
+    let mut prog = LadderProgram::new_empty();
+
+    // Rung 0: SR
+    let mut r0 = Rung::new(0);
+    r0.elements.push(LadderElement::new_contact(1, "X0", "S_IN", ContactMode::NormallyOpen));
+    let mut sr = LadderElement::new_contact(2, "SR_INST", "SR_FB", ContactMode::NormallyOpen);
+    sr.element_type = TypeTag::Sr;
+    sr.target_reg = "X1".to_string();
+    r0.elements.push(sr);
+    prog.rungs.push(r0);
+
+    // Rung 1: JMP
+    let mut r1 = Rung::new(1);
+    r1.elements.push(LadderElement::new_contact(3, "X2", "J_COND", ContactMode::NormallyOpen));
+    let mut jmp = LadderElement::new_contact(4, "END_LOOP", "JMP", ContactMode::NormallyOpen);
+    jmp.element_type = TypeTag::Jump;
+    r1.elements.push(jmp);
+    prog.rungs.push(r1);
+
+    // Rung 2: LBL
+    let mut r2 = Rung::new(2);
+    let mut lbl = LadderElement::new_contact(5, "END_LOOP", "LBL", ContactMode::NormallyOpen);
+    lbl.element_type = TypeTag::Label;
+    r2.elements.push(lbl);
+    prog.rungs.push(r2);
+
+    let exported = IlParser::export_il(&prog);
+    assert!(exported.contains("SR_INST : SR;"));
+    assert!(exported.contains("CAL  SR_INST(S1 := TRUE, R := X1)"));
+    assert!(exported.contains("JMPC END_LOOP"));
+    assert!(exported.contains("END_LOOP:"));
+
+    let parsed = IlParser::parse(&exported).expect("parse exported IL");
+    assert_eq!(parsed.rungs.len(), 3);
+}
+
+#[test]
+fn test_label_left_rail_anchoring() {
+    use my_canvas_core::{ContactMode, Document, InsertPosition, LadderElement, TypeTag};
+
+    let mut doc = Document::default();
+    doc.program.rungs.clear();
+    doc.add_rung(); // Create empty Rung 0
+    doc.selected_rung_idx = Some(0);
+
+    // 1. Add normal contact X0 and coil Y0
+    let c0 = LadderElement::new_contact(10, "X0", "START", ContactMode::NormallyOpen);
+    let y0 = LadderElement::new_coil(11, "Y0", "MOTOR", my_canvas_core::CoilMode::Normal);
+    doc.insert_element(c0, InsertPosition::AppendRung);
+    doc.insert_element(y0, InsertPosition::AppendRung);
+
+    assert_eq!(doc.program.rungs[0].elements.len(), 2);
+    assert_eq!(doc.program.rungs[0].elements[0].name, "X0");
+
+    // 2. Insert TypeTag::Label with AppendRung
+    let mut lbl = LadderElement::new_contact(12, "TARGET_1", "LBL", ContactMode::NormallyOpen);
+    lbl.element_type = TypeTag::Label;
+    doc.insert_element(lbl, InsertPosition::AppendRung);
+
+    // Hybrid Anchor Rule: Label MUST automatically anchor to index 0 (Left Power Rail)!
+    assert_eq!(doc.program.rungs[0].elements.len(), 3);
+    assert_eq!(doc.program.rungs[0].elements[0].element_type, TypeTag::Label);
+    assert_eq!(doc.program.rungs[0].elements[0].name, "TARGET_1");
+    assert_eq!(doc.program.rungs[0].elements[1].name, "X0");
+
+    // 3. Verify ensure_label_at_start
+    let mut rung_manual = my_canvas_core::Rung::new(1);
+    rung_manual.elements.push(LadderElement::new_contact(20, "X1", "IN", ContactMode::NormallyOpen));
+    let mut lbl2 = LadderElement::new_contact(21, "TARGET_2", "LBL", ContactMode::NormallyOpen);
+    lbl2.element_type = TypeTag::Label;
+    rung_manual.elements.push(lbl2);
+
+    assert_eq!(rung_manual.elements[1].element_type, TypeTag::Label);
+    rung_manual.ensure_label_at_start();
+    assert_eq!(rung_manual.elements[0].element_type, TypeTag::Label);
+    assert_eq!(rung_manual.elements[0].name, "TARGET_2");
+}

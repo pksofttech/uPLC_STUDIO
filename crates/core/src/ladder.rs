@@ -28,6 +28,10 @@ pub enum TypeTag {
     RTrig,
     #[serde(alias = "OneShotFalling")]
     FTrig,
+    Sr,
+    Rs,
+    Jump,
+    Label,
     UartSend,
     UartRecv,
     Wire,
@@ -60,6 +64,10 @@ impl TypeTag {
             TypeTag::Compare => "Compare (EQ/NE/GT/LT/GE/LE)",
             TypeTag::Math => "Math (ADD/SUB/MUL/DIV/MOD)",
             TypeTag::Move => "MOVE",
+            TypeTag::Sr => "SR (Set-Dominant Bistable FB)",
+            TypeTag::Rs => "RS (Reset-Dominant Bistable FB)",
+            TypeTag::Jump => "JMP (Jump to Label)",
+            TypeTag::Label => "LBL (Target Label)",
             TypeTag::Adc => "ADC (Analog Read)",
             TypeTag::ShiftRegisters => "Shift Register",
             TypeTag::ShiftVariable => "Shift Variable",
@@ -87,6 +95,7 @@ impl TypeTag {
                 | TypeTag::MasterRelay
                 | TypeTag::Move
                 | TypeTag::Math
+                | TypeTag::Jump
                 | TypeTag::Adc
                 | TypeTag::ShiftRegisters
                 | TypeTag::ShiftVariable
@@ -502,11 +511,25 @@ impl Rung {
     }
 
     pub fn with_elements(id: usize, elements: Vec<LadderElement>) -> Self {
-        Self {
+        let mut rung = Self {
             id,
             comment: String::new(),
             elements,
             is_energized: false,
+        };
+        rung.ensure_label_at_start();
+        rung
+    }
+
+    /// Hybrid Left-Rail Anchor:
+    /// Ensures that if a TypeTag::Label element exists in this rung,
+    /// it is always placed at index 0 (attached to the Left Power Rail).
+    pub fn ensure_label_at_start(&mut self) {
+        if let Some(pos) = self.elements.iter().position(|e| e.element_type == TypeTag::Label) {
+            if pos > 0 {
+                let lbl = self.elements.remove(pos);
+                self.elements.insert(0, lbl);
+            }
         }
     }
 }
@@ -550,6 +573,13 @@ impl LadderProgram {
         let id = self.next_element_id;
         self.next_element_id += 1;
         id
+    }
+
+    /// Normalize all rungs so any TypeTag::Label elements are anchored at index 0.
+    pub fn ensure_labels_at_start(&mut self) {
+        for rung in &mut self.rungs {
+            rung.ensure_label_at_start();
+        }
     }
 
     pub fn default_arduino_io() -> Vec<IOPortMapping> {

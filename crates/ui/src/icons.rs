@@ -47,6 +47,7 @@ pub enum VectorIcon {
     Play,
     Step,
     Stop,
+    Reset,
 }
 
 /// Draw a crisp, font-independent vector icon inside `rect`
@@ -556,6 +557,24 @@ pub fn paint_icon(painter: &Painter, rect: Rect, icon: VectorIcon, color: Color3
             let s_size = r * 1.35;
             let sq_rect = Rect::from_center_size(c, vec2(s_size, s_size));
             painter.rect_filled(sq_rect, CornerRadius::same(3), color);
+        }
+        VectorIcon::Reset => {
+            let radius = r * 0.72;
+            let start_angle = -std::f32::consts::FRAC_PI_2 + 0.3;
+            let end_angle = std::f32::consts::PI + 0.9;
+            let steps = 14;
+            let mut points = Vec::with_capacity(steps + 1);
+            for i in 0..=steps {
+                let t = i as f32 / steps as f32;
+                let angle = start_angle + t * (end_angle - start_angle);
+                points.push(pos2(c.x + radius * angle.cos(), c.y + radius * angle.sin()));
+            }
+            for i in 0..steps {
+                painter.line_segment([points[i], points[i + 1]], s);
+            }
+            let tip = points[0];
+            painter.line_segment([tip, pos2(tip.x + r * 0.38, tip.y - r * 0.12)], s);
+            painter.line_segment([tip, pos2(tip.x + r * 0.12, tip.y + r * 0.38)], s);
         }
     }
 }

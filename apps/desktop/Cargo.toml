@@ -7,3 +7,4 @@ edition.workspace = true
 my-canvas-ui = { workspace = true }
 eframe = { workspace = true }
 egui = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["png"] }

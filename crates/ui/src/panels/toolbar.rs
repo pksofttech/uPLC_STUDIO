@@ -3,7 +3,7 @@ use crate::icons::{modern_tool_button, VectorIcon};
 use crate::theme::{AppTheme, ThemePalette};
 use crate::tools::ActiveTool;
 use egui::{CornerRadius, RichText, Stroke, Ui};
-use my_canvas_core::{SchematicStyle, SimState};
+use my_canvas_core::SchematicStyle;
 
 fn toolbar_group<R>(
     ui: &mut Ui,
@@ -190,8 +190,9 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
         // =========================================================================
         // Group 4: Simulation Station (สถานีจำลองการทำงาน PLC)
         // =========================================================================
-        let is_running = app.doc.simulator.state == SimState::Running;
-        let is_stopped = app.doc.simulator.state == SimState::Stopped;
+        let is_running = app.doc.simulator.is_running();
+        let is_stopped = app.doc.simulator.is_stopped();
+        let is_step = app.doc.simulator.is_step();
 
         toolbar_group(ui, palette, |ui| {
             // Start / Running Button
@@ -212,11 +213,14 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 start_w,
                 palette,
             )
-            .on_hover_text("Start Continuous Simulation (กด F5 เพื่อเริ่มรันแบบต่อเนื่อง)")
+            .on_hover_text("Start / Continuous Simulation (กด F5 เพื่อเริ่มหรือหยุดรันแบบต่อเนื่อง)")
             .clicked()
             {
-                app.doc.simulator.simulation_enabled = true;
-                app.doc.simulator.state = SimState::Running;
+                if is_running {
+                    app.doc.stop_simulation();
+                } else {
+                    app.doc.start_simulation();
+                }
             }
 
             // Step Button
@@ -225,36 +229,52 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 Some(VectorIcon::Step),
                 "Step",
                 palette.accent_warn,
-                false,
+                is_step,
                 true,
                 false,
                 62.0,
                 palette,
             )
-            .on_hover_text("Execute Single 10ms Scan Step (สแกน 1 รอบ)")
+            .on_hover_text("Execute Single Scan Step (สแกน 1 รอบ - กด F6)")
             .clicked()
             {
-                app.doc.simulator.simulation_enabled = true;
-                app.doc.simulator.state = SimState::Step;
-                app.doc.step_simulation(app.doc.simulator.cycle_time_ms);
+                app.doc.single_step_simulation(app.doc.simulator.cycle_time_ms);
             }
 
-            // Stop Button
+            // Stop Button (Safe output shutdown)
             if modern_tool_button(
                 ui,
                 Some(VectorIcon::Stop),
                 "Stop",
                 palette.accent_danger,
+                false,
                 !is_stopped,
+                false,
+                62.0,
+                palette,
+            )
+            .on_hover_text("Stop Simulation & Safe Output Shutdown (หยุดจำลองและตัด Output ทั้งหมดเพื่อความปลอดภัย)")
+            .clicked()
+            {
+                app.doc.stop_simulation();
+            }
+
+            // Reset Button
+            if modern_tool_button(
+                ui,
+                Some(VectorIcon::Reset),
+                "Reset",
+                palette.accent_heading,
+                false,
                 true,
                 false,
                 62.0,
                 palette,
             )
-            .on_hover_text("Stop & Reset Simulation (หยุดและรีเซ็ตสถานะ)")
+            .on_hover_text("Reset Simulation & Clear Memory (รีเซ็ตเวลา, ตัวนับ และ Memory ทั้งหมด - กด Shift+F5)")
             .clicked()
             {
-                app.doc.simulator.reset(&mut app.doc.program);
+                app.doc.reset_simulation();
             }
 
             toolbar_divider(ui, palette);

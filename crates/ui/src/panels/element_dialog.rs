@@ -12,14 +12,30 @@ use crate::theme::ThemePalette;
 pub struct ElementConfigModal {
     pub is_open: bool,
     pub target_id: u64,
+    pub rung_idx: Option<usize>,
+    pub rung_comment: String,
     pub draft: LadderElement,
 }
 
 impl ElementConfigModal {
-    pub fn open_for(&mut self, elem: &LadderElement) {
+    pub fn open_for(&mut self, elem: &LadderElement, rung_idx: Option<usize>, rung_comment: &str) {
         self.is_open = true;
         self.target_id = elem.id;
+        self.rung_idx = rung_idx;
+        self.rung_comment = rung_comment.to_string();
         self.draft = elem.clone();
+    }
+
+    pub fn open_for_rung(&mut self, rung_idx: usize, rung: &my_canvas_core::Rung) {
+        self.is_open = true;
+        self.target_id = rung.elements.first().map(|e| e.id).unwrap_or(0);
+        self.rung_idx = Some(rung_idx);
+        self.rung_comment = rung.comment.clone();
+        if let Some(first_el) = rung.elements.first() {
+            self.draft = first_el.clone();
+        } else {
+            self.draft = LadderElement::default();
+        }
     }
 
     pub fn close(&mut self) {
@@ -138,6 +154,19 @@ impl ElementConfigModal {
                             ui.label("Symbol / Alias:");
                             ui.add(
                                 egui::TextEdit::singleline(&mut self.draft.symbol)
+                                    .desired_width(290.0),
+                            );
+                            ui.end_row();
+
+                            let rung_lbl = if let Some(r_idx) = self.rung_idx {
+                                format!("Network #{:02} Comment:", r_idx + 1)
+                            } else {
+                                "Network Comment:".to_string()
+                            };
+                            ui.label(rung_lbl);
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.rung_comment)
+                                    .hint_text("Enter comment for this network...")
                                     .desired_width(290.0),
                             );
                             ui.end_row();
@@ -332,7 +361,7 @@ impl ElementConfigModal {
                                         CoilMode::Normal,
                                         VectorIcon::Coil,
                                         "Normal ( )",
-                                        "Energized while rung is true",
+                                        "Energized while network is true",
                                     ),
                                     (
                                         CoilMode::Negated,
@@ -344,13 +373,13 @@ impl ElementConfigModal {
                                         CoilMode::SetLatch,
                                         VectorIcon::CoilSet,
                                         "Set Latch (S)",
-                                        "Latches ON when rung is true",
+                                        "Latches ON when network is true",
                                     ),
                                     (
                                         CoilMode::ResetUnlatch,
                                         VectorIcon::CoilReset,
                                         "Reset Unlatch (R)",
-                                        "Resets OFF when rung is true",
+                                        "Resets OFF when network is true",
                                     ),
                                     (
                                         CoilMode::PositiveTransition,
@@ -588,7 +617,7 @@ impl ElementConfigModal {
                         }
 
                         TypeTag::Comment => {
-                            ui.label("Rung / Element Comment Text:");
+                            ui.label("Network / Element Comment Text:");
                             ui.add(
                                 egui::TextEdit::singleline(&mut self.draft.comment)
                                     .desired_width(f32::INFINITY),
@@ -655,6 +684,11 @@ impl ElementConfigModal {
                     updated.name = clean_name;
                 }
                 *target = updated;
+            }
+            if let Some(r_idx) = self.rung_idx {
+                if let Some(rung) = doc.program.rungs.get_mut(r_idx) {
+                    rung.comment = self.rung_comment.trim().to_string();
+                }
             }
             doc.is_dirty = true;
             self.is_open = false;

@@ -37,6 +37,10 @@ pub enum ActiveTool {
     FTrig,
     UartSend,
     UartRecv,
+    Sr,
+    Rs,
+    Jump,
+    Label,
     Wire,
     OpenCircuit,
     Branch,
@@ -89,6 +93,10 @@ impl ActiveTool {
             Self::FTrig => "F_TRIG (Falling Edge Detector)",
             Self::UartSend => "UART Send",
             Self::UartRecv => "UART Recv",
+            Self::Sr => "SR (Set-Dominant Bistable FB)",
+            Self::Rs => "RS (Reset-Dominant Bistable FB)",
+            Self::Jump => "JMP (Jump to Label)",
+            Self::Label => "LBL (Target Label)",
             Self::Wire => "Short Circuit Wire",
             Self::OpenCircuit => "Open Circuit",
             Self::Branch => "Parallel Branch",
@@ -230,6 +238,36 @@ impl ActiveTool {
                 element_type: TypeTag::UartRecv,
                 name: "u_rx".to_string(),
                 symbol: "UART_RECV".to_string(),
+                ..Default::default()
+            }),
+            Self::Sr => Some(LadderElement {
+                id,
+                element_type: TypeTag::Sr,
+                name: "M00".to_string(),
+                symbol: "SR1".to_string(),
+                target_reg: "X01".to_string(),
+                ..Default::default()
+            }),
+            Self::Rs => Some(LadderElement {
+                id,
+                element_type: TypeTag::Rs,
+                name: "M00".to_string(),
+                symbol: "RS1".to_string(),
+                target_reg: "X01".to_string(),
+                ..Default::default()
+            }),
+            Self::Jump => Some(LadderElement {
+                id,
+                element_type: TypeTag::Jump,
+                name: "LBL1".to_string(),
+                symbol: "JMP".to_string(),
+                ..Default::default()
+            }),
+            Self::Label => Some(LadderElement {
+                id,
+                element_type: TypeTag::Label,
+                name: "LBL1".to_string(),
+                symbol: "LBL".to_string(),
                 ..Default::default()
             }),
             Self::Wire => Some(LadderElement::new_wire(id)),

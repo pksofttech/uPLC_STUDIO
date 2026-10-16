@@ -40,11 +40,26 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     ("04 - Conveyor Counter & Batch Pack", "example/04_counter_batch_pack.il"),
                     ("05 - Automatic Sliding Door", "example/05_auto_door_control.il"),
                     ("06 - Register Math & Compare", "example/06_math_compare_analog.il"),
+                    ("07 - All IEC Components (Comprehensive Test)", "example/07_all_iec_components.il"),
                 ];
                 for (label, path_str) in examples {
                     if ui.button(label).clicked() {
-                        if let Ok(content) = std::fs::read_to_string(path_str) {
-                            let _ = app.doc.load_from_il_str(&content);
+                        let content = std::fs::read_to_string(path_str)
+                            .or_else(|_| {
+                                if let Ok(exe) = std::env::current_exe() {
+                                    if let Some(parent) = exe.parent() {
+                                        if let Ok(c) = std::fs::read_to_string(parent.join(path_str)) {
+                                            return Ok(c);
+                                        }
+                                        if let Ok(c) = std::fs::read_to_string(parent.join("../..").join(path_str)) {
+                                            return Ok(c);
+                                        }
+                                    }
+                                }
+                                Err(std::io::Error::new(std::io::ErrorKind::NotFound, "not found"))
+                            });
+                        if let Ok(c) = content {
+                            let _ = app.doc.load_from_il_str(&c);
                             app.doc.file_path = Some(path_str.to_string());
                         }
                         ui.close();
@@ -121,15 +136,15 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 ui.close();
             }
             ui.separator();
-            if ui.button("+ New Rung").clicked() {
+            if ui.button("+ New Network").clicked() {
                 app.doc.add_rung();
                 ui.close();
             }
-            if ui.button("Copy Rung").clicked() {
+            if ui.button("Copy Network").clicked() {
                 app.copied_rung_idx = app.doc.selected_rung_idx;
                 ui.close();
             }
-            if ui.button("Paste Rung Below").clicked() {
+            if ui.button("Paste Network Below").clicked() {
                 if let Some(idx) = app.doc.selected_rung_idx {
                     let src = app.copied_rung_idx.unwrap_or(idx);
                     app.doc.copy_rung_at(src, idx + 1);
@@ -141,7 +156,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 app.doc.delete_selected_element();
                 ui.close();
             }
-            if ui.button("Delete Selected Rung").clicked() {
+            if ui.button("Delete Selected Network").clicked() {
                 if let Some(idx) = app.doc.selected_rung_idx {
                     app.doc.delete_rung(idx);
                 }
@@ -242,14 +257,17 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
 
         // --- HARDWARE MENU ---
         ui.menu_button("Hardware", |ui| {
+            ui.label(RichText::new("Target IEC 61131-3 Hardware Platform:").weak().size(11.0));
+            ui.separator();
             let targets = [
-                "Arduino Pro 168 5V",
-                "Arduino NANO",
-                "Arduino UNO",
-                "Arduino UNO R3",
-                "Arduino MEGA 2560",
-                "Micro PLC deca",
-                "No Hardware",
+                "IEC 61131-3 Standard PLC",
+                "OpenPLC Runtime (Linux / Windows)",
+                "OpenPLC MicroPLC (IEC 61131-3)",
+                "OpenPLC Raspberry Pi",
+                "OpenPLC ESP32 (IEC 61131-3)",
+                "OpenPLC STM32 (IEC 61131-3)",
+                "Generic Modbus RTU / TCP Device",
+                "Simulation / Virtual PLC",
             ];
             for target in targets {
                 let is_cur = app.doc.program.hardware == target;
@@ -258,6 +276,10 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     app.save_settings();
                     ui.close();
                 }
+            }
+            if !targets.contains(&app.doc.program.hardware.as_str()) {
+                ui.separator();
+                ui.label(RichText::new(format!("Current: {}", app.doc.program.hardware)).italics().size(11.0));
             }
         });
 
@@ -268,11 +290,21 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 ui.close();
             }
             ui.separator();
-            if ui.button("▶ Simulation Mode").clicked() {
-                app.doc.simulator.simulation_enabled = !app.doc.simulator.simulation_enabled;
-                if !app.doc.simulator.simulation_enabled {
-                    app.doc.simulator.reset(&mut app.doc.program);
-                }
+            let sim_label = if app.doc.simulator.is_running() {
+                "■ Stop Simulation (F5)"
+            } else {
+                "▶ Start Simulation (F5)"
+            };
+            if ui.button(sim_label).clicked() {
+                app.doc.toggle_simulation();
+                ui.close();
+            }
+            if ui.button("⏭ Single Scan Step (F6)").clicked() {
+                app.doc.single_step_simulation(app.doc.simulator.cycle_time_ms);
+                ui.close();
+            }
+            if ui.button("↺ Reset Simulation (Shift+F5)").clicked() {
+                app.doc.reset_simulation();
                 ui.close();
             }
         });

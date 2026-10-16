@@ -55,7 +55,7 @@ pub fn render(ui: &mut Ui, app: &CanvasApp) {
             ui.label(format!("Tool: {}", app.active_tool.name()));
             ui.separator();
             if let Some(r_idx) = app.doc.selected_rung_idx {
-                ui.label(format!("Rung #{:02}", r_idx + 1));
+                ui.label(format!("Network #{:02}", r_idx + 1));
             }
         });
     });

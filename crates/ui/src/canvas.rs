@@ -3,10 +3,16 @@ use egui::{
     StrokeKind, Ui, Vec2,
 };
 use my_canvas_core::{
-    CoilMode, CoilStyle, ContactMode, ContactStyle, Document, InsertPosition, LadderElement, SimState, TypeTag,
+    CoilMode, CoilStyle, ContactMode, ContactStyle, Document, InsertPosition, LadderElement, TypeTag,
 };
 use crate::theme::ThemePalette;
 use crate::tools::ActiveTool;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ScrollbarDrag {
+    Vertical { start_mouse_y: f32, start_pan_y: f32 },
+    Horizontal { start_mouse_x: f32, start_pan_x: f32 },
+}
 
 pub struct CanvasViewport {
     pub pan_offset: Vec2,
@@ -18,6 +24,7 @@ pub struct CanvasViewport {
     pub dragging_elem: Option<(u64, String)>,
     pub dragging_tool: Option<(ActiveTool, String)>,
     pub marquee_start: Option<Pos2>,
+    pub dragging_scrollbar: Option<ScrollbarDrag>,
 }
 
 impl Default for CanvasViewport {
@@ -32,6 +39,7 @@ impl Default for CanvasViewport {
             dragging_elem: None,
             dragging_tool: None,
             marquee_start: None,
+            dragging_scrollbar: None,
         }
     }
 }
@@ -136,6 +144,73 @@ impl CanvasViewport {
         cols.max(4.0)
     }
 
+    fn element_height(elem: &LadderElement, cell_h: f32) -> f32 {
+        if elem.element_type == TypeTag::Branch {
+            let total: f32 = elem
+                .branch_paths
+                .iter()
+                .map(|path| {
+                    let mut max_h = cell_h;
+                    for sub in path {
+                        let sub_h = Self::element_height(sub, cell_h);
+                        if sub_h > max_h {
+                            max_h = sub_h;
+                        }
+                    }
+                    max_h
+                })
+                .sum();
+            total.max(cell_h)
+        } else {
+            cell_h
+        }
+    }
+
+    pub fn compute_content_size(&self, doc: &Document, viewport_width: f32) -> Vec2 {
+        let cell_h = 88.0;
+        let rung_header_w = 76.0;
+        let margin_left = 14.0 + rung_header_w;
+        let margin_top = 24.0;
+
+        let max_req_cols = doc
+            .program
+            .rungs
+            .iter()
+            .map(|r| Self::rung_required_cols(&r.elements))
+            .fold(5.0_f32, f32::max);
+
+        let base_world_right = (viewport_width - 60.0).max(520.0);
+        let avail_span = (base_world_right - margin_left - 24.0).max(320.0);
+        let cell_w = (avail_span / max_req_cols.max(5.5)).clamp(84.0, 108.0);
+        let min_required_right = margin_left + 24.0 + max_req_cols * cell_w + 16.0;
+        let margin_right = base_world_right.max(min_required_right);
+
+        let mut cur_y = margin_top;
+        for rung in &doc.program.rungs {
+            let has_header_bar = !rung.comment.is_empty()
+                || rung.elements.iter().any(|e| e.element_type == TypeTag::Label);
+            let comment_offset = if has_header_bar { 26.0 } else { 0.0 };
+            let rung_start_y = cur_y + comment_offset;
+            let mut max_y = rung_start_y + cell_h;
+            for elem in &rung.elements {
+                let eh = rung_start_y + Self::element_height(elem, cell_h);
+                if eh > max_y {
+                    max_y = eh;
+                }
+            }
+            cur_y = max_y + 18.0;
+        }
+
+        let rail_bottom_y = (cur_y - 8.0).max(margin_top + cell_h);
+        let total_world_w = margin_right + 80.0;
+        let total_world_h = rail_bottom_y + 60.0;
+
+        vec2(
+            (total_world_w * self.zoom) + self.pan_offset.x.max(0.0),
+            (total_world_h * self.zoom) + self.pan_offset.y.max(0.0),
+        )
+    }
+
     /// Renders the Ladder Canvas and returns `Some(elem_id)` if the user requested opening the Element Configuration Dialog
     pub fn show(
         &mut self,
@@ -148,6 +223,7 @@ impl CanvasViewport {
         let canvas_enabled = ui.is_enabled();
         if !canvas_enabled {
             self.context_menu_elem = None;
+            self.dragging_scrollbar = None;
         }
         let sense = if canvas_enabled {
             Sense::click_and_drag()
@@ -266,25 +342,171 @@ impl CanvasViewport {
         let min_required_right = margin_left + 24.0 + max_req_cols * cell_w + 16.0;
         let margin_right = base_world_right.max(min_required_right);
 
-        let sim_active =
-            doc.simulator.state != SimState::Stopped || doc.simulator.simulation_enabled;
+        let sim_active = doc.simulator.is_active();
 
-        let mouse_pos = if canvas_enabled {
+        let content_sz = self.compute_content_size(doc, viewport_rect.width());
+        let total_screen_w = content_sz.x;
+        let total_screen_h = content_sz.y;
+
+        let viewport_w = viewport_rect.width();
+        let viewport_h = viewport_rect.height();
+
+        let max_pan_x = 14.0_f32;
+        let min_pan_x = (viewport_w - total_screen_w).min(max_pan_x);
+        let pan_span_x = (max_pan_x - min_pan_x).max(0.0);
+
+        let max_pan_y = 16.0_f32;
+        let min_pan_y = (viewport_h - total_screen_h).min(max_pan_y);
+        let pan_span_y = (max_pan_y - min_pan_y).max(0.0);
+
+        let show_v_bar = pan_span_y > 4.0;
+        let show_h_bar = pan_span_x > 4.0;
+        let bar_thickness = 11.0_f32;
+
+        let track_y_min = viewport_rect.min.y;
+        let track_y_max = viewport_rect.max.y - (if show_h_bar { bar_thickness + 2.0 } else { 0.0 });
+        let track_rect_v = Rect::from_min_max(
+            pos2(viewport_rect.max.x - bar_thickness - 2.0, track_y_min),
+            pos2(viewport_rect.max.x - 2.0, track_y_max),
+        );
+
+        let track_x_min = viewport_rect.min.x;
+        let track_x_max = viewport_rect.max.x - (if show_v_bar { bar_thickness + 2.0 } else { 0.0 });
+        let track_rect_h = Rect::from_min_max(
+            pos2(track_x_min, viewport_rect.max.y - bar_thickness - 2.0),
+            pos2(track_x_max, viewport_rect.max.y - 2.0),
+        );
+
+        let track_h = track_rect_v.height();
+        let thumb_h = if total_screen_h > 0.0 {
+            ((viewport_h / total_screen_h) * track_h).clamp(24.0, track_h)
+        } else {
+            track_h
+        };
+        let travel_h = (track_h - thumb_h).max(0.0);
+        let fraction_y = if pan_span_y > 0.0 {
+            ((max_pan_y - self.pan_offset.y) / pan_span_y).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let thumb_top_y = track_rect_v.min.y + fraction_y * travel_h;
+        let thumb_rect_v = Rect::from_min_max(
+            pos2(track_rect_v.min.x + 1.5, thumb_top_y),
+            pos2(track_rect_v.max.x - 1.5, thumb_top_y + thumb_h),
+        );
+
+        let track_w = track_rect_h.width();
+        let thumb_w = if total_screen_w > 0.0 {
+            ((viewport_w / total_screen_w) * track_w).clamp(24.0, track_w)
+        } else {
+            track_w
+        };
+        let travel_w = (track_w - thumb_w).max(0.0);
+        let fraction_x = if pan_span_x > 0.0 {
+            ((max_pan_x - self.pan_offset.x) / pan_span_x).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let thumb_left_x = track_rect_h.min.x + fraction_x * travel_w;
+        let thumb_rect_h = Rect::from_min_max(
+            pos2(thumb_left_x, track_rect_h.min.y + 1.5),
+            pos2(thumb_left_x + thumb_w, track_rect_h.max.y - 1.5),
+        );
+
+        let raw_mouse_pos = if canvas_enabled {
             response.interact_pointer_pos()
         } else {
             None
         };
-        let hover_pos = if canvas_enabled {
+        let raw_hover_pos = if canvas_enabled {
             ui.input(|i| i.pointer.hover_pos())
         } else {
             None
         };
-        let is_clicked = canvas_enabled && response.clicked();
-        let is_double_clicked = canvas_enabled && response.double_clicked();
-        let is_right_clicked = canvas_enabled && response.secondary_clicked();
-        let primary_pressed = canvas_enabled && ui.input(|i| i.pointer.primary_pressed());
-        let primary_down = canvas_enabled && ui.input(|i| i.pointer.primary_down());
-        let primary_released = canvas_enabled && ui.input(|i| i.pointer.primary_released());
+        let raw_is_clicked = canvas_enabled && response.clicked();
+        let raw_is_double_clicked = canvas_enabled && response.double_clicked();
+        let raw_is_right_clicked = canvas_enabled && response.secondary_clicked();
+        let raw_primary_pressed = canvas_enabled && ui.input(|i| i.pointer.primary_pressed());
+        let raw_primary_down = canvas_enabled && ui.input(|i| i.pointer.primary_down());
+        let raw_primary_released = canvas_enabled && ui.input(|i| i.pointer.primary_released());
+
+        let v_bar_hovered = show_v_bar && raw_hover_pos.map_or(false, |hp| track_rect_v.contains(hp));
+        let h_bar_hovered = show_h_bar && raw_hover_pos.map_or(false, |hp| track_rect_h.contains(hp));
+        let scrollbar_hovered = v_bar_hovered || h_bar_hovered;
+
+        // Process scrollbar dragging or track clicks
+        if canvas_enabled {
+            if raw_primary_released {
+                self.dragging_scrollbar = None;
+            }
+
+            if let Some(drag) = self.dragging_scrollbar {
+                match drag {
+                    ScrollbarDrag::Vertical { start_mouse_y, start_pan_y } => {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                        if let Some(mp) = raw_mouse_pos.or(raw_hover_pos) {
+                            let delta_screen_y = mp.y - start_mouse_y;
+                            if travel_h > 0.0 {
+                                let pan_delta_y = -(delta_screen_y / travel_h) * pan_span_y;
+                                self.pan_offset.y = (start_pan_y + pan_delta_y).clamp(min_pan_y, max_pan_y);
+                            }
+                        }
+                    }
+                    ScrollbarDrag::Horizontal { start_mouse_x, start_pan_x } => {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                        if let Some(mp) = raw_mouse_pos.or(raw_hover_pos) {
+                            let delta_screen_x = mp.x - start_mouse_x;
+                            if travel_w > 0.0 {
+                                let pan_delta_x = -(delta_screen_x / travel_w) * pan_span_x;
+                                self.pan_offset.x = (start_pan_x + pan_delta_x).clamp(min_pan_x, max_pan_x);
+                            }
+                        }
+                    }
+                }
+            } else if raw_primary_pressed {
+                if show_v_bar && v_bar_hovered {
+                    let v_thumb_hovered = raw_hover_pos.map_or(false, |hp| thumb_rect_v.contains(hp));
+                    if v_thumb_hovered {
+                        self.dragging_scrollbar = Some(ScrollbarDrag::Vertical {
+                            start_mouse_y: raw_mouse_pos.map_or(thumb_rect_v.center().y, |p| p.y),
+                            start_pan_y: self.pan_offset.y,
+                        });
+                    } else if let Some(mp) = raw_mouse_pos {
+                        if mp.y < thumb_rect_v.min.y {
+                            self.pan_offset.y = (self.pan_offset.y + viewport_h * 0.7).clamp(min_pan_y, max_pan_y);
+                        } else if mp.y > thumb_rect_v.max.y {
+                            self.pan_offset.y = (self.pan_offset.y - viewport_h * 0.7).clamp(min_pan_y, max_pan_y);
+                        }
+                    }
+                } else if show_h_bar && h_bar_hovered {
+                    let h_thumb_hovered = raw_hover_pos.map_or(false, |hp| thumb_rect_h.contains(hp));
+                    if h_thumb_hovered {
+                        self.dragging_scrollbar = Some(ScrollbarDrag::Horizontal {
+                            start_mouse_x: raw_mouse_pos.map_or(thumb_rect_h.center().x, |p| p.x),
+                            start_pan_x: self.pan_offset.x,
+                        });
+                    } else if let Some(mp) = raw_mouse_pos {
+                        if mp.x < thumb_rect_h.min.x {
+                            self.pan_offset.x = (self.pan_offset.x + viewport_w * 0.7).clamp(min_pan_x, max_pan_x);
+                        } else if mp.x > thumb_rect_h.max.x {
+                            self.pan_offset.x = (self.pan_offset.x - viewport_w * 0.7).clamp(min_pan_x, max_pan_x);
+                        }
+                    }
+                }
+            }
+        }
+
+        let is_interacting_with_scrollbar = self.dragging_scrollbar.is_some() || scrollbar_hovered;
+
+        // Isolate canvas elements from mouse events when scrollbar is hovered or being dragged
+        let mouse_pos = if is_interacting_with_scrollbar { None } else { raw_mouse_pos };
+        let hover_pos = if is_interacting_with_scrollbar { None } else { raw_hover_pos };
+        let is_clicked = !is_interacting_with_scrollbar && raw_is_clicked;
+        let is_double_clicked = !is_interacting_with_scrollbar && raw_is_double_clicked;
+        let is_right_clicked = !is_interacting_with_scrollbar && raw_is_right_clicked;
+        let primary_pressed = !is_interacting_with_scrollbar && raw_primary_pressed;
+        let primary_down = !is_interacting_with_scrollbar && raw_primary_down;
+        let primary_released = !is_interacting_with_scrollbar && raw_primary_released;
         let additive_mod =
             canvas_enabled && ui.input(|i| i.modifiers.shift || i.modifiers.command || i.modifiers.ctrl);
         let pan_mode =
@@ -325,28 +547,82 @@ impl CanvasViewport {
 
         let mut action: Option<CanvasAction> = None;
         let mut drop_target: Option<DropTarget> = None;
-        let mut any_interactive_hovered = false;
+        let mut any_interactive_hovered = is_interacting_with_scrollbar;
         let mut element_screen_bounds: Vec<(usize, u64, Rect)> = Vec::new();
         let mut cur_y = margin_top;
 
         // --- Render Rungs ---
         for (r_idx, rung) in doc.program.rungs.iter().enumerate() {
             let is_rung_selected = doc.selected_rung_idx == Some(r_idx);
-            let comment_offset = if rung.comment.is_empty() { 0.0 } else { 24.0 };
+            let label_elem = rung.elements.iter().find(|e| e.element_type == TypeTag::Label);
+            let has_header_bar = !rung.comment.is_empty() || label_elem.is_some();
+            let comment_offset = if has_header_bar { 26.0 } else { 0.0 };
 
-            // Optional Rung Comment Bar
-            if !rung.comment.is_empty() {
+            // Network Header Bar (Shows Flag Badge for Target Label + Network Comment)
+            if has_header_bar {
                 let c_min = self.to_screen(pos2(margin_left + 8.0, cur_y + 2.0), origin);
-                let c_max = self.to_screen(pos2(margin_right - 8.0, cur_y + 22.0), origin);
+                let c_max = self.to_screen(pos2(margin_right - 8.0, cur_y + 23.0), origin);
                 let c_rect = Rect::from_two_pos(c_min, c_max);
+                let comment_hovered = hover_pos.map_or(false, |hp| c_rect.contains(hp));
                 painter.rect_filled(c_rect, 4.0 * self.zoom, palette.comment_bg);
-                painter.text(
-                    pos2(c_rect.min.x + 8.0 * self.zoom, c_rect.center().y),
-                    Align2::LEFT_CENTER,
-                    format!("// {}", rung.comment),
-                    self.font_prop(11.0),
-                    palette.comment_fg,
-                );
+
+                let mut text_x = c_rect.min.x + 8.0 * self.zoom;
+
+                // Prominent Flag Badge for Target Label
+                if let Some(lbl) = label_elem {
+                    let badge_text = format!("⚑ LBL {}", lbl.name);
+                    let badge_w = (badge_text.len() as f32 * 7.5 + 16.0) * self.zoom;
+                    let badge_h = 16.5 * self.zoom;
+                    let badge_rect = Rect::from_min_size(
+                        pos2(text_x, c_rect.center().y - badge_h * 0.5),
+                        vec2(badge_w, badge_h),
+                    );
+
+                    painter.rect_filled(badge_rect, 3.5 * self.zoom, palette.pill_bg);
+                    painter.rect_stroke(
+                        badge_rect,
+                        3.5 * self.zoom,
+                        Stroke::new(1.3 * self.zoom, palette.accent_heading),
+                        StrokeKind::Inside,
+                    );
+                    painter.text(
+                        badge_rect.center(),
+                        Align2::CENTER_CENTER,
+                        badge_text,
+                        self.font_mono(10.0),
+                        palette.accent_heading,
+                    );
+
+                    text_x += badge_w + 10.0 * self.zoom;
+                }
+
+                if !rung.comment.is_empty() {
+                    painter.text(
+                        pos2(text_x, c_rect.center().y),
+                        Align2::LEFT_CENTER,
+                        format!("// {}", rung.comment),
+                        self.font_prop(11.0),
+                        palette.comment_fg,
+                    );
+                } else if label_elem.is_some() {
+                    painter.text(
+                        pos2(text_x, c_rect.center().y),
+                        Align2::LEFT_CENTER,
+                        "// Jump Destination Network",
+                        self.font_prop(10.5),
+                        palette.rung_text_dim,
+                    );
+                }
+
+                if comment_hovered && is_double_clicked {
+                    if let Some(lbl) = label_elem {
+                        action = Some(CanvasAction::OpenConfigModal(lbl.id));
+                    } else if let Some(first_el) = rung.elements.first() {
+                        action = Some(CanvasAction::OpenConfigModal(first_el.id));
+                    } else {
+                        action = Some(CanvasAction::SelectRung(r_idx));
+                    }
+                }
             }
 
             let rung_start_y = cur_y + comment_offset;
@@ -386,15 +662,16 @@ impl CanvasViewport {
                 Stroke::new(1.5 * self.zoom, badge_border),
                 StrokeKind::Inside,
             );
+            let top_sub = if label_elem.is_some() { "⚑ TARGET" } else { "NETWORK" };
             painter.text(
                 pos2(
                     r_badge_screen.center().x,
                     r_badge_screen.center().y - 7.0 * self.zoom,
                 ),
                 Align2::CENTER_CENTER,
-                "RUNG",
-                self.font_mono(9.5),
-                palette.rung_text_dim,
+                top_sub,
+                self.font_mono(7.5),
+                if label_elem.is_some() { palette.accent_heading } else { palette.rung_text_dim },
             );
             painter.text(
                 pos2(
@@ -411,7 +688,13 @@ impl CanvasViewport {
                 },
             );
 
-            if is_clicked && badge_hovered && self.dragging_elem.is_none() {
+            if is_double_clicked && badge_hovered {
+                if let Some(first_el) = rung.elements.first() {
+                    action = Some(CanvasAction::OpenConfigModal(first_el.id));
+                } else {
+                    action = Some(CanvasAction::SelectRung(r_idx));
+                }
+            } else if is_clicked && badge_hovered && self.dragging_elem.is_none() {
                 action = Some(CanvasAction::SelectRung(r_idx));
             }
             if is_right_clicked && badge_hovered {
@@ -449,24 +732,13 @@ impl CanvasViewport {
                     palette,
                 );
             } else {
-                for elem in &rung.elements {
-                    // Right-align output elements (COIL, CTU, MOVE, MATH, etc.) near Right Power Rail
-                    if elem.element_type.is_right_aligned() {
+                let last_idx = rung.elements.len().saturating_sub(1);
+                for (elem_idx, elem) in rung.elements.iter().enumerate() {
+                    // Right-align terminal elements (COIL or trailing output element at the end of the rung)
+                    let is_last = elem_idx == last_idx;
+                    if elem.element_type.is_right_aligned() && is_last {
                         let target_x = (margin_right - cell_w - 16.0).max(cur_x + 36.0);
                         if target_x > cur_x {
-                            // Draw interactive [+] Add button on the wire before the coil!
-                            self.draw_add_slot_button(
-                                &painter,
-                                origin,
-                                pos2(cur_x + 18.0, wire_y),
-                                hover_pos,
-                                is_clicked && self.dragging_elem.is_none(),
-                                r_idx,
-                                &mut action,
-                                &mut any_interactive_hovered,
-                                palette,
-                            );
-
                             self.draw_power_wire(
                                 &painter,
                                 self.to_screen(pos2(cur_x, wire_y), origin),
@@ -554,21 +826,6 @@ impl CanvasViewport {
                 }
             }
 
-            // If rung is empty, show prominent [+ Add Element] button in the middle of the rung
-            if rung.elements.is_empty() {
-                self.draw_add_slot_button(
-                    &painter,
-                    origin,
-                    pos2(margin_left + 80.0, wire_y),
-                    hover_pos,
-                    is_clicked && self.dragging_elem.is_none(),
-                    r_idx,
-                    &mut action,
-                    &mut any_interactive_hovered,
-                    palette,
-                );
-            }
-
             // Check if dragging over this rung's general wire area (when not hovering a specific element)
             if is_dragging && drop_target.is_none() {
                 let rung_band_world =
@@ -590,9 +847,9 @@ impl CanvasViewport {
                         StrokeKind::Inside,
                     );
                     let label = if let Some((_, ref lbl)) = self.dragging_tool {
-                        format!("[Drop New] Add {} to Rung #{:02}", lbl, r_idx + 1)
+                        format!("[Drop New] Add {} to Network #{:02}", lbl, r_idx + 1)
                     } else {
-                        format!("[Drop Here] Move onto Rung #{:02}", r_idx + 1)
+                        format!("[Drop Here] Move onto Network #{:02}", r_idx + 1)
                     };
                     painter.text(
                         pos2(
@@ -608,7 +865,7 @@ impl CanvasViewport {
                         rung_idx: r_idx,
                         target_elem_id: None,
                         insert_pos: InsertPosition::AppendRung,
-                        target_label: format!("Rung #{:02} (Append)", r_idx + 1),
+                        target_label: format!("Network #{:02} (Append)", r_idx + 1),
                     });
                 }
             }
@@ -979,7 +1236,7 @@ impl CanvasViewport {
                 let sub_msg = if let Some(ref dt) = drop_target {
                     format!("-> Drop at: {}", dt.target_label)
                 } else {
-                    "Hover target Rung or Element to place".to_string()
+                    "Hover target Network or Element to place".to_string()
                 };
                 painter.text(
                     pos2(ghost_rect.min.x + 10.0, ghost_rect.min.y + 31.0),
@@ -995,18 +1252,51 @@ impl CanvasViewport {
             }
         }
 
+        // --- Draw Vertical & Horizontal Scrollbars ---
+        if show_v_bar {
+            let is_dragging_v = matches!(self.dragging_scrollbar, Some(ScrollbarDrag::Vertical { .. }));
+            let is_thumb_hov = raw_hover_pos.map_or(false, |hp| thumb_rect_v.contains(hp));
+            let track_bg = palette.canvas_bg.gamma_multiply(0.85);
+            painter.rect_filled(track_rect_v, CornerRadius::same(5), track_bg);
+            let thumb_bg = if is_dragging_v {
+                palette.accent_heading
+            } else if is_thumb_hov {
+                palette.banner_border.gamma_multiply(1.5)
+            } else {
+                palette.banner_border.gamma_multiply(0.9)
+            };
+            painter.rect_filled(thumb_rect_v, CornerRadius::same(4), thumb_bg);
+        }
+
+        if show_h_bar {
+            let is_dragging_h = matches!(self.dragging_scrollbar, Some(ScrollbarDrag::Horizontal { .. }));
+            let is_thumb_hov = raw_hover_pos.map_or(false, |hp| thumb_rect_h.contains(hp));
+            let track_bg = palette.canvas_bg.gamma_multiply(0.85);
+            painter.rect_filled(track_rect_h, CornerRadius::same(5), track_bg);
+            let thumb_bg = if is_dragging_h {
+                palette.accent_heading
+            } else if is_thumb_hov {
+                palette.banner_border.gamma_multiply(1.5)
+            } else {
+                palette.banner_border.gamma_multiply(0.9)
+            };
+            painter.rect_filled(thumb_rect_h, CornerRadius::same(4), thumb_bg);
+        }
+
         // --- Bottom-Right Floating Zoom Control HUD ([-], 100%, [+], [Reset]) ---
         {
             let zbar_w = 158.0;
             let zbar_h = 26.0;
+            let offset_x = if show_v_bar { bar_thickness + 12.0 } else { 12.0 };
+            let offset_y = if show_h_bar { bar_thickness + 10.0 } else { 10.0 };
             let zbar_rect = Rect::from_min_size(
                 pos2(
-                    viewport_rect.max.x - zbar_w - 12.0,
-                    viewport_rect.max.y - zbar_h - 10.0,
+                    viewport_rect.max.x - zbar_w - offset_x,
+                    viewport_rect.max.y - zbar_h - offset_y,
                 ),
                 vec2(zbar_w, zbar_h),
             );
-            if hover_pos.map_or(false, |hp| zbar_rect.contains(hp)) {
+            if raw_hover_pos.map_or(false, |hp| zbar_rect.contains(hp)) {
                 any_interactive_hovered = true;
             }
             painter.rect_filled(zbar_rect, CornerRadius::same(6), palette.banner_bg);
@@ -1044,7 +1334,7 @@ impl CanvasViewport {
                 (plus_rect, "+", 1i8),
                 (fit_rect, "Reset", 2i8),
             ] {
-                let is_hov = hover_pos.map_or(false, |hp| btn_r.contains(hp));
+                let is_hov = raw_hover_pos.map_or(false, |hp| btn_r.contains(hp));
                 if is_hov {
                     painter.rect_filled(
                         btn_r,
@@ -1066,7 +1356,7 @@ impl CanvasViewport {
                         palette.text_primary
                     },
                 );
-                if is_clicked && is_hov {
+                if raw_is_clicked && is_hov {
                     match kind {
                         -1 => self.set_target_zoom(
                             self.target_zoom / 1.18,
@@ -1136,10 +1426,10 @@ impl CanvasViewport {
             self.marquee_start = None;
         }
 
-        // --- Context Menu Popup (Right-Click on Element or Rung) ---
+        // --- Context Menu Popup (Right-Click on Element or Network) ---
         if let Some((r_idx, el_id)) = self.context_menu_elem {
             let mut close_menu = false;
-            egui::Window::new("Quick Element & Rung Menu")
+            egui::Window::new("Quick Element & Network Menu")
                 .collapsible(false)
                 .resizable(false)
                 .default_pos(mouse_pos.unwrap_or(viewport_rect.center()))
@@ -1216,13 +1506,13 @@ impl CanvasViewport {
                         }
                         ui.separator();
                     }
-                    ui.label(egui::RichText::new(format!("Rung #{:02}", r_idx + 1)).strong());
-                    if ui.button("Duplicate Rung Below").clicked() {
+                    ui.label(egui::RichText::new(format!("Network #{:02}", r_idx + 1)).strong());
+                    if ui.button("Duplicate Network Below").clicked() {
                         action = Some(CanvasAction::DuplicateRung(r_idx));
                         close_menu = true;
                     }
                     if ui
-                        .button(egui::RichText::new("Delete Rung").color(palette.accent_danger))
+                        .button(egui::RichText::new("Delete Network").color(palette.accent_danger))
                         .clicked()
                     {
                         action = Some(CanvasAction::DeleteRung(r_idx));
@@ -1264,7 +1554,7 @@ impl CanvasViewport {
                     }
 
                     if sim_active {
-                        doc.simulator.toggle_input(&elem_name);
+                        doc.toggle_input(&elem_name);
                     } else if double_clicked {
                         // Double-clicking any element in Edit mode opens the Professional Configuration Dialog!
                         open_modal_for_id = Some(elem_id);
@@ -1380,7 +1670,8 @@ impl CanvasViewport {
     ) -> Option<Rect> {
         let mut cur_y = margin_top;
         for rung in &doc.program.rungs {
-            let comment_offset = if rung.comment.is_empty() { 0.0 } else { 24.0 };
+            let has_header_bar = !rung.comment.is_empty() || rung.elements.iter().any(|e| e.element_type == TypeTag::Label);
+            let comment_offset = if has_header_bar { 26.0 } else { 0.0 };
             let rung_start_y = cur_y + comment_offset;
             let mut cur_x = margin_left + 24.0;
             let mut max_y = rung_start_y + cell_h;
@@ -1763,7 +2054,7 @@ impl CanvasViewport {
                         target_elem_id: Some(elem.id),
                         insert_pos: zone,
                         target_label: format!(
-                            "{} {} (Rung #{:02})",
+                            "{} {} (Network #{:02})",
                             pos_name,
                             elem.name,
                             rung_idx + 1
@@ -2889,7 +3180,10 @@ impl CanvasViewport {
                         "CMP",
                         format!("{} {} {}", elem.name, elem.compare_op, elem.preset_value),
                     ),
-                    TypeTag::Move => ("MOVE", format!("{} := {}", elem.name, elem.preset_value)),
+                    TypeTag::Move => {
+                        let reg = if !elem.target_reg.is_empty() { &elem.target_reg } else { &elem.name };
+                        ("MOVE", format!("{} := {}", reg, elem.preset_value))
+                    }
                     TypeTag::Math => (
                         "MATH",
                         format!("{} {}= {}", elem.name, elem.math_op, elem.preset_value),
@@ -2959,6 +3253,204 @@ impl CanvasViewport {
                     format!("// {}", elem.comment),
                     self.font_prop(11.0),
                     palette.comment_fg,
+                );
+            }
+            TypeTag::Sr | TypeTag::Rs => {
+                let card_w = w - 16.0 * self.zoom;
+                let card_h = h - 22.0 * self.zoom;
+                let card_rect = Rect::from_center_size(center, vec2(card_w, card_h));
+                let is_on = elem.is_done && sim_active;
+                let is_energized = elem.is_energized && sim_active;
+
+                self.draw_power_wire(
+                    painter,
+                    pos2(x0, mid_y),
+                    pos2(card_rect.min.x, mid_y),
+                    power_in && sim_active,
+                    palette,
+                );
+                self.draw_power_wire(
+                    painter,
+                    pos2(card_rect.max.x, mid_y),
+                    pos2(x0 + w, mid_y),
+                    is_energized,
+                    palette,
+                );
+
+                let border_c = if is_energized {
+                    palette.wire_energized
+                } else if is_selected {
+                    palette.rung_text_sel
+                } else {
+                    palette.card_border
+                };
+
+                painter.rect_filled(card_rect, 5.0 * self.zoom, palette.card_bg);
+                painter.rect_stroke(card_rect, 5.0 * self.zoom, Stroke::new(1.6 * self.zoom, border_c), StrokeKind::Inside);
+
+                let title = if elem.element_type == TypeTag::Sr { "SR" } else { "RS" };
+                painter.text(
+                    pos2(center.x, card_rect.min.y + 12.0 * self.zoom),
+                    Align2::CENTER_CENTER,
+                    title,
+                    self.font_mono(11.0),
+                    palette.accent_warn,
+                );
+
+                painter.text(
+                    pos2(center.x, center.y + 2.0 * self.zoom),
+                    Align2::CENTER_CENTER,
+                    &elem.name,
+                    self.font_mono(10.0),
+                    if is_on { palette.wire_energized } else { palette.text_primary },
+                );
+
+                // Pin labels: Left inputs (S1/R or S/R1), Right output (Q1)
+                let s_lbl = if elem.element_type == TypeTag::Sr { "S1" } else { "S" };
+                painter.text(
+                    pos2(card_rect.min.x + 6.0 * self.zoom, card_rect.min.y + 12.0 * self.zoom),
+                    Align2::LEFT_CENTER,
+                    s_lbl,
+                    self.font_mono(8.0),
+                    if power_in && sim_active { palette.wire_energized } else { palette.rung_text_dim },
+                );
+
+                let r_tag = if !elem.target_reg.is_empty() { &elem.target_reg } else { "R" };
+                let r_lbl = if elem.element_type == TypeTag::Sr { format!("R:{}", r_tag) } else { format!("R1:{}", r_tag) };
+                painter.text(
+                    pos2(card_rect.min.x + 6.0 * self.zoom, card_rect.max.y - 10.0 * self.zoom),
+                    Align2::LEFT_CENTER,
+                    r_lbl,
+                    self.font_mono(7.5),
+                    palette.rung_text_dim,
+                );
+
+                painter.text(
+                    pos2(card_rect.max.x - 6.0 * self.zoom, mid_y),
+                    Align2::RIGHT_CENTER,
+                    "Q1",
+                    self.font_mono(8.5),
+                    if is_energized { palette.wire_energized } else { palette.rung_text_dim },
+                );
+
+                self.draw_address_pill(
+                    painter,
+                    pos2(center.x, y0 + 14.0 * self.zoom),
+                    &elem.name,
+                    badge_color,
+                    is_on,
+                    palette,
+                );
+            }
+            TypeTag::Jump => {
+                let is_active = elem.is_energized && sim_active;
+                let jump_w = 68.0 * self.zoom;
+                let jump_h = 24.0 * self.zoom;
+                let jump_rect = Rect::from_center_size(center, vec2(jump_w, jump_h));
+
+                self.draw_power_wire(
+                    painter,
+                    pos2(x0, mid_y),
+                    pos2(jump_rect.min.x, mid_y),
+                    power_in && sim_active,
+                    palette,
+                );
+                self.draw_power_wire(
+                    painter,
+                    pos2(jump_rect.max.x, mid_y),
+                    pos2(x0 + w, mid_y),
+                    is_active,
+                    palette,
+                );
+
+                let bg = if is_active {
+                    palette.wire_glow
+                } else {
+                    palette.card_bg
+                };
+                let border_c = if is_active {
+                    palette.wire_energized
+                } else if is_selected {
+                    palette.rung_text_sel
+                } else {
+                    palette.card_border
+                };
+
+                painter.rect_filled(jump_rect, 4.0 * self.zoom, bg);
+                painter.rect_stroke(jump_rect, 4.0 * self.zoom, Stroke::new(1.5 * self.zoom, border_c), StrokeKind::Inside);
+
+                let txt = format!(">> JMP {}", elem.name);
+                painter.text(
+                    center,
+                    Align2::CENTER_CENTER,
+                    txt,
+                    self.font_mono(10.0),
+                    if is_active { palette.wire_energized } else { palette.accent_warn },
+                );
+            }
+            TypeTag::Label => {
+                let is_on = sim_active && power_in;
+                // Full pass-through power wire
+                self.draw_power_wire(
+                    painter,
+                    pos2(x0, mid_y),
+                    pos2(x0 + w, mid_y),
+                    is_on,
+                    palette,
+                );
+
+                // Left Rail Anchor Flag Badge
+                let badge_w = (elem.name.len().max(3) as f32 * 7.5 + 28.0) * self.zoom;
+                let badge_h = 24.0 * self.zoom;
+                let badge_rect = Rect::from_center_size(center, vec2(badge_w, badge_h));
+
+                let bg = if is_selected {
+                    palette.pill_active_bg
+                } else if is_hovered {
+                    palette.pill_bg.gamma_multiply(1.2)
+                } else {
+                    palette.pill_bg
+                };
+                let border_col = if is_selected {
+                    palette.rung_text_sel
+                } else {
+                    palette.accent_heading
+                };
+
+                painter.rect_filled(badge_rect, 4.0 * self.zoom, bg);
+                painter.rect_stroke(
+                    badge_rect,
+                    4.0 * self.zoom,
+                    Stroke::new(1.4 * self.zoom, border_col),
+                    StrokeKind::Inside,
+                );
+
+                let txt = format!("⚑ LBL {}", elem.name);
+                painter.text(
+                    center,
+                    Align2::CENTER_CENTER,
+                    txt,
+                    self.font_mono(10.5),
+                    if is_selected { Color32::WHITE } else { palette.accent_heading },
+                );
+
+                // Top address pill
+                self.draw_address_pill(
+                    painter,
+                    pos2(center.x, y0 + 14.0 * self.zoom),
+                    "LABEL",
+                    palette.accent_heading,
+                    is_on,
+                    palette,
+                );
+
+                // Bottom Subtext
+                painter.text(
+                    pos2(center.x, y0 + h - 12.0 * self.zoom),
+                    Align2::CENTER_CENTER,
+                    "Target Landing",
+                    self.font_prop(10.0),
+                    palette.symbol_subtext,
                 );
             }
             TypeTag::Branch => {}

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use crate::ladder::{CoilMode, ContactMode, LadderElement, LadderProgram, TypeTag};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SimState {
     Stopped,
     Running,
@@ -83,6 +83,26 @@ impl PlcSimulator {
         Self::default()
     }
 
+    #[inline]
+    pub fn is_active(&self) -> bool {
+        self.state != SimState::Stopped
+    }
+
+    #[inline]
+    pub fn is_running(&self) -> bool {
+        self.state == SimState::Running
+    }
+
+    #[inline]
+    pub fn is_stopped(&self) -> bool {
+        self.state == SimState::Stopped
+    }
+
+    #[inline]
+    pub fn is_step(&self) -> bool {
+        self.state == SimState::Step
+    }
+
     pub fn formatted_sim_time(&self) -> String {
         let total_ms = self.simulation_time_ms;
         let ms_part = (total_ms % 1000) / 10;
@@ -126,38 +146,79 @@ impl PlcSimulator {
 
     pub fn set_var_value(&mut self, name: &str, val: bool) {
         let upper = name.to_uppercase();
-        if upper.starts_with('Y') {
+        if upper.starts_with('Y') || upper.starts_with("%QX") || upper.starts_with('Q') {
             self.outputs.insert(upper, val);
-        } else if upper.starts_with('M') || upper.starts_with('R') {
+        } else if upper.starts_with('M') || upper.starts_with('R') || upper.starts_with("%MX") {
             self.markers.insert(upper, val);
         } else {
             self.inputs.insert(upper, val);
         }
     }
 
-    pub fn reset(&mut self, program: &mut LadderProgram) {
+    /// Start continuous simulation. Executes initial scan cycle immediately.
+    pub fn start(&mut self, program: &mut LadderProgram) {
+        self.state = SimState::Running;
+        self.simulation_enabled = true;
+        self.step_scan(program, 0);
+    }
+
+    /// Stop simulation. Enforces standard PLC safety shutdown:
+    /// All physical outputs (Y/Q) are immediately forced to OFF,
+    /// power flow is de-energized, and edge states are cleared.
+    pub fn stop(&mut self, program: &mut LadderProgram) {
         self.state = SimState::Stopped;
-        self.scan_count = 0;
-        self.simulation_time_ms = 0;
+        self.simulation_enabled = false;
+
+        // PLC Safety: All physical outputs de-energize on STOP
         for val in self.outputs.values_mut() {
             *val = false;
         }
-        for val in self.markers.values_mut() {
-            *val = false;
-        }
-        self.timers.clear();
-        self.counters.clear();
         self.edge_states.clear();
-        
+
+        // De-energize visual power flow on rungs and elements
         for rung in &mut program.rungs {
             rung.is_energized = false;
             for el in &mut rung.elements {
                 el.is_energized = false;
+                for path in &mut el.branch_paths {
+                    for sub in path {
+                        sub.is_energized = false;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Execute a single scan step and pause in Step mode.
+    pub fn step(&mut self, program: &mut LadderProgram, dt_ms: u32) {
+        self.state = SimState::Step;
+        self.simulation_enabled = true;
+        self.step_scan(program, dt_ms);
+    }
+
+    /// Full simulation reset: stops execution, zeroes scan count and timer,
+    /// and resets all outputs, markers, registers, timers, counters and element accumulators.
+    pub fn reset(&mut self, program: &mut LadderProgram) {
+        self.stop(program);
+        self.scan_count = 0;
+        self.simulation_time_ms = 0;
+
+        for val in self.markers.values_mut() {
+            *val = false;
+        }
+        for val in self.registers.values_mut() {
+            *val = 0;
+        }
+        self.timers.clear();
+        self.counters.clear();
+        self.edge_states.clear();
+
+        for rung in &mut program.rungs {
+            for el in &mut rung.elements {
                 el.current_accum = 0;
                 el.is_done = false;
                 for path in &mut el.branch_paths {
                     for sub in path {
-                        sub.is_energized = false;
                         sub.current_accum = 0;
                         sub.is_done = false;
                     }
@@ -172,14 +233,39 @@ impl PlcSimulator {
         self.scan_count += 1;
         self.simulation_time_ms += scaled_dt as u64;
 
-        for rung in &mut program.rungs {
-            let mut power_flow = true;
+        let mut jump_target: Option<String> = None;
+        let mut rung_idx = 0;
+        while rung_idx < program.rungs.len() {
+            let rung = &mut program.rungs[rung_idx];
 
+            if let Some(target) = &jump_target {
+                let matches_label = rung.comment.trim().eq_ignore_ascii_case(target)
+                    || rung.elements.iter().any(|e| {
+                        (e.element_type == TypeTag::Label || e.element_type == TypeTag::Comment)
+                            && e.name.trim().eq_ignore_ascii_case(target)
+                    });
+                if matches_label {
+                    jump_target = None;
+                } else {
+                    rung.is_energized = false;
+                    for el in &mut rung.elements {
+                        el.is_energized = false;
+                    }
+                    rung_idx += 1;
+                    continue;
+                }
+            }
+
+            let mut power_flow = true;
             for elem in &mut rung.elements {
                 power_flow = self.eval_element(elem, power_flow, scaled_dt);
+                if elem.element_type == TypeTag::Jump && power_flow {
+                    jump_target = Some(elem.name.clone());
+                }
             }
 
             rung.is_energized = power_flow;
+            rung_idx += 1;
         }
     }
 
@@ -383,9 +469,65 @@ impl PlcSimulator {
             }
             TypeTag::Move => {
                 if power_in {
-                    self.registers.insert(elem.target_reg.to_uppercase(), elem.preset_value);
+                    let reg = if !elem.target_reg.is_empty() {
+                        &elem.target_reg
+                    } else {
+                        &elem.name
+                    };
+                    self.registers.insert(reg.to_uppercase(), elem.preset_value);
                     elem.current_accum = elem.preset_value;
                 }
+                elem.is_done = power_in;
+                power_in
+            }
+            TypeTag::Sr => {
+                let r_sig = if !elem.target_reg.is_empty() {
+                    self.get_var_value(&elem.target_reg)
+                } else if !elem.symbol.is_empty() {
+                    self.get_var_value(&elem.symbol)
+                } else {
+                    false
+                };
+                let prev_q = if !elem.name.is_empty() {
+                    self.get_var_value(&elem.name)
+                } else {
+                    elem.is_done
+                };
+                // SR: Set dominant -> Q1 = S1 || (!R && Q1_prev)
+                let q1 = power_in || (!r_sig && prev_q);
+                if !elem.name.is_empty() {
+                    self.set_var_value(&elem.name, q1);
+                }
+                elem.is_done = q1;
+                q1
+            }
+            TypeTag::Rs => {
+                let r1_sig = if !elem.target_reg.is_empty() {
+                    self.get_var_value(&elem.target_reg)
+                } else if !elem.symbol.is_empty() {
+                    self.get_var_value(&elem.symbol)
+                } else {
+                    false
+                };
+                let prev_q = if !elem.name.is_empty() {
+                    self.get_var_value(&elem.name)
+                } else {
+                    elem.is_done
+                };
+                // RS: Reset dominant -> Q1 = !R1 && (S || Q1_prev)
+                let q1 = !r1_sig && (power_in || prev_q);
+                if !elem.name.is_empty() {
+                    self.set_var_value(&elem.name, q1);
+                }
+                elem.is_done = q1;
+                q1
+            }
+            TypeTag::Jump => {
+                elem.is_done = power_in;
+                power_in
+            }
+            TypeTag::Label => {
+                elem.is_done = true;
                 power_in
             }
             _ => power_in,

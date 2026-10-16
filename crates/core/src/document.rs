@@ -282,6 +282,45 @@ impl Document {
         self.simulator.step_scan(&mut self.program, dt_ms);
     }
 
+    pub fn start_simulation(&mut self) {
+        self.simulator.start(&mut self.program);
+    }
+
+    pub fn stop_simulation(&mut self) {
+        self.simulator.stop(&mut self.program);
+    }
+
+    pub fn reset_simulation(&mut self) {
+        self.simulator.reset(&mut self.program);
+    }
+
+    pub fn single_step_simulation(&mut self, dt_ms: u32) {
+        self.simulator.step(&mut self.program, dt_ms);
+    }
+
+    pub fn toggle_simulation(&mut self) {
+        if self.simulator.is_running() {
+            self.stop_simulation();
+        } else {
+            self.start_simulation();
+        }
+    }
+
+    pub fn toggle_input(&mut self, name: &str) -> bool {
+        let res = self.simulator.toggle_input(name);
+        if self.simulator.is_step() {
+            self.simulator.step_scan(&mut self.program, 0);
+        }
+        res
+    }
+
+    pub fn set_input(&mut self, name: &str, val: bool) {
+        self.simulator.set_input(name, val);
+        if self.simulator.is_step() {
+            self.simulator.step_scan(&mut self.program, 0);
+        }
+    }
+
     pub fn selected_rung_mut(&mut self) -> Option<&mut Rung> {
         let idx = self.selected_rung_idx?;
         self.program.rungs.get_mut(idx)
@@ -622,6 +661,20 @@ impl Document {
     fn insert_existing_element(&mut self, elem: LadderElement, pos: InsertPosition) {
         let elem_id = elem.id;
         let branch_alloc_id = self.program.alloc_id();
+
+        // Hybrid Left-Rail Anchor: A Target Label is always anchored at index 0 (Left Power Rail)
+        if elem.element_type == TypeTag::Label {
+            let target_rung_idx = self.selected_rung_idx.unwrap_or(0).min(self.program.rungs.len().saturating_sub(1));
+            if let Some(rung) = self.program.rungs.get_mut(target_rung_idx) {
+                rung.elements.retain(|e| e.element_type != TypeTag::Label);
+                rung.elements.insert(0, elem);
+                self.selected_rung_idx = Some(target_rung_idx);
+                self.selected_element_id = Some(elem_id);
+                self.selected_element_ids = vec![elem_id];
+                self.is_dirty = true;
+                return;
+            }
+        }
 
         let mut sel_ids = self.selected_element_ids.clone();
         if sel_ids.is_empty() {

@@ -35,7 +35,7 @@ impl Default for AppSettings {
             com_port: "ttyUSB0 (Auto)".to_string(),
             baud_rate: "115200".to_string(),
             cycle_time_ms: 10,
-            hardware: "Arduino UNO".to_string(),
+            hardware: "IEC 61131-3 Standard PLC".to_string(),
             window_width: Some(1280.0),
             window_height: Some(720.0),
             window_maximized: false,
@@ -95,6 +95,7 @@ pub struct CanvasApp {
     pub elem_modal: ElementConfigModal,
     pub elem_filter_text: String,
     pub elem_filter_cat: u8,
+    pub right_panel_tab: u8,
     pub show_il_code: bool,
     pub show_about: bool,
     pub show_code_export: bool,
@@ -135,6 +136,7 @@ impl Default for CanvasApp {
             elem_modal: ElementConfigModal::default(),
             elem_filter_text: String::new(),
             elem_filter_cat: 0,
+            right_panel_tab: 0,
             show_il_code: settings.show_il_code,
             show_about: false,
             show_code_export: false,
@@ -203,7 +205,15 @@ impl CanvasApp {
 
     pub fn open_config_for_selected(&mut self) {
         if let Some(el) = self.doc.selected_element().cloned() {
-            self.elem_modal.open_for(&el);
+            let r_comment = self.doc.selected_rung_idx
+                .and_then(|idx| self.doc.program.rungs.get(idx))
+                .map(|r| r.comment.as_str())
+                .unwrap_or("");
+            self.elem_modal.open_for(&el, self.doc.selected_rung_idx, r_comment);
+        } else if let Some(r_idx) = self.doc.selected_rung_idx {
+            if let Some(rung) = self.doc.program.rungs.get(r_idx) {
+                self.elem_modal.open_for_rung(r_idx, rung);
+            }
         }
     }
 }
@@ -362,12 +372,14 @@ impl eframe::App for CanvasApp {
                     }
                 }
                 if ui.input(|i| i.key_pressed(egui::Key::F5)) {
-                    if self.doc.simulator.state == SimState::Running {
-                        self.doc.simulator.reset(&mut self.doc.program);
+                    if ui.input(|i| i.modifiers.shift) {
+                        self.doc.reset_simulation();
                     } else {
-                        self.doc.simulator.simulation_enabled = true;
-                        self.doc.simulator.state = SimState::Running;
+                        self.doc.toggle_simulation();
                     }
+                }
+                if ui.input(|i| i.key_pressed(egui::Key::F6)) {
+                    self.doc.single_step_simulation(self.doc.simulator.cycle_time_ms);
                 }
             }
         }
@@ -401,9 +413,9 @@ impl eframe::App for CanvasApp {
         // 4. Left Panel: Ladder Tools & Components
         Panel::left("left_tools_panel")
             .resizable(!modal_open)
-            .default_size(190.0)
-            .min_size(170.0)
-            .max_size(245.0)
+            .default_size(225.0)
+            .min_size(195.0)
+            .max_size(290.0)
             .show(ui, |ui| {
                 if modal_open {
                     ui.disable();
@@ -484,7 +496,11 @@ impl eframe::App for CanvasApp {
                     palette,
                 ) {
                     if let Some(el) = self.doc.element_by_id(elem_id).cloned() {
-                        self.elem_modal.open_for(&el);
+                        let r_comment = self.doc.selected_rung_idx
+                            .and_then(|idx| self.doc.program.rungs.get(idx))
+                            .map(|r| r.comment.as_str())
+                            .unwrap_or("");
+                        self.elem_modal.open_for(&el, self.doc.selected_rung_idx, r_comment);
                     }
                 }
             });
@@ -498,8 +514,45 @@ impl eframe::App for CanvasApp {
                 .collapsible(false)
                 .resizable(false)
                 .show(ui.ctx(), |ui| {
-                    ui.heading("uPLC Studio (MICROPLC Edition)");
-                    ui.label("Ladder Program By uPLC Studio [PksofttecH]");
+                    ui.horizontal(|ui| {
+                        // Microchip Ladder Logic badge (Concept 1)
+                        let (rect, _response) = ui.allocate_exact_size(egui::vec2(48.0, 48.0), egui::Sense::hover());
+                        let painter = ui.painter_at(rect);
+                        // Background squircle chip
+                        painter.rect_filled(rect.shrink(4.0), 6.0, egui::Color32::from_rgb(15, 23, 42));
+                        painter.rect_stroke(
+                            rect.shrink(4.0),
+                            6.0,
+                            egui::Stroke::new(1.5, egui::Color32::from_rgb(14, 165, 233)),
+                            egui::StrokeKind::Inside,
+                        );
+                        // IC Pins
+                        let p = egui::Stroke::new(1.5, egui::Color32::from_rgb(148, 163, 184));
+                        painter.line_segment([egui::pos2(rect.left() + 14.0, rect.top()), egui::pos2(rect.left() + 14.0, rect.top() + 4.0)], p);
+                        painter.line_segment([egui::pos2(rect.left() + 24.0, rect.top()), egui::pos2(rect.left() + 24.0, rect.top() + 4.0)], p);
+                        painter.line_segment([egui::pos2(rect.left() + 34.0, rect.top()), egui::pos2(rect.left() + 34.0, rect.top() + 4.0)], p);
+                        painter.line_segment([egui::pos2(rect.left() + 14.0, rect.bottom() - 4.0), egui::pos2(rect.left() + 14.0, rect.bottom())], p);
+                        painter.line_segment([egui::pos2(rect.left() + 24.0, rect.bottom() - 4.0), egui::pos2(rect.left() + 24.0, rect.bottom())], p);
+                        painter.line_segment([egui::pos2(rect.left() + 34.0, rect.bottom() - 4.0), egui::pos2(rect.left() + 34.0, rect.bottom())], p);
+                        // Rails
+                        let cy = rect.center().y;
+                        painter.line_segment([egui::pos2(rect.left() + 10.0, cy - 12.0), egui::pos2(rect.left() + 10.0, cy + 12.0)], egui::Stroke::new(2.0, egui::Color32::from_rgb(245, 158, 11)));
+                        painter.line_segment([egui::pos2(rect.right() - 10.0, cy - 12.0), egui::pos2(rect.right() - 10.0, cy + 12.0)], egui::Stroke::new(2.0, egui::Color32::from_rgb(148, 163, 184)));
+                        // Contact & Coil in center
+                        painter.line_segment([egui::pos2(rect.left() + 10.0, cy), egui::pos2(rect.left() + 17.0, cy)], egui::Stroke::new(1.5, egui::Color32::from_rgb(0, 240, 255)));
+                        painter.line_segment([egui::pos2(rect.left() + 17.0, cy - 6.0), egui::pos2(rect.left() + 17.0, cy + 6.0)], egui::Stroke::new(2.0, egui::Color32::from_rgb(0, 240, 255)));
+                        painter.line_segment([egui::pos2(rect.left() + 22.0, cy - 6.0), egui::pos2(rect.left() + 22.0, cy + 6.0)], egui::Stroke::new(2.0, egui::Color32::from_rgb(0, 240, 255)));
+                        painter.line_segment([egui::pos2(rect.left() + 22.0, cy), egui::pos2(rect.left() + 28.0, cy)], egui::Stroke::new(1.5, egui::Color32::from_rgb(0, 240, 255)));
+                        // Coil
+                        let coil_color = egui::Color32::from_rgb(16, 225, 130);
+                        painter.circle_stroke(egui::pos2(rect.left() + 32.5, cy), 4.5, egui::Stroke::new(1.5, coil_color));
+                        painter.line_segment([egui::pos2(rect.left() + 37.0, cy), egui::pos2(rect.right() - 10.0, cy)], egui::Stroke::new(1.5, egui::Color32::from_rgb(0, 240, 255)));
+
+                        ui.vertical(|ui| {
+                            ui.heading("uPLC Studio (MICROPLC Edition)");
+                            ui.label("Ladder Program By uPLC Studio [PksofttecH]");
+                        });
+                    });
                     ui.separator();
                     ui.label("- CAD Corner-Bracket Element Selection & Floating Quick-Action HUD");
                     ui.label("- Professional LD Element Configuration Window (Double-Click / Enter)");
@@ -785,4 +838,52 @@ mod tests {
         assert_eq!(loaded.window_pos_x, None);
         assert_eq!(loaded.window_pos_y, None);
     }
+
+    #[test]
+    fn test_canvas_with_scrollbars() {
+        let ctx = egui::Context::default();
+        let mut raw_input = egui::RawInput::default();
+        raw_input.screen_rect = Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 700.0)));
+        let mut output = ctx.run_ui(raw_input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let mut canvas = CanvasViewport::default();
+                let mut doc = Document::default();
+                for _ in 0..20 {
+                    doc.add_rung();
+                }
+                let mut tool = ActiveTool::Select;
+                let palette = AppTheme::Dark.palette();
+                let _ = canvas.show(ui, &mut doc, &mut tool, InsertPosition::AppendRung, palette);
+                let content_sz = canvas.compute_content_size(&doc, 1000.0);
+                assert!(content_sz.y > 2000.0, "20 rungs should provide large scrollable content height");
+            });
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn test_scrollbar_pointer_isolation() {
+        let ctx = egui::Context::default();
+        let mut raw_input = egui::RawInput::default();
+        raw_input.screen_rect = Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 700.0)));
+        raw_input.events.push(egui::Event::PointerMoved(egui::pos2(995.0, 300.0)));
+        let mut output = ctx.run_ui(raw_input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let mut canvas = CanvasViewport::default();
+                let mut doc = Document::default();
+                for _ in 0..20 {
+                    doc.add_rung();
+                }
+                let mut tool = ActiveTool::Select;
+                let palette = AppTheme::Dark.palette();
+                let clicked = canvas.show(ui, &mut doc, &mut tool, InsertPosition::AppendRung, palette);
+                assert_eq!(clicked, None);
+                assert_eq!(canvas.marquee_start, None);
+            });
+        });
+        output.textures_delta.clear();
+    }
 }
+
+
+
