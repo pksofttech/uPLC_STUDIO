@@ -1,0 +1,9 @@
+[package]
+name = "uplc-studio"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+my-canvas-ui = { workspace = true }
+eframe = { workspace = true }
+egui = { workspace = true }

@@ -1,0 +1,12 @@
+[package]
+name = "my-canvas-ui"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+my-canvas-core = { workspace = true }
+egui = { workspace = true }
+eframe = { workspace = true }
+rfd = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
