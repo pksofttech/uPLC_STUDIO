@@ -536,11 +536,89 @@ impl Rung {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IOPortMapping {
-    pub plc_address: String,   // e.g. "X0", "X1", "Y0", "Y1"
+    pub plc_address: String,   // e.g. "X0", "X1", "Y0", "Y1" or "%IX0.0", "%QX0.0"
+    #[serde(default)]
+    pub iec_address: String,   // e.g. "%IX0.0", "%QX0.0" (Editable IEC address)
     pub symbol: String,        // e.g. "START_PB", "STOP_PB", "MOTOR"
     pub hw_pin: String,        // e.g. "D2", "D3", "D13", "A0"
     pub description: String,
     pub is_input: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IecVarEntry {
+    pub name: String,
+    pub address: String,
+    pub data_type: String,
+    pub hw_pin: String,
+    pub symbol: String,
+    pub description: String,
+    pub is_input: bool,
+}
+
+impl IecVarEntry {
+    /// Format as a single IEC 61131-3 variable declaration line.
+    pub fn to_declaration_line(&self) -> String {
+        format!(
+            "    {} AT {} : {}; (* Pin: {} | Symbol: {} | {} *)",
+            self.name, self.address, self.data_type, self.hw_pin, self.symbol, self.description
+        )
+    }
+}
+
+impl IOPortMapping {
+    /// Return the standard IEC 61131-3 address (e.g. "%IX0.0", "%QX0.0").
+    pub fn iec_address(&self, fallback_index: usize) -> String {
+        if !self.iec_address.trim().is_empty() {
+            return self.iec_address.trim().to_string();
+        }
+
+        let trimmed = self.plc_address.trim().to_uppercase();
+        if trimmed.starts_with('%') {
+            return trimmed;
+        }
+
+        let num_part = trimmed.trim_start_matches(|c: char| c.is_alphabetic());
+        let idx = num_part.parse::<usize>().unwrap_or(fallback_index);
+        let byte_idx = idx / 8;
+        let bit_idx = idx % 8;
+
+        if self.is_input {
+            format!("%IX{}.{}", byte_idx, bit_idx)
+        } else {
+            format!("%QX{}.{}", byte_idx, bit_idx)
+        }
+    }
+
+    /// Map this I/O port into an IEC 61131-3 variable entry.
+    pub fn to_iec_entry(&self, fallback_index: usize, use_symbol_as_identifier: bool) -> IecVarEntry {
+        let iec_addr = self.iec_address(fallback_index);
+        let name = if use_symbol_as_identifier && !self.symbol.trim().is_empty() {
+            let clean: String = self
+                .symbol
+                .trim()
+                .chars()
+                .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
+                .collect();
+            if clean.chars().next().map_or(false, |c| c.is_alphabetic() || c == '_') {
+                clean
+            } else {
+                format!("TAG_{}", clean)
+            }
+        } else {
+            self.plc_address.clone()
+        };
+
+        IecVarEntry {
+            name,
+            address: iec_addr,
+            data_type: "BOOL".to_string(),
+            hw_pin: self.hw_pin.clone(),
+            symbol: self.symbol.clone(),
+            description: self.description.clone(),
+            is_input: self.is_input,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -564,9 +642,41 @@ impl LadderProgram {
             title: "Ladder Program By uPLC Studio [PksofttecH]".to_string(),
             hardware: "Arduino UNO R3".to_string(),
             rungs: vec![Rung::new(0)],
-            io_mappings: Self::default_arduino_io(),
+            io_mappings: Vec::new(),
             next_element_id: 1,
         }
+    }
+
+    /// Map all program IO mappings into structured IEC 61131-3 variable entries.
+    pub fn map_io_to_iec_var_entries(&self, use_symbol_as_identifier: bool) -> Vec<IecVarEntry> {
+        let mut in_count = 0;
+        let mut out_count = 0;
+        let mut entries = Vec::with_capacity(self.io_mappings.len());
+
+        for io in &self.io_mappings {
+            let idx = if io.is_input {
+                let cur = in_count;
+                in_count += 1;
+                cur
+            } else {
+                let cur = out_count;
+                out_count += 1;
+                cur
+            };
+            entries.push(io.to_iec_entry(idx, use_symbol_as_identifier));
+        }
+
+        entries
+    }
+
+    /// Generate standard IEC 61131-3 VAR ... END_VAR declaration table string.
+    pub fn map_io_to_iec_var_table(&self) -> String {
+        crate::il_format::IlParser::map_io_to_iec_var_table(self)
+    }
+
+    /// Generate IEC 61131-3 VAR ... END_VAR table with configurable identifier style.
+    pub fn map_io_to_iec_var_table_with_options(&self, use_symbol_name: bool) -> String {
+        crate::il_format::IlParser::map_io_to_iec_var_table_with_options(self, use_symbol_name)
     }
 
     pub fn alloc_id(&mut self) -> u64 {
@@ -586,6 +696,7 @@ impl LadderProgram {
         vec![
             IOPortMapping {
                 plc_address: "X0".to_string(),
+                iec_address: "%IX0.0".to_string(),
                 symbol: "START_PB".to_string(),
                 hw_pin: "D2".to_string(),
                 description: "Start Pushbutton (NO)".to_string(),
@@ -593,6 +704,7 @@ impl LadderProgram {
             },
             IOPortMapping {
                 plc_address: "X1".to_string(),
+                iec_address: "%IX0.1".to_string(),
                 symbol: "STOP_PB".to_string(),
                 hw_pin: "D3".to_string(),
                 description: "Stop Pushbutton (NC)".to_string(),
@@ -600,6 +712,7 @@ impl LadderProgram {
             },
             IOPortMapping {
                 plc_address: "X2".to_string(),
+                iec_address: "%IX0.2".to_string(),
                 symbol: "SENS_LIMIT".to_string(),
                 hw_pin: "D4".to_string(),
                 description: "Proximity Limit Switch".to_string(),
@@ -607,6 +720,7 @@ impl LadderProgram {
             },
             IOPortMapping {
                 plc_address: "X3".to_string(),
+                iec_address: "%IX0.3".to_string(),
                 symbol: "EMERGENCY".to_string(),
                 hw_pin: "D5".to_string(),
                 description: "Emergency Stop".to_string(),
@@ -614,6 +728,7 @@ impl LadderProgram {
             },
             IOPortMapping {
                 plc_address: "Y0".to_string(),
+                iec_address: "%QX0.0".to_string(),
                 symbol: "MOTOR_RUN".to_string(),
                 hw_pin: "D8".to_string(),
                 description: "Main Motor Contactor".to_string(),
@@ -621,6 +736,7 @@ impl LadderProgram {
             },
             IOPortMapping {
                 plc_address: "Y1".to_string(),
+                iec_address: "%QX0.1".to_string(),
                 symbol: "LAMP_RUN".to_string(),
                 hw_pin: "D9".to_string(),
                 description: "Running Indicator Lamp (Green)".to_string(),
@@ -628,6 +744,7 @@ impl LadderProgram {
             },
             IOPortMapping {
                 plc_address: "Y2".to_string(),
+                iec_address: "%QX0.2".to_string(),
                 symbol: "ALARM_BUZZER".to_string(),
                 hw_pin: "D10".to_string(),
                 description: "Warning Alarm Buzzer".to_string(),
@@ -635,6 +752,7 @@ impl LadderProgram {
             },
             IOPortMapping {
                 plc_address: "Y3".to_string(),
+                iec_address: "%QX0.3".to_string(),
                 symbol: "LAMP_FAULT".to_string(),
                 hw_pin: "D13".to_string(),
                 description: "Fault Indicator Lamp (Red)".to_string(),
@@ -650,16 +768,16 @@ impl LadderProgram {
             id_counter
         };
 
-        // Rung 0: [Parallel( [X0:START], [Y0:MOTOR] )] -> [X1:STOP (NC)] -> (Y0:MOTOR)
+        // Rung 0: [Parallel( [%IX0.0:START_PB], [%QX0.0:MOTOR_RUN] )] -> [%IX0.1:STOP_PB (NC)] -> (%QX0.0:MOTOR_RUN)
         let branch_start_seal = LadderElement::new_branch(
             next_id(),
             vec![
-                vec![LadderElement::new_contact(next_id(), "X0", "START_PB", ContactMode::NormallyOpen)],
-                vec![LadderElement::new_contact(next_id(), "Y0", "MOTOR_RUN", ContactMode::NormallyOpen)],
+                vec![LadderElement::new_contact(next_id(), "%IX0.0", "START_PB", ContactMode::NormallyOpen)],
+                vec![LadderElement::new_contact(next_id(), "%QX0.0", "MOTOR_RUN", ContactMode::NormallyOpen)],
             ],
         );
-        let contact_stop = LadderElement::new_contact(next_id(), "X1", "STOP_PB", ContactMode::NormallyClosed);
-        let coil_motor = LadderElement::new_coil(next_id(), "Y0", "MOTOR_RUN", CoilMode::Normal);
+        let contact_stop = LadderElement::new_contact(next_id(), "%IX0.1", "STOP_PB", ContactMode::NormallyClosed);
+        let coil_motor = LadderElement::new_coil(next_id(), "%QX0.0", "MOTOR_RUN", CoilMode::Normal);
 
         let rung0 = Rung {
             id: 0,
@@ -668,9 +786,9 @@ impl LadderProgram {
             is_energized: false,
         };
 
-        // Rung 1: [Y0:MOTOR] -> (Y1:LAMP_RUN)
-        let contact_motor_aux = LadderElement::new_contact(next_id(), "Y0", "MOTOR_RUN", ContactMode::NormallyOpen);
-        let coil_lamp = LadderElement::new_coil(next_id(), "Y1", "LAMP_RUN", CoilMode::Normal);
+        // Rung 1: [%QX0.0:MOTOR_RUN] -> (%QX0.1:LAMP_RUN)
+        let contact_motor_aux = LadderElement::new_contact(next_id(), "%QX0.0", "MOTOR_RUN", ContactMode::NormallyOpen);
+        let coil_lamp = LadderElement::new_coil(next_id(), "%QX0.1", "LAMP_RUN", CoilMode::Normal);
 
         let rung1 = Rung {
             id: 1,
@@ -679,11 +797,11 @@ impl LadderProgram {
             is_energized: false,
         };
 
-        // Rung 2: [Y0:MOTOR] -> [TON T0 3000ms] -> (Y2:ALARM_BUZZER)
-        let contact_m_timer = LadderElement::new_contact(next_id(), "Y0", "MOTOR_RUN", ContactMode::NormallyOpen);
+        // Rung 2: [%QX0.0:MOTOR_RUN] -> [TON T0 3000ms] -> (%QX0.2:ALARM_BUZZER)
+        let contact_m_timer = LadderElement::new_contact(next_id(), "%QX0.0", "MOTOR_RUN", ContactMode::NormallyOpen);
         let ton_t0 = LadderElement::new_ton(next_id(), "T0", "DELAY_ALARM", 3000);
         let contact_t0_done = LadderElement::new_contact(next_id(), "T0", "T0_DONE", ContactMode::NormallyOpen);
-        let coil_buzzer = LadderElement::new_coil(next_id(), "Y2", "ALARM_BUZZER", CoilMode::Normal);
+        let coil_buzzer = LadderElement::new_coil(next_id(), "%QX0.2", "ALARM_BUZZER", CoilMode::Normal);
 
         let rung2 = Rung {
             id: 2,
@@ -765,6 +883,94 @@ impl LadderProgram {
         }
     }
 
+    /// Resolve an element's address and symbol into standard IEC 61131-3 address and symbol.
+    pub fn resolve_iec_and_symbol(&self, addr: &str, elem_symbol: &str) -> (String, String) {
+        let trimmed = addr.trim();
+        let mut in_idx = 0;
+        let mut out_idx = 0;
+        for io in &self.io_mappings {
+            let idx = if io.is_input {
+                let c = in_idx;
+                in_idx += 1;
+                c
+            } else {
+                let c = out_idx;
+                out_idx += 1;
+                c
+            };
+            let io_iec = io.iec_address(idx);
+            if io.plc_address.eq_ignore_ascii_case(trimmed)
+                || io_iec.eq_ignore_ascii_case(trimmed)
+                || (!io.symbol.is_empty() && io.symbol.eq_ignore_ascii_case(trimmed))
+            {
+                let sym = if !elem_symbol.trim().is_empty()
+                    && !elem_symbol.eq_ignore_ascii_case(trimmed)
+                    && !elem_symbol.eq_ignore_ascii_case(&io.plc_address)
+                {
+                    elem_symbol.trim().to_string()
+                } else {
+                    io.symbol.clone()
+                };
+                return (io_iec, sym);
+            }
+        }
+
+        let upper = trimmed.to_ascii_uppercase();
+        let iec = if upper.starts_with('%') {
+            upper
+        } else if let Some(rest) = upper.strip_prefix('X').or_else(|| upper.strip_prefix('I')) {
+            if let Ok(n) = rest.parse::<usize>() {
+                format!("%IX{}.{}", n / 8, n % 8)
+            } else {
+                upper
+            }
+        } else if let Some(rest) = upper.strip_prefix('Y').or_else(|| upper.strip_prefix('Q')) {
+            if let Ok(n) = rest.parse::<usize>() {
+                format!("%QX{}.{}", n / 8, n % 8)
+            } else {
+                upper
+            }
+        } else if let Some(rest) = upper.strip_prefix('M') {
+            if let Ok(n) = rest.parse::<usize>() {
+                format!("%MX{}.{}", n / 8, n % 8)
+            } else {
+                upper
+            }
+        } else if let Some(rest) = upper.strip_prefix('V').or_else(|| upper.strip_prefix('R')) {
+            if let Ok(n) = rest.parse::<usize>() {
+                format!("%MW{}", n)
+            } else {
+                upper
+            }
+        } else {
+            trimmed.to_string()
+        };
+
+        let sym = if !elem_symbol.trim().is_empty() {
+            elem_symbol.trim().to_string()
+        } else {
+            iec.clone()
+        };
+        (iec, sym)
+    }
+
+    /// Collect all unique leaf elements in the program with resolved (raw_name, iec_address, symbol, el_type, val_str)
+    pub fn collect_all_iec_elements(&self) -> Vec<(String, String, String, TypeTag, String)> {
+        let mut raw_list = Vec::new();
+        for rung in &self.rungs {
+            for el in &rung.elements {
+                Self::collect_elem_with_symbol_recursive(el, &mut raw_list);
+            }
+        }
+        raw_list
+            .into_iter()
+            .map(|(name, sym, el_type, val_str)| {
+                let (iec, resolved_sym) = self.resolve_iec_and_symbol(&name, &sym);
+                (name, iec, resolved_sym, el_type, val_str)
+            })
+            .collect()
+    }
+
     /// Collect all unique leaf elements in the program for the right-side Elements list
     pub fn collect_all_elements(&self) -> Vec<(String, TypeTag, String)> {
         let mut list = Vec::new();
@@ -774,6 +980,36 @@ impl LadderProgram {
             }
         }
         list
+    }
+
+    fn collect_elem_with_symbol_recursive(
+        el: &LadderElement,
+        list: &mut Vec<(String, String, TypeTag, String)>,
+    ) {
+        match el.element_type {
+            TypeTag::Branch => {
+                for path in &el.branch_paths {
+                    for sub in path {
+                        Self::collect_elem_with_symbol_recursive(sub, list);
+                    }
+                }
+            }
+            TypeTag::Comment | TypeTag::Wire | TypeTag::OpenCircuit => {}
+            _ => {
+                if !list.iter().any(|(name, _, t, _)| name == &el.name && *t == el.element_type) {
+                    let val_str = match el.element_type {
+                        TypeTag::Ton | TypeTag::Tof | TypeTag::Tp | TypeTag::Ctu | TypeTag::Ctd | TypeTag::Ctud => {
+                            format!("{}", el.preset_value)
+                        }
+                        TypeTag::Compare => format!("{} {}", el.compare_op, el.preset_value),
+                        TypeTag::Math => format!("{} {}", el.math_op, el.preset_value),
+                        TypeTag::Move => format!(":= {}", el.preset_value),
+                        _ => if el.is_energized { "1".to_string() } else { "0".to_string() },
+                    };
+                    list.push((el.name.clone(), el.symbol.clone(), el.element_type, val_str));
+                }
+            }
+        }
     }
 
     fn collect_elem_recursive(el: &LadderElement, list: &mut Vec<(String, TypeTag, String)>) {

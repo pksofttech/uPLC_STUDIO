@@ -151,9 +151,10 @@ fn main() -> eframe::Result<()> {
 
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("uPLC Studio")
+        .with_app_id("uplc-studio")
         .with_icon(generate_app_icon())
         .with_inner_size([width, height])
-        .with_min_inner_size([800.0, 600.0]);
+        .with_min_inner_size([960.0, 600.0]);
 
     if let (Some(x), Some(y)) = (settings.window_pos_x, settings.window_pos_y) {
         if x >= 0.0 && y >= 0.0 && x < 10000.0 && y < 10000.0 {

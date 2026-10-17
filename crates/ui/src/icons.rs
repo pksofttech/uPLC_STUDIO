@@ -142,7 +142,7 @@ pub fn paint_icon(painter: &Painter, rect: Rect, icon: VectorIcon, color: Color3
             painter.line_segment([tip, pos2(c.x + r * 0.55, c.y - r * 0.1)], s_bold);
         }
         VectorIcon::CopyRung => {
-            // Back sheet + front sheet
+            // Back sheet + front sheet (theme-independent vector strokes)
             let r1 = Rect::from_min_max(
                 pos2(c.x - r * 0.75, c.y - r * 0.75),
                 pos2(c.x + r * 0.35, c.y + r * 0.40),
@@ -151,8 +151,10 @@ pub fn paint_icon(painter: &Painter, rect: Rect, icon: VectorIcon, color: Color3
                 pos2(c.x - r * 0.35, c.y - r * 0.35),
                 pos2(c.x + r * 0.75, c.y + r * 0.80),
             );
-            painter.rect_stroke(r1, 2.0, s_thin, StrokeKind::Inside);
-            painter.rect_filled(r2, 2.0, Color32::from_rgba_unmultiplied(20, 26, 38, 180));
+            painter.line_segment([r1.left_top(), r1.right_top()], s_thin);
+            painter.line_segment([r1.right_top(), pos2(r1.right(), r2.top())], s_thin);
+            painter.line_segment([r1.left_top(), r1.left_bottom()], s_thin);
+            painter.line_segment([r1.left_bottom(), pos2(r2.left(), r1.bottom())], s_thin);
             painter.rect_stroke(r2, 2.0, s, StrokeKind::Inside);
         }
         VectorIcon::CopyUp => {
@@ -631,7 +633,7 @@ pub fn modern_tool_button(
         let fg = if !is_enabled {
             palette.rung_text_dim.gamma_multiply(0.48)
         } else if is_active {
-            if palette.canvas_bg.r() > 200 {
+            if palette.is_light() {
                 Color32::from_rgb(18, 25, 40)
             } else {
                 palette.text_primary

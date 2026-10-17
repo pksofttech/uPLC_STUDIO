@@ -7,45 +7,53 @@
 
 PROGRAM MainProgram
 VAR
-    X00 AT %IX0.0 : BOOL; (* Pin: 2 | Symbol: X00 | Hardware Pin 2 *)
-    Y00 AT %QX0.0 : BOOL; (* Pin: 8 | Symbol: Y00 | Hardware Pin 8 *)
-    Y01 AT %QX0.1 : BOOL; (* Pin: 9 | Symbol: Y01 | Hardware Pin 9 *)
-    Y02 AT %QX0.2 : BOOL; (* Pin: 10 | Symbol: Y02 | Hardware Pin 10 *)
-    T00 : TON; (* Preset: 2000ms *)
-    T01 : TON; (* Preset: 1000ms *)
-    T02 : TON; (* Preset: 2000ms *)
+    (* --- Digital Inputs (%IX) --- *)
+    SW_ENABLE AT %IX0.0 : BOOL; (* Pin: D2 | Symbol: SW_ENABLE | Traffic Light Master Enable Switch *)
+
+    (* --- Digital Outputs (%QX) --- *)
+    LAMP_GREEN AT %QX0.0 : BOOL; (* Pin: D8 | Symbol: LAMP_GREEN | Green Traffic Lamp *)
+    LAMP_YELLOW AT %QX0.1 : BOOL; (* Pin: D9 | Symbol: LAMP_YELLOW | Yellow Traffic Lamp *)
+    LAMP_RED AT %QX0.2 : BOOL; (* Pin: D10 | Symbol: LAMP_RED | Red Traffic Lamp *)
+
+    (* --- Function Blocks & Internal Variables --- *)
+    M_GREEN_DONE AT %MX0.0 : BOOL; (* Symbol: M_GREEN_DONE | Green Phase Timer Done *)
+    M_YELLOW_DONE AT %MX0.1 : BOOL; (* Symbol: M_YELLOW_DONE | Yellow Phase Timer Done *)
+    M_CYCLE_RST AT %MX0.2 : BOOL; (* Symbol: M_CYCLE_RST | Red Phase Done / Cycle Reset *)
+    T0 : TON; (* Preset: 2000ms | Symbol: TON_GREEN | Green Phase Timer *)
+    T1 : TON; (* Preset: 1000ms | Symbol: TON_YELLOW | Yellow Phase Timer *)
+    T2 : TON; (* Preset: 2000ms | Symbol: TON_RED | Red Phase Timer *)
 END_VAR
 
-(* Network 01: Rung 1: Traffic Light Master Enable & Cycle Timer 1 (Green Phase = 2000ms) *)
-    LD   X00
-    ANDN R02
-    CAL  T00(IN := TRUE, PT := T#2000ms)
-    ST   R00
+(* Network 01: Traffic Light Master Enable & Cycle Timer 1 (Green Phase = 2000ms) *)
+    LD   %IX0.0
+    ANDN %MX0.2
+    CAL  T0(IN := TRUE, PT := T#2000ms)
+    ST   %MX0.0
 
-(* Network 02: Rung 2: Cycle Timer 2 (Yellow Phase = 1000ms) *)
-    LD   R00
-    CAL  T01(IN := TRUE, PT := T#1000ms)
-    ST   R01
+(* Network 02: Cycle Timer 2 (Yellow Phase = 1000ms) *)
+    LD   %MX0.0
+    CAL  T1(IN := TRUE, PT := T#1000ms)
+    ST   %MX0.1
 
-(* Network 03: Rung 3: Cycle Timer 3 (Red Phase = 2000ms -> Resets Cycle) *)
-    LD   R01
-    CAL  T02(IN := TRUE, PT := T#2000ms)
-    ST   R02
+(* Network 03: Cycle Timer 3 (Red Phase = 2000ms -> Resets Cycle) *)
+    LD   %MX0.1
+    CAL  T2(IN := TRUE, PT := T#2000ms)
+    ST   %MX0.2
 
-(* Network 04: Rung 4: Green Traffic Lamp (Y00) *)
-    LD   X00
-    ANDN R00
-    ST   Y00
+(* Network 04: Green Traffic Lamp (%QX0.0) *)
+    LD   %IX0.0
+    ANDN %MX0.0
+    ST   %QX0.0
 
-(* Network 05: Rung 5: Yellow Traffic Lamp (Y01) *)
-    LD   X00
-    AND  R00
-    ANDN R01
-    ST   Y01
+(* Network 05: Yellow Traffic Lamp (%QX0.1) *)
+    LD   %IX0.0
+    AND  %MX0.0
+    ANDN %MX0.1
+    ST   %QX0.1
 
-(* Network 06: Rung 6: Red Traffic Lamp (Y02) *)
-    LD   X00
-    AND  R01
-    ST   Y02
+(* Network 06: Red Traffic Lamp (%QX0.2) *)
+    LD   %IX0.0
+    AND  %MX0.1
+    ST   %QX0.2
 
 END_PROGRAM

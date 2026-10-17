@@ -7,36 +7,42 @@
 
 PROGRAM MainProgram
 VAR
-    X00 AT %IX0.0 : BOOL; (* Pin: 2 | Symbol: X00 | Hardware Pin 2 *)
-    X01 AT %IX0.1 : BOOL; (* Pin: 3 | Symbol: X01 | Hardware Pin 3 *)
-    X02 AT %IX0.2 : BOOL; (* Pin: 4 | Symbol: X02 | Hardware Pin 4 *)
-    X03 AT %IX0.3 : BOOL; (* Pin: 5 | Symbol: X03 | Hardware Pin 5 *)
-    Y00 AT %QX0.0 : BOOL; (* Pin: 8 | Symbol: Y00 | Hardware Pin 8 *)
-    Y01 AT %QX0.1 : BOOL; (* Pin: 9 | Symbol: Y01 | Hardware Pin 9 *)
-    T00 : TON; (* Preset: 2500ms *)
+    (* --- Digital Inputs (%IX) --- *)
+    RADAR_IN AT %IX0.0 : BOOL; (* Pin: D2 | Symbol: RADAR_IN | Inside Motion Radar Sensor *)
+    RADAR_OUT AT %IX0.1 : BOOL; (* Pin: D3 | Symbol: RADAR_OUT | Outside Motion Radar Sensor *)
+    LS_OPEN AT %IX0.2 : BOOL; (* Pin: D4 | Symbol: LS_OPEN | Door Fully Open Limit Switch *)
+    LS_CLOSED AT %IX0.3 : BOOL; (* Pin: D5 | Symbol: LS_CLOSED | Door Fully Closed Limit Switch *)
+
+    (* --- Digital Outputs (%QX) --- *)
+    MOTOR_OPEN AT %QX0.0 : BOOL; (* Pin: D8 | Symbol: MOTOR_OPEN | Door Open Motor Drive *)
+    MOTOR_CLOSE AT %QX0.1 : BOOL; (* Pin: D9 | Symbol: MOTOR_CLOSE | Door Close Motor Drive *)
+
+    (* --- Function Blocks & Internal Variables --- *)
+    M_HOLD_DONE AT %MX0.0 : BOOL; (* Symbol: M_HOLD_DONE | Hold-Open Timer Elapsed Flag *)
+    T0 : TON; (* Preset: 2500ms | Symbol: TON_HOLD_OPEN | Door Hold-Open Delay Timer *)
 END_VAR
 
-(* Network 01: Rung 1: Door Open Motor (Y00) triggered by Inside (X00) or Outside (X01) Radar Sensor *)
-    LD   X00
-    OR   X01
-    ANDN X02
-    ANDN Y01
-    ST   Y00
+(* Network 01: Door Open Motor (%QX0.0) triggered by Inside (%IX0.0) or Outside (%IX0.1) Radar Sensor *)
+    LD   %IX0.0
+    OR   %IX0.1
+    ANDN %IX0.2
+    ANDN %QX0.1
+    ST   %QX0.0
 
-(* Network 02: Rung 2: Hold-Open Delay Timer (T00 = 2500ms) once Door reaches Open Limit (X02) *)
-    LD   X02
-    ANDN X00
-    ANDN X01
-    CAL  T00(IN := TRUE, PT := T#2500ms)
-    ST   R00
+(* Network 02: Hold-Open Delay Timer (T0 = 2500ms) once Door reaches Open Limit (%IX0.2) *)
+    LD   %IX0.2
+    ANDN %IX0.0
+    ANDN %IX0.1
+    CAL  T0(IN := TRUE, PT := T#2500ms)
+    ST   %MX0.0
 
-(* Network 03: Rung 3: Door Close Motor (Y01) runs until Closed Limit Switch (X03) is hit *)
-    LD   R00
-    OR   Y01
-    ANDN X00
-    ANDN X01
-    ANDN X03
-    ANDN Y00
-    ST   Y01
+(* Network 03: Door Close Motor (%QX0.1) runs until Closed Limit Switch (%IX0.3) is hit *)
+    LD   %MX0.0
+    OR   %QX0.1
+    ANDN %IX0.0
+    ANDN %IX0.1
+    ANDN %IX0.3
+    ANDN %QX0.0
+    ST   %QX0.1
 
 END_PROGRAM

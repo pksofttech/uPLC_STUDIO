@@ -52,34 +52,8 @@ impl IlParser {
         out.push_str("(* ==================================================================== *)\n\n");
 
         out.push_str("PROGRAM MainProgram\n");
-        out.push_str("VAR\n");
-
-        // Write IO mappings
-        let mut in_count = 0;
-        let mut out_count = 0;
-        for io in &prog.io_mappings {
-            let addr = if io.is_input {
-                let s = format!("%IX{}.{}", in_count / 8, in_count % 8);
-                in_count += 1;
-                s
-            } else {
-                let s = format!("%QX{}.{}", out_count / 8, out_count % 8);
-                out_count += 1;
-                s
-            };
-            out.push_str(&format!(
-                "    {} AT {} : BOOL; (* Pin: {} | Symbol: {} | {} *)\n",
-                io.plc_address, addr, io.hw_pin, io.symbol, io.description
-            ));
-        }
-
-        // Declare Function Blocks (Timers, Counters, Registers)
-        let mut declared_fbs = HashSet::new();
-        for rung in &prog.rungs {
-            Self::collect_fb_declarations(&rung.elements, &mut declared_fbs, &mut out);
-        }
-
-        out.push_str("END_VAR\n\n");
+        out.push_str(&Self::map_io_to_iec_var_table(prog));
+        out.push_str("\n\n");
 
         // Networks / Rungs
         for (idx, rung) in prog.rungs.iter().enumerate() {
@@ -92,7 +66,52 @@ impl IlParser {
         out
     }
 
-    fn collect_fb_declarations(
+    /// Map program I/O and function blocks to standard IEC 61131-3 VAR ... END_VAR table.
+    pub fn map_io_to_iec_var_table(prog: &LadderProgram) -> String {
+        Self::map_io_to_iec_var_table_with_options(prog, false)
+    }
+
+    /// Map program I/O to IEC 61131-3 VAR ... END_VAR table with configurable identifier style.
+    pub fn map_io_to_iec_var_table_with_options(prog: &LadderProgram, use_symbol_name: bool) -> String {
+        let mut out = String::new();
+        out.push_str("VAR\n");
+
+        let entries = prog.map_io_to_iec_var_entries(use_symbol_name);
+
+        let inputs: Vec<_> = entries.iter().filter(|e| e.is_input).collect();
+        if !inputs.is_empty() {
+            out.push_str("    (* --- Digital Inputs (%IX) --- *)\n");
+            for e in inputs {
+                out.push_str(&format!("{}\n", e.to_declaration_line()));
+            }
+            out.push_str("\n");
+        }
+
+        let outputs: Vec<_> = entries.iter().filter(|e| !e.is_input).collect();
+        if !outputs.is_empty() {
+            out.push_str("    (* --- Digital Outputs (%QX) --- *)\n");
+            for e in outputs {
+                out.push_str(&format!("{}\n", e.to_declaration_line()));
+            }
+            out.push_str("\n");
+        }
+
+        // Declare Function Blocks (Timers, Counters, Registers)
+        let mut declared_fbs = HashSet::new();
+        let mut fb_block = String::new();
+        for rung in &prog.rungs {
+            Self::collect_fb_declarations(&rung.elements, &mut declared_fbs, &mut fb_block);
+        }
+        if !fb_block.is_empty() {
+            out.push_str("    (* --- Function Blocks & Internal Registers --- *)\n");
+            out.push_str(&fb_block);
+        }
+
+        out.push_str("END_VAR");
+        out
+    }
+
+    pub fn collect_fb_declarations(
         elements: &[LadderElement],
         declared: &mut HashSet<String>,
         out: &mut String,
@@ -299,8 +318,12 @@ impl IlParser {
                     out.push_str(&format!("    CAL  {}(IN := TRUE, PT := T#{}ms)\n", el.name, el.preset_value));
                     first = false;
                 }
-                TypeTag::Ctu | TypeTag::Ctd | TypeTag::Ctud => {
+                TypeTag::Ctu | TypeTag::Ctud => {
                     out.push_str(&format!("    CAL  {}(CU := TRUE, PV := {})\n", el.name, el.preset_value));
+                    first = false;
+                }
+                TypeTag::Ctd => {
+                    out.push_str(&format!("    CAL  {}(CD := TRUE, PV := {})\n", el.name, el.preset_value));
                     first = false;
                 }
                 TypeTag::Compare => {
@@ -313,15 +336,7 @@ impl IlParser {
                         "<=" | "LE" => "LE",
                         _ => "EQ",
                     };
-                    if first {
-                        out.push_str(&format!("    LD   {}\n", el.name));
-                        out.push_str(&format!("    {}   {}\n", op_iec, el.preset_value));
-                    } else {
-                        out.push_str("    AND(\n");
-                        out.push_str(&format!("        LD   {}\n", el.name));
-                        out.push_str(&format!("        {}   {}\n", op_iec, el.preset_value));
-                        out.push_str("    )\n");
-                    }
+                    out.push_str(&format!("    {}   {} {}\n", op_iec, el.name, el.preset_value));
                     first = false;
                 }
                 TypeTag::Move => {
@@ -387,6 +402,7 @@ impl IlParser {
         let mut rungs = Vec::new();
         let mut next_id = 1000u64;
         let mut fb_presets: HashMap<String, (TypeTag, i32)> = HashMap::new();
+        let mut var_symbols: HashMap<String, (String, String)> = HashMap::new();
 
         let lines: Vec<&str> = content.lines().collect();
         let mut i = 0;
@@ -452,7 +468,7 @@ impl IlParser {
             }
 
             if in_var_section {
-                Self::parse_var_decl(line, &mut io_mappings, &mut fb_presets);
+                Self::parse_var_decl(line, &mut io_mappings, &mut fb_presets, &mut var_symbols);
                 i += 1;
                 continue;
             }
@@ -591,6 +607,21 @@ impl IlParser {
             io_mappings = LadderProgram::default_arduino_io();
         }
 
+        // Also populate var_symbols from io_mappings for any fallback IO entries
+        for (idx, io) in io_mappings.iter().enumerate() {
+            let iec = io.iec_address(idx);
+            var_symbols
+                .entry(iec.to_uppercase())
+                .or_insert_with(|| (io.symbol.clone(), io.description.clone()));
+            var_symbols
+                .entry(io.plc_address.to_uppercase())
+                .or_insert_with(|| (io.symbol.clone(), io.description.clone()));
+        }
+
+        for rung in &mut rungs {
+            Self::enrich_elements_with_symbols(&mut rung.elements, &var_symbols);
+        }
+
         Ok(LadderProgram {
             title: "Ladder Program (IEC 61131-3 IL) [PksofttecH]".to_string(),
             hardware,
@@ -598,6 +629,34 @@ impl IlParser {
             io_mappings,
             next_element_id: next_id + 1,
         })
+    }
+
+    fn enrich_elements_with_symbols(
+        elements: &mut [LadderElement],
+        var_symbols: &HashMap<String, (String, String)>,
+    ) {
+        for el in elements {
+            if el.element_type == TypeTag::Branch {
+                for path in &mut el.branch_paths {
+                    Self::enrich_elements_with_symbols(path, var_symbols);
+                }
+            } else if let Some((sym, desc)) = var_symbols.get(&el.name.to_uppercase()) {
+                if !sym.is_empty() && (el.symbol.is_empty() || el.symbol.eq_ignore_ascii_case(&el.name)) {
+                    el.symbol = sym.clone();
+                }
+                if !desc.is_empty() && el.comment.is_empty() {
+                    el.comment = desc.clone();
+                }
+            }
+        }
+    }
+
+    fn strip_member_suffix(name: &str) -> &str {
+        if name.starts_with('%') {
+            name
+        } else {
+            name.split('.').next().unwrap_or(name)
+        }
     }
 
     fn parse_il_instruction(
@@ -616,50 +675,50 @@ impl IlParser {
 
         match op {
             "LD" | "AND" | "OR" => {
-                let name = parts.get(1).unwrap_or(&"X00").trim_matches(';');
-                let clean_name = name.split('.').next().unwrap_or(name);
+                let name = parts.get(1).unwrap_or(&"%IX0.0").trim_matches(';');
+                let clean_name = Self::strip_member_suffix(name);
                 Some(LadderElement::new_contact(id, clean_name, clean_name, ContactMode::NormallyOpen))
             }
             "LDN" | "ANDN" | "ORN" => {
-                let name = parts.get(1).unwrap_or(&"X00").trim_matches(';');
-                let clean_name = name.split('.').next().unwrap_or(name);
+                let name = parts.get(1).unwrap_or(&"%IX0.0").trim_matches(';');
+                let clean_name = Self::strip_member_suffix(name);
                 Some(LadderElement::new_contact(id, clean_name, clean_name, ContactMode::NormallyClosed))
             }
             "LDP" | "ANDP" | "ORP" => {
-                let name = parts.get(1).unwrap_or(&"X00").trim_matches(';');
-                let clean_name = name.split('.').next().unwrap_or(name);
+                let name = parts.get(1).unwrap_or(&"%IX0.0").trim_matches(';');
+                let clean_name = Self::strip_member_suffix(name);
                 Some(LadderElement::new_contact(id, clean_name, clean_name, ContactMode::PositiveTransition))
             }
             "LDF" | "ANDF" | "ORF" => {
-                let name = parts.get(1).unwrap_or(&"X00").trim_matches(';');
-                let clean_name = name.split('.').next().unwrap_or(name);
+                let name = parts.get(1).unwrap_or(&"%IX0.0").trim_matches(';');
+                let clean_name = Self::strip_member_suffix(name);
                 Some(LadderElement::new_contact(id, clean_name, clean_name, ContactMode::NegativeTransition))
             }
             "ST" => {
-                let name = parts.get(1).unwrap_or(&"Y00").trim_matches(';');
+                let name = parts.get(1).unwrap_or(&"%QX0.0").trim_matches(';');
                 if name.ends_with(".IN") || name.ends_with(".CU") || name.ends_with(".CD") {
                     return None;
                 }
                 Some(LadderElement::new_coil(id, name, name, CoilMode::Normal))
             }
             "STN" => {
-                let name = parts.get(1).unwrap_or(&"Y00").trim_matches(';');
+                let name = parts.get(1).unwrap_or(&"%QX0.0").trim_matches(';');
                 Some(LadderElement::new_coil(id, name, name, CoilMode::Negated))
             }
             "STP" => {
-                let name = parts.get(1).unwrap_or(&"Y00").trim_matches(';');
+                let name = parts.get(1).unwrap_or(&"%QX0.0").trim_matches(';');
                 Some(LadderElement::new_coil(id, name, name, CoilMode::PositiveTransition))
             }
             "STF" => {
-                let name = parts.get(1).unwrap_or(&"Y00").trim_matches(';');
+                let name = parts.get(1).unwrap_or(&"%QX0.0").trim_matches(';');
                 Some(LadderElement::new_coil(id, name, name, CoilMode::NegativeTransition))
             }
             "S" => {
-                let name = parts.get(1).unwrap_or(&"Y00").trim_matches(';');
+                let name = parts.get(1).unwrap_or(&"%QX0.0").trim_matches(';');
                 Some(LadderElement::new_coil(id, name, name, CoilMode::SetLatch))
             }
             "R" => {
-                let name = parts.get(1).unwrap_or(&"Y00").trim_matches(';');
+                let name = parts.get(1).unwrap_or(&"%QX0.0").trim_matches(';');
                 Some(LadderElement::new_coil(id, name, name, CoilMode::ResetUnlatch))
             }
             "CAL" => {
@@ -697,7 +756,7 @@ impl IlParser {
                     let mut counter_type = fb_presets.get(cal_name).map(|(t, _)| *t).unwrap_or(TypeTag::Ctu);
                     if rest.contains("(CTUD)") || rest.contains(" CTUD") {
                         counter_type = TypeTag::Ctud;
-                    } else if rest.contains("(CTD)") || rest.contains(" CTD") {
+                    } else if rest.contains("(CTD)") || rest.contains(" CTD") || rest.contains("CD :=") {
                         counter_type = TypeTag::Ctd;
                     }
                     if let Some(idx) = rest.find("PV :=") {
@@ -766,7 +825,7 @@ impl IlParser {
                 None
             }
             "MOVE" => {
-                let name = parts.get(1).unwrap_or(&"V00").trim_matches(';');
+                let name = parts.get(1).unwrap_or(&"%MW0").trim_matches(';');
                 let val: i32 = parts.get(2).and_then(|v| v.trim_matches(';').parse().ok()).unwrap_or(0);
                 Some(LadderElement {
                     id,
@@ -779,7 +838,7 @@ impl IlParser {
                 })
             }
             "FCP" => {
-                let name = parts.get(1).unwrap_or(&"V00").trim_matches(';');
+                let name = parts.get(1).unwrap_or(&"%MW0").trim_matches(';');
                 let op = parts.get(2).unwrap_or(&"==");
                 let val: i32 = parts.get(3).and_then(|v| v.trim_matches(';').parse().ok()).unwrap_or(0);
                 Some(LadderElement {
@@ -805,7 +864,7 @@ impl IlParser {
                 let (name, val) = if parts.len() >= 3 {
                     (parts[1].trim_matches(';'), parts[2].trim_matches(';').parse().unwrap_or(0))
                 } else {
-                    ("V00", parts.get(1).and_then(|v| v.trim_matches(';').parse().ok()).unwrap_or(0))
+                    ("%MW0", parts.get(1).and_then(|v| v.trim_matches(';').parse().ok()).unwrap_or(0))
                 };
                 Some(LadderElement {
                     id,
@@ -818,7 +877,7 @@ impl IlParser {
                 })
             }
             "ADD" | "SUB" | "MUL" | "DIV" | "MOD" => {
-                let name = parts.get(1).unwrap_or(&"V00").trim_matches(';');
+                let name = parts.get(1).unwrap_or(&"%MW0").trim_matches(';');
                 let val: i32 = parts.get(2).and_then(|v| v.trim_matches(';').parse().ok()).unwrap_or(1);
                 let math_op = match op {
                     "ADD" => "+",
@@ -910,6 +969,7 @@ impl IlParser {
         line: &str,
         io_mappings: &mut Vec<IOPortMapping>,
         fb_presets: &mut HashMap<String, (TypeTag, i32)>,
+        var_symbols: &mut HashMap<String, (String, String)>,
     ) {
         let clean = line.trim().trim_end_matches(';').trim();
         if clean.is_empty() {
@@ -927,6 +987,7 @@ impl IlParser {
         let mut pin = String::new();
         let mut symbol = String::new();
         let mut desc = String::new();
+        let mut parsed_preset: Option<i32> = None;
 
         if !comment_part.is_empty() {
             let parts: Vec<&str> = comment_part.split('|').collect();
@@ -939,7 +1000,7 @@ impl IlParser {
                 } else if let Some(stripped) = p.strip_prefix("Preset:") {
                     let val_str = stripped.trim().trim_end_matches("ms");
                     if let Ok(v) = val_str.parse::<i32>() {
-                        desc = format!("Preset: {}", v);
+                        parsed_preset = Some(v);
                     }
                 } else if !p.is_empty() {
                     desc = p.to_string();
@@ -952,7 +1013,8 @@ impl IlParser {
                 let name = name_part.trim();
                 let addr_and_type = rest.trim();
                 let addr = addr_and_type.split(':').next().unwrap_or("").trim();
-                let is_input = addr.starts_with("%I") || name.starts_with('X') || name.starts_with('I') || name.starts_with('A');
+                let addr_upper = addr.to_uppercase();
+                let sym = if !symbol.is_empty() { symbol } else { name.to_string() };
                 let hw_pin = if !pin.is_empty() {
                     pin
                 } else if name.starts_with('X') || name.starts_with('Y') {
@@ -960,63 +1022,43 @@ impl IlParser {
                 } else {
                     addr.to_string()
                 };
-                let sym = if !symbol.is_empty() { symbol } else { name.to_string() };
                 let description = if !desc.is_empty() { desc } else { format!("Hardware Pin {}", hw_pin) };
 
-                io_mappings.push(IOPortMapping {
-                    plc_address: name.to_string(),
-                    symbol: sym,
-                    hw_pin,
-                    description,
-                    is_input,
-                });
+                var_symbols.insert(addr_upper.clone(), (sym.clone(), description.clone()));
+                var_symbols.insert(name.to_uppercase(), (sym.clone(), description.clone()));
+
+                // Only add physical Input (%I) / Output (%Q) ports to hardware io_mappings (not %M internal markers/words)
+                if !addr_upper.starts_with("%M") {
+                    let is_input = addr_upper.starts_with("%I") || name.starts_with('X') || name.starts_with('I') || name.starts_with('A');
+                    io_mappings.push(IOPortMapping {
+                        plc_address: name.to_string(),
+                        iec_address: addr.to_string(),
+                        symbol: sym,
+                        hw_pin,
+                        description,
+                        is_input,
+                    });
+                }
             }
         } else if decl_part.contains(':') {
             if let Some((name_part, type_part)) = decl_part.split_once(':') {
                 let name = name_part.trim().to_string();
                 let ty = type_part.trim().to_uppercase();
+                let sym = if !symbol.is_empty() { symbol } else { name.clone() };
+                var_symbols.insert(name.to_uppercase(), (sym, desc.clone()));
+
                 if ty.starts_with("TON") {
-                    let preset = if let Some(stripped) = desc.strip_prefix("Preset: ") {
-                        stripped.parse().unwrap_or(1000)
-                    } else {
-                        1000
-                    };
-                    fb_presets.insert(name, (TypeTag::Ton, preset));
+                    fb_presets.insert(name, (TypeTag::Ton, parsed_preset.unwrap_or(1000)));
                 } else if ty.starts_with("TOF") {
-                    let preset = if let Some(stripped) = desc.strip_prefix("Preset: ") {
-                        stripped.parse().unwrap_or(1000)
-                    } else {
-                        1000
-                    };
-                    fb_presets.insert(name, (TypeTag::Tof, preset));
+                    fb_presets.insert(name, (TypeTag::Tof, parsed_preset.unwrap_or(1000)));
                 } else if ty.starts_with("TP") {
-                    let preset = if let Some(stripped) = desc.strip_prefix("Preset: ") {
-                        stripped.parse().unwrap_or(1000)
-                    } else {
-                        1000
-                    };
-                    fb_presets.insert(name, (TypeTag::Tp, preset));
+                    fb_presets.insert(name, (TypeTag::Tp, parsed_preset.unwrap_or(1000)));
                 } else if ty.starts_with("CTUD") {
-                    let pv = if let Some(stripped) = desc.strip_prefix("Preset: ") {
-                        stripped.parse().unwrap_or(10)
-                    } else {
-                        10
-                    };
-                    fb_presets.insert(name, (TypeTag::Ctud, pv));
+                    fb_presets.insert(name, (TypeTag::Ctud, parsed_preset.unwrap_or(10)));
                 } else if ty.starts_with("CTD") {
-                    let pv = if let Some(stripped) = desc.strip_prefix("Preset: ") {
-                        stripped.parse().unwrap_or(10)
-                    } else {
-                        10
-                    };
-                    fb_presets.insert(name, (TypeTag::Ctd, pv));
+                    fb_presets.insert(name, (TypeTag::Ctd, parsed_preset.unwrap_or(10)));
                 } else if ty.starts_with("CTU") {
-                    let pv = if let Some(stripped) = desc.strip_prefix("Preset: ") {
-                        stripped.parse().unwrap_or(10)
-                    } else {
-                        10
-                    };
-                    fb_presets.insert(name, (TypeTag::Ctu, pv));
+                    fb_presets.insert(name, (TypeTag::Ctu, parsed_preset.unwrap_or(10)));
                 } else if ty.starts_with("SR") {
                     fb_presets.insert(name, (TypeTag::Sr, 0));
                 } else if ty.starts_with("RS") {
@@ -1071,6 +1113,7 @@ impl IlParser {
                             let is_in = sym.starts_with('X') || sym.starts_with('I') || sym.starts_with('A');
                             io_mappings.push(IOPortMapping {
                                 plc_address: sym.to_string(),
+                                iec_address: String::new(),
                                 symbol: sym.to_string(),
                                 hw_pin: pin.to_string(),
                                 description: format!("Hardware Pin {}", pin),

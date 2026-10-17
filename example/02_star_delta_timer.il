@@ -7,35 +7,41 @@
 
 PROGRAM MainProgram
 VAR
-    X00 AT %IX0.0 : BOOL; (* Pin: 2 | Symbol: X00 | Hardware Pin 2 *)
-    X01 AT %IX0.1 : BOOL; (* Pin: 3 | Symbol: X01 | Hardware Pin 3 *)
-    Y00 AT %QX0.0 : BOOL; (* Pin: 8 | Symbol: Y00 | Hardware Pin 8 *)
-    Y01 AT %QX0.1 : BOOL; (* Pin: 9 | Symbol: Y01 | Hardware Pin 9 *)
-    Y02 AT %QX0.2 : BOOL; (* Pin: 10 | Symbol: Y02 | Hardware Pin 10 *)
-    T00 : TON; (* Preset: 3000ms *)
+    (* --- Digital Inputs (%IX) --- *)
+    START_PB AT %IX0.0 : BOOL; (* Pin: D2 | Symbol: START_PB | Start Pushbutton (NO) *)
+    STOP_PB AT %IX0.1 : BOOL; (* Pin: D3 | Symbol: STOP_PB | Stop Pushbutton (NC) *)
+
+    (* --- Digital Outputs (%QX) --- *)
+    KM_MAIN AT %QX0.0 : BOOL; (* Pin: D8 | Symbol: KM_MAIN | Main Contactor (KM1) *)
+    KM_STAR AT %QX0.1 : BOOL; (* Pin: D9 | Symbol: KM_STAR | Star Contactor (KM2) *)
+    KM_DELTA AT %QX0.2 : BOOL; (* Pin: D10 | Symbol: KM_DELTA | Delta Contactor (KM3) *)
+
+    (* --- Function Blocks & Internal Variables --- *)
+    M_STAR_DONE AT %MX0.0 : BOOL; (* Symbol: M_STAR_DONE | Star-to-Delta Changeover Complete Flag *)
+    T0 : TON; (* Preset: 3000ms | Symbol: TON_STAR_DELTA | Star-to-Delta Changeover Timer *)
 END_VAR
 
-(* Network 01: Rung 1: Main Contactor (Y00) Start/Stop Latching *)
-    LD   X00
-    OR   Y00
-    ANDN X01
-    ST   Y00
+(* Network 01: Main Contactor (%QX0.0) Start/Stop Latching *)
+    LD   %IX0.0
+    OR   %QX0.0
+    ANDN %IX0.1
+    ST   %QX0.0
 
-(* Network 02: Rung 2: Star-to-Delta Changeover Timer (T00 = 3000 ms) *)
-    LD   Y00
-    CAL  T00(IN := TRUE, PT := T#3000ms)
-    ST   R00
+(* Network 02: Star-to-Delta Changeover Timer (T0 = 3000 ms) *)
+    LD   %QX0.0
+    CAL  T0(IN := TRUE, PT := T#3000ms)
+    ST   %MX0.0
 
-(* Network 03: Rung 3: Star Contactor (Y01) - Active before T00 finishes, interlocked with Y02 *)
-    LD   Y00
-    ANDN R00
-    ANDN Y02
-    ST   Y01
+(* Network 03: Star Contactor (%QX0.1) - Active before T0 finishes, interlocked with %QX0.2 *)
+    LD   %QX0.0
+    ANDN %MX0.0
+    ANDN %QX0.2
+    ST   %QX0.1
 
-(* Network 04: Rung 4: Delta Contactor (Y02) - Active after T00 finishes, interlocked with Y01 *)
-    LD   Y00
-    AND  R00
-    ANDN Y01
-    ST   Y02
+(* Network 04: Delta Contactor (%QX0.2) - Active after T0 finishes, interlocked with %QX0.1 *)
+    LD   %QX0.0
+    AND  %MX0.0
+    ANDN %QX0.1
+    ST   %QX0.2
 
 END_PROGRAM

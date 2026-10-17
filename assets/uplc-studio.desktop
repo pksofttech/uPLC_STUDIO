@@ -1,11 +1,11 @@
 [Desktop Entry]
 Name=uPLC Studio
 Comment=Micro PLC Ladder Logic IDE & Simulator (IEC 61131-3)
-Exec=uplc-studio
+Exec=/home/pksofttech/MEGAsync/uPLC_STDIO/target/debug/uplc-studio
 Icon=uplc-studio
 Terminal=false
 Type=Application
 Categories=Development;IDE;Engineering;
 Keywords=PLC;Ladder;Automation;IEC61131;Microcontroller;
-MimeType=application/x-uplc;text/x-instruction-list;
 StartupNotify=true
+StartupWMClass=uplc-studio

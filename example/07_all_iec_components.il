@@ -9,122 +9,127 @@
 
 PROGRAM MainProgram
 VAR
-    X00 AT %IX0.0 : BOOL; (* Pin: 2 | Symbol: X00 | Input 0 (PB Start) *)
-    X01 AT %IX0.1 : BOOL; (* Pin: 3 | Symbol: X01 | Input 1 (PB Stop) *)
-    X02 AT %IX0.2 : BOOL; (* Pin: 4 | Symbol: X02 | Input 2 (Pulse Trig) *)
-    X03 AT %IX0.3 : BOOL; (* Pin: 5 | Symbol: X03 | Input 3 (Sensor A) *)
-    X04 AT %IX0.4 : BOOL; (* Pin: 6 | Symbol: X04 | Input 4 (Sensor B) *)
-    X05 AT %IX0.5 : BOOL; (* Pin: 7 | Symbol: X05 | Input 5 (Reset PB) *)
-    Y00 AT %QX0.0 : BOOL; (* Pin: 8 | Symbol: Y00 | Motor Run Output *)
-    Y01 AT %QX0.1 : BOOL; (* Pin: 9 | Symbol: Y01 | Lamp Inverted *)
-    Y02 AT %QX0.2 : BOOL; (* Pin: 10 | Symbol: Y02 | Latch Out *)
-    Y03 AT %QX0.3 : BOOL; (* Pin: 11 | Symbol: Y03 | Pulse Out P *)
-    Y04 AT %QX0.4 : BOOL; (* Pin: 12 | Symbol: Y04 | Pulse Out N *)
-    Y05 AT %QX0.5 : BOOL; (* Pin: 13 | Symbol: Y05 | Timer Alarm *)
-    Y06 AT %QX0.6 : BOOL; (* Pin: A1 | Symbol: Y06 | Counter Done *)
-    Y07 AT %QX0.7 : BOOL; (* Pin: A2 | Symbol: Y07 | Final Status *)
-    M00 : BOOL; (* Internal Marker 0 *)
-    M01 : BOOL; (* Internal Marker 1 *)
-    T01 : TON; (* Preset: 1000ms *)
-    T02 : TOF; (* Preset: 1500ms *)
-    T03 : TP; (* Preset: 500ms *)
-    C01 : CTU; (* Preset: 10 *)
-    C02 : CTD; (* Preset: 5 *)
-    C03 : CTUD; (* Preset: 20 *)
+    (* --- Digital Inputs (%IX) --- *)
+    START_PB AT %IX0.0 : BOOL; (* Pin: D2 | Symbol: START_PB | Input 0 (PB Start) *)
+    STOP_PB AT %IX0.1 : BOOL; (* Pin: D3 | Symbol: STOP_PB | Input 1 (PB Stop) *)
+    PULSE_TRIG AT %IX0.2 : BOOL; (* Pin: D4 | Symbol: PULSE_TRIG | Input 2 (Pulse Trig) *)
+    SENSOR_A AT %IX0.3 : BOOL; (* Pin: D5 | Symbol: SENSOR_A | Input 3 (Sensor A) *)
+    SENSOR_B AT %IX0.4 : BOOL; (* Pin: D6 | Symbol: SENSOR_B | Input 4 (Sensor B) *)
+    RESET_PB AT %IX0.5 : BOOL; (* Pin: D7 | Symbol: RESET_PB | Input 5 (Reset PB) *)
+
+    (* --- Digital Outputs (%QX) --- *)
+    MOTOR_RUN AT %QX0.0 : BOOL; (* Pin: D8 | Symbol: MOTOR_RUN | Motor Run Output *)
+    LAMP_INV AT %QX0.1 : BOOL; (* Pin: D9 | Symbol: LAMP_INV | Lamp Inverted *)
+    LATCH_OUT AT %QX0.2 : BOOL; (* Pin: D10 | Symbol: LATCH_OUT | Latch Out *)
+    PULSE_OUT_P AT %QX0.3 : BOOL; (* Pin: D11 | Symbol: PULSE_OUT_P | Pulse Out P *)
+    PULSE_OUT_N AT %QX0.4 : BOOL; (* Pin: D12 | Symbol: PULSE_OUT_N | Pulse Out N *)
+    TIMER_ALARM AT %QX0.5 : BOOL; (* Pin: D13 | Symbol: TIMER_ALARM | Timer Alarm *)
+    COUNTER_DONE AT %QX0.6 : BOOL; (* Pin: A1 | Symbol: COUNTER_DONE | Counter Done *)
+    FINAL_STATUS AT %QX0.7 : BOOL; (* Pin: A2 | Symbol: FINAL_STATUS | Final Status *)
+
+    (* --- Function Blocks & Internal Variables --- *)
+    M_AUX_0 AT %MX0.0 : BOOL; (* Symbol: M_AUX_0 | Internal Auxiliary Marker 0 *)
+    M_AUX_1 AT %MX0.1 : BOOL; (* Symbol: M_AUX_1 | Internal Auxiliary Marker 1 *)
+    T0 : TON; (* Preset: 1000ms | Symbol: TON_DELAY | On-Delay Timer *)
+    T1 : TOF; (* Preset: 1500ms | Symbol: TOF_DELAY | Off-Delay Timer *)
+    T2 : TP; (* Preset: 500ms | Symbol: TP_PULSE | Pulse Timer *)
+    C0 : CTU; (* Preset: 10 | Symbol: CTU_ITEMS | Up Counter *)
+    C1 : CTD; (* Preset: 5 | Symbol: CTD_ITEMS | Down Counter *)
+    C2 : CTUD; (* Preset: 20 | Symbol: CTUD_ITEMS | Up/Down Counter *)
     R_TRIG_1 : R_TRIG;
     F_TRIG_1 : F_TRIG;
     SR_FB : SR;
     RS_FB : RS;
-    V00 : INT := 0; (* Internal Register V00 *)
-    V01 : INT := 0; (* Internal Register V01 *)
+    CALC_REG_0 AT %MW0 : INT := 0; (* Symbol: CALC_REG_0 | Internal Calculation Register 0 *)
+    CALC_REG_1 AT %MW1 : INT := 0; (* Symbol: CALC_REG_1 | Internal Calculation Register 1 *)
 END_VAR
 
 (* Network 01: Standard Contacts (NO, NC) and Normal Coil *)
-    LD   X00
-    ANDN X01
-    ST   Y00
+    LD   %IX0.0
+    ANDN %IX0.1
+    ST   %QX0.0
 
 (* Network 02: Edge Transition Contacts (P Contact, N Contact) and Negated Coil *)
-    LDP  X02
-    ANDF X03
-    STN  Y01
+    LDP  %IX0.2
+    ANDF %IX0.3
+    STN  %QX0.1
 
 (* Network 03: Parallel Branch Logic with Self-Holding Latch *)
-    LD   X00
-    OR   Y00
-    ANDN X01
-    ST   M00
+    LD   %IX0.0
+    OR   %QX0.0
+    ANDN %IX0.1
+    ST   %MX0.0
 
 (* Network 04: Set (Latch) and Reset (Unlatch) Coils *)
-    LD   X00
-    S    Y02
-    LD   X01
-    R    Y02
+    LD   %IX0.0
+    S    %QX0.2
+    LD   %IX0.1
+    R    %QX0.2
 
 (* Network 05: Transition Pulse Coils (P Coil and N Coil) *)
-    LD   X02
-    STP  Y03
-    LD   X03
-    STF  Y04
+    LD   %IX0.2
+    STP  %QX0.3
+    LD   %IX0.3
+    STF  %QX0.4
 
 (* Network 06: Master Control Relay (MCR Zone) *)
-    LD   X00
+    LD   %IX0.0
     MC
 
 (* Network 07: Bistable Function Block SR (Set-Dominant Flip-Flop) *)
-    LD   X00
-    CAL  SR_FB(S1 := TRUE, R := X01)
-    ST   M01
+    LD   %IX0.0
+    CAL  SR_FB(S1 := TRUE, R := %IX0.1)
+    ST   %MX0.1
 
 (* Network 08: Bistable Function Block RS (Reset-Dominant Flip-Flop) *)
-    LD   X00
-    CAL  RS_FB(S := TRUE, R1 := X01)
-    ST   Y05
+    LD   %IX0.0
+    CAL  RS_FB(S := TRUE, R1 := %IX0.1)
+    ST   %QX0.5
 
 (* Network 09: IEC Standard Timers (TON Delay-On, TOF Delay-Off, TP Pulse) *)
-    LD   X00
-    CAL  T01(IN := TRUE, PT := T#1000ms)
-    CAL  T02(IN := TRUE, PT := T#1500ms)
-    CAL  T03(IN := TRUE, PT := T#500ms)
+    LD   %IX0.0
+    CAL  T0(IN := TRUE, PT := T#1000ms)
+    CAL  T1(IN := TRUE, PT := T#1500ms)
+    CAL  T2(IN := TRUE, PT := T#500ms)
 
 (* Network 10: IEC Standard Counters (CTU Up, CTD Down, CTUD Up/Down) *)
-    LD   X02
-    CAL  C01(CU := TRUE, PV := 10)
-    CAL  C02(CD := TRUE, PV := 5)
-    CAL  C03(CU := TRUE, PV := 20)
+    LD   %IX0.2
+    CAL  C0(CU := TRUE, PV := 10)
+    CAL  C1(CD := TRUE, PV := 5)
+    CAL  C2(CU := TRUE, PV := 20)
 
 (* Network 11: Dedicated Edge Detection Function Blocks (R_TRIG, F_TRIG) *)
-    LD   X02
-    CAL  R_TRIG(CLK := X02)
-    LD   X03
-    CAL  F_TRIG(CLK := X03)
+    LD   %IX0.2
+    CAL  R_TRIG(CLK := %IX0.2)
+    LD   %IX0.3
+    CAL  F_TRIG(CLK := %IX0.3)
 
 (* Network 12: Data Transfer and Math Operations (MOVE, ADD, SUB, MUL, DIV, MOD) *)
-    LD   X00
-    MOVE V00 100
-    ADD  V00 5
-    SUB  V00 2
-    MUL  V00 3
-    DIV  V00 2
-    MOD  V00 10
+    LD   %IX0.0
+    MOVE %MW0 100
+    ADD  %MW0 5
+    SUB  %MW0 2
+    MUL  %MW0 3
+    DIV  %MW0 2
+    MOD  %MW0 10
 
 (* Network 13: Comparison Instructions (EQ, NE, GT, LT, GE, LE) *)
-    LD   X00
-    EQ   V00 100
-    GE   V00 50
-    ST   Y06
+    LD   %IX0.0
+    EQ   %MW0 100
+    GE   %MW0 50
+    ST   %QX0.6
 
-(* Network 14: Conditional Jump (JMP to LBL_END when X04 is ON) *)
-    LD   X04
+(* Network 14: Conditional Jump (JMP to LBL_END when %IX0.4 is ON) *)
+    LD   %IX0.4
     JMPC LBL_END
 
 (* Network 15: Skipped Network (Bypassed if Jump was taken) *)
-    LD   X05
-    ST   M00
+    LD   %IX0.5
+    ST   %MX0.0
 
 (* Network 16: Target Landing Label (LBL_END) *)
 LBL_END:
-    LD   X00
-    ST   Y07
+    LD   %IX0.0
+    ST   %QX0.7
 
 END_PROGRAM

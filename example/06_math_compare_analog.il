@@ -7,25 +7,31 @@
 
 PROGRAM MainProgram
 VAR
-    X00 AT %IX0.0 : BOOL; (* Pin: 2 | Symbol: X00 | Hardware Pin 2 *)
-    X01 AT %IX0.1 : BOOL; (* Pin: 3 | Symbol: X01 | Hardware Pin 3 *)
-    A0 AT %IX0.2 : BOOL; (* Pin: 14 | Symbol: A0 | Hardware Pin 14 *)
-    Y00 AT %QX0.0 : BOOL; (* Pin: 8 | Symbol: Y00 | Hardware Pin 8 *)
-    Y01 AT %QX0.1 : BOOL; (* Pin: 9 | Symbol: Y01 | Hardware Pin 9 *)
-    V00 : INT := 0; (* Internal Register *)
+    (* --- Digital Inputs (%IX) --- *)
+    BTN_INIT AT %IX0.0 : BOOL; (* Pin: D2 | Symbol: BTN_INIT | Initialize Threshold Pushbutton *)
+    BTN_STEP_ADD AT %IX0.1 : BOOL; (* Pin: D3 | Symbol: BTN_STEP_ADD | Increment Level Pushbutton *)
+    SENS_ANALOG_EN AT %IX0.2 : BOOL; (* Pin: A0 | Symbol: SENS_ANALOG_EN | Analog Compare Enable *)
+
+    (* --- Digital Outputs (%QX) --- *)
+    LAMP_INIT_OK AT %QX0.0 : BOOL; (* Pin: D8 | Symbol: LAMP_INIT_OK | Threshold Initialized Lamp *)
+    ALARM_HIGH_LVL AT %QX0.1 : BOOL; (* Pin: D9 | Symbol: ALARM_HIGH_LVL | High-Level Threshold Alarm *)
+
+    (* --- Function Blocks & Internal Registers --- *)
+    LVL_ACCUM AT %MW0 : INT := 0; (* Symbol: LVL_ACCUM | Process Level Accumulator Register *)
 END_VAR
 
-(* Network 01: Rung 1: Initialize Threshold Register V00 := 10 when X00 is pressed *)
-    LD   X00
-    MOVE V00 10
-    ST   Y00
+(* Network 01: Initialize Threshold Register %MW0 := 10 when %IX0.0 is pressed *)
+    LD   %IX0.0
+    MOVE %MW0 10
+    ST   %QX0.0
 
-(* Network 02: Rung 2: Increment Counter Register V00 += 5 when X01 is pressed *)
-    LD   X01
-    ADD  V00 5
+(* Network 02: Increment Counter Register %MW0 += 5 when %IX0.1 is pressed *)
+    LD   %IX0.1
+    ADD  %MW0 5
 
-(* Network 03: Rung 3: Compare V00 >= 20 to energize High-Level Output Y01 *)
-    FCP  V00 >= 20
-    ST   Y01
+(* Network 03: Compare %MW0 >= 20 to energize High-Level Output %QX0.1 *)
+    LD   %IX0.2
+    GE   %MW0 20
+    ST   %QX0.1
 
 END_PROGRAM

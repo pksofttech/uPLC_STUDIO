@@ -138,9 +138,17 @@ impl Document {
     }
 
     pub fn clear(&mut self) {
-        self.push_undo_snapshot();
+        let prev_hw = self.program.hardware.clone();
         self.program = LadderProgram::new_empty();
+        if !prev_hw.is_empty() {
+            self.program.hardware = prev_hw;
+        }
         self.simulator.reset(&mut self.program);
+        for val in self.simulator.inputs.values_mut() {
+            *val = false;
+        }
+        self.undo_stack.clear();
+        self.redo_stack.clear();
         self.selected_rung_idx = Some(0);
         self.selected_element_id = None;
         self.selected_element_ids.clear();
@@ -585,6 +593,9 @@ impl Document {
         if Some(dragged_id) == target_elem_id {
             return false;
         }
+        if target_rung_idx >= self.program.rungs.len() {
+            return self.move_element_to_new_rung(dragged_id, None);
+        }
         self.push_undo_snapshot();
         let elem = match self.take_element_by_id(dragged_id) {
             Some(el) => el,
@@ -601,6 +612,54 @@ impl Document {
         self.selected_element_ids = vec![dragged_id];
         self.is_dirty = true;
         true
+    }
+
+    /// Move an existing element to a newly created rung (either at `insert_at_rung_idx` or appended).
+    pub fn move_element_to_new_rung(&mut self, dragged_id: u64, insert_at_rung_idx: Option<usize>) -> bool {
+        self.push_undo_snapshot();
+        let elem = match self.take_element_by_id(dragged_id) {
+            Some(el) => el,
+            None => {
+                self.undo_stack.pop();
+                return false;
+            }
+        };
+        let new_idx = match insert_at_rung_idx {
+            Some(idx) => self.program.insert_rung(idx),
+            None => self.program.add_rung(),
+        };
+        self.selected_rung_idx = Some(new_idx);
+        self.selected_element_id = None;
+        self.selected_element_ids.clear();
+        self.insert_existing_element(elem, InsertPosition::AppendRung);
+        self.selected_element_id = Some(dragged_id);
+        self.selected_element_ids = vec![dragged_id];
+        self.is_dirty = true;
+        true
+    }
+
+    /// Insert a new element into a newly created rung (either at `insert_at_rung_idx` or appended).
+    pub fn insert_element_to_new_rung(&mut self, mut elem: LadderElement, insert_at_rung_idx: Option<usize>) -> usize {
+        self.push_undo_snapshot();
+        if elem.id == 0 {
+            elem.id = self.program.alloc_id();
+        }
+        for path in &mut elem.branch_paths {
+            for sub in path {
+                if sub.id == 0 {
+                    sub.id = self.program.alloc_id();
+                }
+            }
+        }
+        let new_idx = match insert_at_rung_idx {
+            Some(idx) => self.program.insert_rung(idx),
+            None => self.program.add_rung(),
+        };
+        self.selected_rung_idx = Some(new_idx);
+        self.selected_element_id = None;
+        self.selected_element_ids.clear();
+        self.insert_existing_element(elem, InsertPosition::AppendRung);
+        new_idx
     }
 
     pub fn insert_element(&mut self, mut elem: LadderElement, pos: InsertPosition) {
@@ -872,5 +931,13 @@ impl Document {
 
     pub fn generate_plclib_code(&self) -> String {
         self.generate_il_code()
+    }
+
+    pub fn map_io_to_iec_var_table(&self) -> String {
+        self.program.map_io_to_iec_var_table()
+    }
+
+    pub fn map_io_to_iec_var_table_with_options(&self, use_symbol_name: bool) -> String {
+        self.program.map_io_to_iec_var_table_with_options(use_symbol_name)
     }
 }

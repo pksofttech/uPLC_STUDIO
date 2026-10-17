@@ -7,31 +7,36 @@
 
 PROGRAM MainProgram
 VAR
-    X00 AT %IX0.0 : BOOL; (* Pin: 2 | Symbol: X00 | Hardware Pin 2 *)
-    X01 AT %IX0.1 : BOOL; (* Pin: 3 | Symbol: X01 | Hardware Pin 3 *)
-    X02 AT %IX0.2 : BOOL; (* Pin: 4 | Symbol: X02 | Hardware Pin 4 *)
-    Y00 AT %QX0.0 : BOOL; (* Pin: 8 | Symbol: Y00 | Hardware Pin 8 *)
-    Y01 AT %QX0.1 : BOOL; (* Pin: 9 | Symbol: Y01 | Hardware Pin 9 *)
-    Y02 AT %QX0.2 : BOOL; (* Pin: 10 | Symbol: Y02 | Hardware Pin 10 *)
-    C00 : CTU; (* Preset: 5 *)
-    T00 : TON; (* Preset: 1500ms *)
+    (* --- Digital Inputs (%IX) --- *)
+    START_PB AT %IX0.0 : BOOL; (* Pin: D2 | Symbol: START_PB | Conveyor Start Pushbutton *)
+    STOP_PB AT %IX0.1 : BOOL; (* Pin: D3 | Symbol: STOP_PB | Conveyor Stop Pushbutton *)
+    PHOTO_SENS AT %IX0.2 : BOOL; (* Pin: D4 | Symbol: PHOTO_SENS | Item Detection Photo Sensor *)
+
+    (* --- Digital Outputs (%QX) --- *)
+    CONV_MOTOR AT %QX0.0 : BOOL; (* Pin: D8 | Symbol: CONV_MOTOR | Conveyor Belt Motor *)
+    BATCH_FULL AT %QX0.1 : BOOL; (* Pin: D9 | Symbol: BATCH_FULL | Batch Full Indicator Lamp *)
+    BOX_SEALER AT %QX0.2 : BOOL; (* Pin: D10 | Symbol: BOX_SEALER | Box Sealer Actuator *)
+
+    (* --- Function Blocks & Internal Variables --- *)
+    C0 : CTU; (* Preset: 5 | Symbol: CTU_BATCH | Batch Item Counter (PV=5) *)
+    T0 : TON; (* Preset: 1500ms | Symbol: TON_SEALER | Box Sealer Hold Timer *)
 END_VAR
 
-(* Network 01: Rung 1: Conveyor Belt Motor (Y00) - Stops automatically when Batch Counter C00 reaches 5 *)
-    LD   X00
-    OR   Y00
-    ANDN X01
-    ANDN Y01
-    ST   Y00
+(* Network 01: Conveyor Belt Motor (%QX0.0) - Stops automatically when Batch Counter C0 reaches 5 *)
+    LD   %IX0.0
+    OR   %QX0.0
+    ANDN %IX0.1
+    ANDN %QX0.1
+    ST   %QX0.0
 
-(* Network 02: Rung 2: Photo Sensor (X02) counts items up to 5 (CTU C00) *)
-    LD   X02
-    CAL  C00(CU := TRUE, PV := 5)
-    ST   Y01
+(* Network 02: Photo Sensor (%IX0.2) counts items up to 5 (CTU C0) *)
+    LD   %IX0.2
+    CAL  C0(CU := TRUE, PV := 5)
+    ST   %QX0.1
 
-(* Network 03: Rung 3: Box Sealer Actuator (Y02) runs for 1500ms when Batch is Full (Y01) *)
-    LD   Y01
-    CAL  T00(IN := TRUE, PT := T#1500ms)
-    ST   Y02
+(* Network 03: Box Sealer Actuator (%QX0.2) runs for 1500ms when Batch is Full (%QX0.1) *)
+    LD   %QX0.1
+    CAL  T0(IN := TRUE, PT := T#1500ms)
+    ST   %QX0.2
 
 END_PROGRAM

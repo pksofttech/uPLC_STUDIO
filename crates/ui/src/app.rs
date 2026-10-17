@@ -95,6 +95,7 @@ pub struct CanvasApp {
     pub elem_modal: ElementConfigModal,
     pub elem_filter_text: String,
     pub elem_filter_cat: u8,
+    pub component_filter: String,
     pub right_panel_tab: u8,
     pub show_il_code: bool,
     pub show_about: bool,
@@ -136,6 +137,7 @@ impl Default for CanvasApp {
             elem_modal: ElementConfigModal::default(),
             elem_filter_text: String::new(),
             elem_filter_cat: 0,
+            component_filter: String::new(),
             right_panel_tab: 0,
             show_il_code: settings.show_il_code,
             show_about: false,
@@ -201,6 +203,18 @@ impl CanvasApp {
                 self.save_settings();
             }
         }
+    }
+
+    pub fn new_program(&mut self) {
+        self.doc.clear();
+        self.elem_modal.close();
+        self.canvas.context_menu_elem = None;
+        self.canvas.reset_view();
+        self.active_tool = ActiveTool::Select;
+        self.copied_rung_idx = None;
+        self.elem_filter_text.clear();
+        self.elem_filter_cat = 0;
+        self.component_filter.clear();
     }
 
     pub fn open_config_for_selected(&mut self) {
@@ -313,8 +327,16 @@ impl eframe::App for CanvasApp {
             ui.ctx().request_repaint();
         }
 
-        // Global Keyboard Shortcuts (Ctrl+Z / Ctrl+Y work anytime; Arrow/Enter/Del/F5 when not typing & modal closed)
-        if !self.elem_modal.is_open {
+        let any_modal_open = self.elem_modal.is_open
+            || self.show_about
+            || self.show_io_config
+            || self.show_code_export;
+
+        // Global Keyboard Shortcuts (Ctrl+N / Ctrl+Z / Ctrl+Y work anytime; Arrow/Enter/Del/F5 when not typing & modal closed)
+        if !any_modal_open {
+            let new_shortcut = ui.input(|i| {
+                i.modifiers.command && !i.modifiers.shift && i.key_pressed(egui::Key::N)
+            });
             let undo_shortcut = ui.input(|i| {
                 i.modifiers.command && !i.modifiers.shift && i.key_pressed(egui::Key::Z)
             });
@@ -322,7 +344,9 @@ impl eframe::App for CanvasApp {
                 (i.modifiers.command && i.key_pressed(egui::Key::Y))
                     || (i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::Z))
             });
-            if undo_shortcut {
+            if new_shortcut {
+                self.new_program();
+            } else if undo_shortcut {
                 self.doc.undo();
             } else if redo_shortcut {
                 self.doc.redo();
@@ -361,13 +385,13 @@ impl eframe::App for CanvasApp {
                     if ui.input(|i| !i.modifiers.command && !i.modifiers.ctrl && i.key_pressed(egui::Key::P)) {
                         let next_id = self.doc.program.alloc_id();
                         let new_elem = self.active_tool.create_default_element(next_id)
-                            .unwrap_or_else(|| my_canvas_core::LadderElement::new_contact(next_id, "X0", "PAR", my_canvas_core::ContactMode::NormallyOpen));
+                            .unwrap_or_else(|| my_canvas_core::LadderElement::new_contact(next_id, "%IX0.0", "PAR", my_canvas_core::ContactMode::NormallyOpen));
                         self.doc.insert_parallel_to_selection(new_elem, false);
                     }
                     if ui.input(|i| !i.modifiers.command && !i.modifiers.ctrl && i.key_pressed(egui::Key::S)) {
                         let next_id = self.doc.program.alloc_id();
                         let new_elem = self.active_tool.create_default_element(next_id)
-                            .unwrap_or_else(|| my_canvas_core::LadderElement::new_contact(next_id, "X0", "SER", my_canvas_core::ContactMode::NormallyOpen));
+                            .unwrap_or_else(|| my_canvas_core::LadderElement::new_contact(next_id, "%IX0.0", "SER", my_canvas_core::ContactMode::NormallyOpen));
                         self.doc.insert_series_to_selection(new_elem, true);
                     }
                 }
@@ -384,7 +408,7 @@ impl eframe::App for CanvasApp {
             }
         }
 
-        let modal_open = self.elem_modal.is_open;
+        let modal_open = any_modal_open;
 
         // 1. Top Menu Bar
         Panel::top("top_menu_bar").show(ui, |ui| {
@@ -413,9 +437,9 @@ impl eframe::App for CanvasApp {
         // 4. Left Panel: Ladder Tools & Components
         Panel::left("left_tools_panel")
             .resizable(!modal_open)
-            .default_size(225.0)
-            .min_size(195.0)
-            .max_size(290.0)
+            .default_size(200.0)
+            .min_size(175.0)
+            .max_size(270.0)
             .show(ui, |ui| {
                 if modal_open {
                     ui.disable();
@@ -426,9 +450,9 @@ impl eframe::App for CanvasApp {
         // 5. Right Panel: Elements List, Inspector, and Input/Output Ports
         Panel::right("right_properties_panel")
             .resizable(!modal_open)
-            .default_size(305.0)
-            .min_size(270.0)
-            .max_size(380.0)
+            .default_size(285.0)
+            .min_size(245.0)
+            .max_size(450.0)
             .show(ui, |ui| {
                 if modal_open {
                     ui.disable();
@@ -442,7 +466,7 @@ impl eframe::App for CanvasApp {
                 .resizable(!modal_open)
                 .default_size(110.0)
                 .min_size(68.0)
-                .max_size(230.0)
+                .max_size(250.0)
                 .show(ui, |ui| {
                     if modal_open {
                         ui.disable();
@@ -462,15 +486,17 @@ impl eframe::App for CanvasApp {
                         });
                     });
                     let il_code = self.doc.generate_il_code();
+                    let dynamic_rows = ((ui.available_height() / 16.5).floor() as usize).max(3);
                     egui::ScrollArea::vertical()
                         .id_salt("il_code_scroll")
+                        .auto_shrink([false, false])
                         .show(ui, |ui| {
                             let mut code_view = il_code;
                             ui.add(
                                 egui::TextEdit::multiline(&mut code_view)
                                     .font(egui::TextStyle::Monospace)
                                     .desired_width(f32::INFINITY)
-                                    .desired_rows(4),
+                                    .desired_rows(dynamic_rows),
                             );
                         });
                 });
@@ -505,14 +531,27 @@ impl eframe::App for CanvasApp {
                 }
             });
 
+        // --- Full-Screen Frosted / Dimmed Modal Backdrop Shield for all In-App Dialogs ---
+        if modal_open {
+            crate::panels::element_dialog::draw_modal_backdrop(ui.ctx(), palette);
+        }
+
         // --- Professional Element Configuration Modal Dialog ---
         self.elem_modal.show(ui.ctx(), &mut self.doc, palette);
 
         // --- About Dialog ---
         if self.show_about {
+            if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.show_about = false;
+            }
+            let mut open_about = self.show_about;
+            let mut close_about = false;
             Window::new("About uPLC Studio")
+                .order(egui::Order::Foreground)
+                .open(&mut open_about)
                 .collapsible(false)
                 .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .show(ui.ctx(), |ui| {
                     ui.horizontal(|ui| {
                         // Microchip Ladder Logic badge (Concept 1)
@@ -560,17 +599,28 @@ impl eframe::App for CanvasApp {
                     ui.label("- Modern / Dark / Light Theme Support with Thai & Symbol Fonts");
                     ui.add_space(8.0);
                     if ui.button("Close").clicked() {
-                        self.show_about = false;
+                        close_about = true;
                     }
                 });
+            if !open_about || close_about {
+                self.show_about = false;
+            }
         }
 
         // --- Settings, Theme & Hardware Configuration Dialog ---
         if self.show_io_config {
+            if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.show_io_config = false;
+            }
+            let mut open_io_config = self.show_io_config;
+            let mut close_io_config = false;
             let mut settings_changed = false;
             Window::new("Settings & Hardware Configuration")
+                .order(egui::Order::Foreground)
+                .open(&mut open_io_config)
                 .min_size([460.0, 360.0])
                 .collapsible(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .show(ui.ctx(), |ui| {
                     ui.label(
                         RichText::new("Appearance & Environment Settings")
@@ -583,7 +633,7 @@ impl eframe::App for CanvasApp {
                         .num_columns(2)
                         .spacing([12.0, 8.0])
                         .show(ui, |ui| {
-                            ui.label("UI Theme (ธีมสีโปรแกรม):");
+                            ui.label("UI Theme:");
                             ui.horizontal(|ui| {
                                 for t in AppTheme::ALL {
                                     if ui.selectable_label(self.theme == t, t.label()).clicked() {
@@ -594,7 +644,7 @@ impl eframe::App for CanvasApp {
                             });
                             ui.end_row();
 
-                            ui.label("Schematic Style (รูปแบบวงจร):");
+                            ui.label("Schematic Style:");
                             egui::ComboBox::from_id_salt("settings_schematic_style_combo")
                                 .selected_text(self.doc.schematic_style.label())
                                 .show_ui(ui, |ui| {
@@ -695,6 +745,7 @@ impl eframe::App for CanvasApp {
                                 .count();
                             self.doc.program.io_mappings.push(IOPortMapping {
                                 plc_address: format!("X{}", n),
+                                iec_address: format!("%IX{}.{}", n / 8, n % 8),
                                 symbol: format!("IN_{}", n),
                                 hw_pin: format!("D{}", n + 2),
                                 description: "Digital Input".to_string(),
@@ -711,6 +762,7 @@ impl eframe::App for CanvasApp {
                                 .count();
                             self.doc.program.io_mappings.push(IOPortMapping {
                                 plc_address: format!("Y{}", n),
+                                iec_address: format!("%QX{}.{}", n / 8, n % 8),
                                 symbol: format!("OUT_{}", n),
                                 hw_pin: format!("D{}", n + 8),
                                 description: "Digital Output".to_string(),
@@ -720,7 +772,7 @@ impl eframe::App for CanvasApp {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.button("Save & Close").clicked() {
                                 self.save_settings();
-                                self.show_io_config = false;
+                                close_io_config = true;
                             }
                             if ui.button("Save Settings").clicked() {
                                 self.save_settings();
@@ -732,14 +784,25 @@ impl eframe::App for CanvasApp {
             if settings_changed {
                 self.save_settings();
             }
+            if !open_io_config || close_io_config {
+                self.show_io_config = false;
+            }
         }
 
         // --- IEC 61131-3 IL Code Preview & Export Dialog ---
         if self.show_code_export {
+            if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.show_code_export = false;
+            }
+            let mut open_code_export = self.show_code_export;
+            let mut close_code_export = false;
             let code = self.doc.export_to_il_str();
             Window::new("IEC 61131-3 IL Code Preview / Export")
+                .order(egui::Order::Foreground)
+                .open(&mut open_code_export)
                 .min_size([580.0, 420.0])
                 .collapsible(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .show(ui.ctx(), |ui| {
                     ui.label("Generated IEC 61131-3 Instruction List (IL) Code (OpenPLC / CODESYS compatible):");
                     ui.separator();
@@ -765,10 +828,13 @@ impl eframe::App for CanvasApp {
                             }
                         }
                         if ui.button("Close").clicked() {
-                            self.show_code_export = false;
+                            close_code_export = true;
                         }
                     });
                 });
+            if !open_code_export || close_code_export {
+                self.show_code_export = false;
+            }
         }
     }
 

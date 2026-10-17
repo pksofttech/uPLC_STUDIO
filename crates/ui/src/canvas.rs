@@ -50,6 +50,78 @@ struct DropTarget {
     target_elem_id: Option<u64>,
     insert_pos: InsertPosition,
     target_label: String,
+    validation_error: Option<String>,
+    create_new_rung: bool,
+}
+
+fn validate_placement(
+    source_tag: TypeTag,
+    target_elem: &LadderElement,
+    insert_pos: InsertPosition,
+    target_is_first: bool,
+    _target_is_last: bool,
+) -> Result<InsertPosition, &'static str> {
+    // Rule 1: Label [LBL] must only be placed at the beginning of the network
+    if source_tag == TypeTag::Label {
+        if insert_pos == InsertPosition::TopParallel || insert_pos == InsertPosition::BottomParallel {
+            return Err("LBL cannot be placed in a parallel branch");
+        }
+        if !target_is_first || insert_pos != InsertPosition::Left {
+            return Err("LBL must be placed at the left rail (beginning of network)");
+        }
+    }
+
+    // Rule 2: Cannot place any components after Jump [JMP] (Dead code)
+    if target_elem.element_type == TypeTag::Jump && insert_pos == InsertPosition::Right {
+        return Err("Cannot place elements after JMP instruction");
+    }
+
+    // Rule 3: Output Coils terminate the rung
+    if target_elem.element_type == TypeTag::Coil {
+        if insert_pos == InsertPosition::Right {
+            if source_tag == TypeTag::Coil {
+                // Auto-correct: user dropped coil to the right of coil -> connect parallel coil!
+                return Ok(InsertPosition::BottomParallel);
+            } else {
+                return Err("Coil terminates the network. Cannot place inputs to the right");
+            }
+        }
+        if insert_pos == InsertPosition::Left && source_tag == TypeTag::Coil {
+            // Auto-correct: user dropped coil to the left of coil -> connect parallel coil!
+            return Ok(InsertPosition::TopParallel);
+        }
+        // Cannot parallel a contact across an output coil
+        if (insert_pos == InsertPosition::TopParallel || insert_pos == InsertPosition::BottomParallel)
+            && source_tag == TypeTag::Contact
+        {
+            return Err("Cannot parallel an input contact across an output coil");
+        }
+    }
+
+    // Rule 4: Cannot parallel an output coil across an input contact
+    if target_elem.element_type == TypeTag::Contact && source_tag == TypeTag::Coil {
+        if insert_pos == InsertPosition::TopParallel || insert_pos == InsertPosition::BottomParallel {
+            return Err("Cannot parallel an output coil across an input contact");
+        }
+        if insert_pos == InsertPosition::Left {
+            return Err("Cannot place an output coil before an input contact");
+        }
+    }
+
+    // Rule 5: Cannot place a coil before a Function Block (TON/TOF/CTU)
+    if (target_elem.element_type == TypeTag::Ton
+        || target_elem.element_type == TypeTag::Tof
+        || target_elem.element_type == TypeTag::Tp
+        || target_elem.element_type == TypeTag::Ctu
+        || target_elem.element_type == TypeTag::Ctd
+        || target_elem.element_type == TypeTag::Ctud)
+        && source_tag == TypeTag::Coil
+        && insert_pos == InsertPosition::Left
+    {
+        return Err("Cannot place an output coil before a function block");
+    }
+
+    Ok(insert_pos)
 }
 
 enum CanvasAction {
@@ -527,6 +599,13 @@ impl CanvasViewport {
         }
 
         let is_dragging = self.dragging_elem.is_some() || self.dragging_tool.is_some();
+        let dragging_source_type: Option<TypeTag> = if let Some((tool, _)) = self.dragging_tool {
+            tool.element_type()
+        } else if let Some((drag_id, _)) = self.dragging_elem {
+            doc.element_by_id(drag_id).map(|e| e.element_type)
+        } else {
+            None
+        };
 
         // Compute active marquee selection rectangle if dragging from empty space
         let active_marquee_rect: Option<Rect> =
@@ -549,6 +628,7 @@ impl CanvasViewport {
         let mut drop_target: Option<DropTarget> = None;
         let mut any_interactive_hovered = is_interacting_with_scrollbar;
         let mut element_screen_bounds: Vec<(usize, u64, Rect)> = Vec::new();
+        let mut rung_y_spans: Vec<(usize, f32, f32)> = Vec::new();
         let mut cur_y = margin_top;
 
         // --- Render Rungs ---
@@ -778,6 +858,9 @@ impl CanvasViewport {
                         doc.contact_style,
                         doc.coil_style,
                         palette,
+                        dragging_source_type,
+                        elem_idx == 0,
+                        is_last,
                     );
 
                     cur_x = next_x;
@@ -861,20 +944,146 @@ impl CanvasViewport {
                         self.font_prop(11.5),
                         palette.accent_heading,
                     );
+                    let mut append_err = None;
+                    if let Some(src_type) = dragging_source_type {
+                        if src_type == TypeTag::Label && !doc.program.rungs[r_idx].elements.is_empty() {
+                            append_err = Some("LBL must be placed at the start of an empty network".to_string());
+                        }
+                    }
                     drop_target = Some(DropTarget {
                         rung_idx: r_idx,
                         target_elem_id: None,
                         insert_pos: InsertPosition::AppendRung,
                         target_label: format!("Network #{:02} (Append)", r_idx + 1),
+                        validation_error: append_err,
+                        create_new_rung: false,
                     });
                 }
             }
 
+            rung_y_spans.push((r_idx, rung_start_y, max_y));
             cur_y = max_y + 18.0;
         }
 
+        // --- Detect Drop onto Empty Space Below All Networks or on Empty Document ---
+        let empty_space_hovered = is_dragging && drop_target.is_none() && hover_pos.map_or(false, |hp| {
+            if !viewport_rect.contains(hp) {
+                return false;
+            }
+            let world_p = self.to_world(hp, origin);
+            doc.program.rungs.is_empty() || world_p.y >= cur_y - 8.0
+        });
+
+        let new_rung_idx = doc.program.rungs.len();
+        let new_rung_start_y = cur_y + 6.0;
+        let new_rung_band_world = Rect::from_min_max(
+            pos2(18.0, new_rung_start_y),
+            pos2(margin_right, new_rung_start_y + cell_h),
+        );
+        let new_rung_band_screen = Rect::from_min_max(
+            self.to_screen(new_rung_band_world.min, origin),
+            self.to_screen(new_rung_band_world.max, origin),
+        );
+
+        if empty_space_hovered {
+            // Draw Ghost Preview for the New Network
+            let ghost_fill = Color32::from_rgba_unmultiplied(40, 180, 255, 26);
+            let ghost_border = palette.accent_heading;
+            painter.rect_filled(new_rung_band_screen.shrink(2.0 * self.zoom), 6.0 * self.zoom, ghost_fill);
+            painter.rect_stroke(
+                new_rung_band_screen.shrink(2.0 * self.zoom),
+                6.0 * self.zoom,
+                Stroke::new(1.8 * self.zoom, ghost_border),
+                StrokeKind::Inside,
+            );
+
+            // Ghost Network Badge on Left
+            let badge_w = (rung_header_w - 8.0) * self.zoom;
+            let badge_h = (cell_h - 28.0) * self.zoom;
+            let badge_rect = Rect::from_center_size(
+                pos2(
+                    new_rung_band_screen.min.x + (18.0 + (rung_header_w - 8.0) * 0.5) * self.zoom,
+                    new_rung_band_screen.center().y,
+                ),
+                vec2(badge_w, badge_h),
+            );
+            painter.rect_filled(badge_rect, 5.0 * self.zoom, palette.pill_bg);
+            painter.rect_stroke(
+                badge_rect,
+                5.0 * self.zoom,
+                Stroke::new(1.3 * self.zoom, ghost_border),
+                StrokeKind::Inside,
+            );
+            painter.text(
+                badge_rect.center(),
+                Align2::CENTER_CENTER,
+                format!("+ NET\n#{:02}", new_rung_idx + 1),
+                self.font_mono(10.0),
+                palette.accent_heading,
+            );
+
+            // Ghost horizontal power wire from L1 to L2
+            let wire_y_screen = new_rung_band_screen.center().y;
+            let pt_l1_screen = pos2(self.to_screen(pos2(margin_left, 0.0), origin).x, wire_y_screen);
+            let pt_l2_screen = pos2(self.to_screen(pos2(margin_right, 0.0), origin).x, wire_y_screen);
+            painter.line_segment(
+                [pt_l1_screen, pt_l2_screen],
+                Stroke::new(1.8 * self.zoom, palette.accent_heading.gamma_multiply(0.7)),
+            );
+
+            // Center Callout Banner
+            let banner_msg = if let Some((_, ref lbl)) = self.dragging_tool {
+                format!("✨ Drop to create New Network #{:02} with {}", new_rung_idx + 1, lbl)
+            } else if let Some((_, ref lbl)) = self.dragging_elem {
+                format!("✨ Drop to move {} into New Network #{:02}", lbl, new_rung_idx + 1)
+            } else {
+                format!("✨ Drop here to create New Network #{:02}", new_rung_idx + 1)
+            };
+            painter.text(
+                pos2(new_rung_band_screen.center().x, new_rung_band_screen.center().y - 12.0 * self.zoom),
+                Align2::CENTER_CENTER,
+                banner_msg,
+                self.font_prop(12.0),
+                palette.accent_heading,
+            );
+
+            drop_target = Some(DropTarget {
+                rung_idx: new_rung_idx,
+                target_elem_id: None,
+                insert_pos: InsertPosition::AppendRung,
+                target_label: format!("New Network #{:02}", new_rung_idx + 1),
+                validation_error: None,
+                create_new_rung: true,
+            });
+        } else if is_dragging && drop_target.is_none() {
+            // Hovering empty canvas area horizontally adjacent to an existing rung
+            if let Some(hp) = hover_pos {
+                if viewport_rect.contains(hp) {
+                    let world_p = self.to_world(hp, origin);
+                    for &(r_idx, r_start_y, r_end_y) in &rung_y_spans {
+                        if world_p.y >= r_start_y - 6.0 && world_p.y <= r_end_y + 12.0 {
+                            drop_target = Some(DropTarget {
+                                rung_idx: r_idx,
+                                target_elem_id: None,
+                                insert_pos: InsertPosition::AppendRung,
+                                target_label: format!("Network #{:02} (Append)", r_idx + 1),
+                                validation_error: None,
+                                create_new_rung: false,
+                            });
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         // --- Draw Left Power Rail (L1 Hot) & Right Power Rail (L2 Neutral) ---
-        let rail_bottom_y = (cur_y - 8.0).max(margin_top + cell_h);
+        let effective_bottom_y = if empty_space_hovered {
+            new_rung_start_y + cell_h
+        } else {
+            cur_y
+        };
+        let rail_bottom_y = (effective_bottom_y - 8.0).max(margin_top + cell_h);
         let l1_top = self.to_screen(pos2(margin_left, margin_top), origin);
         let l1_bot = self.to_screen(pos2(margin_left, rail_bottom_y), origin);
         let l2_top = self.to_screen(pos2(margin_right, margin_top), origin);
@@ -1023,7 +1232,11 @@ impl CanvasViewport {
                             Align2::CENTER_CENTER,
                             lbl,
                             FontId::proportional(10.5),
-                            if b_hov { Color32::WHITE } else { col },
+                            if b_hov {
+                                if palette.is_light() { palette.text_primary } else { Color32::WHITE }
+                            } else {
+                                col
+                            },
                         );
                         if is_clicked && b_hov {
                             action = Some(btn_act);
@@ -1120,7 +1333,11 @@ impl CanvasViewport {
                             Align2::CENTER_CENTER,
                             lbl,
                             FontId::proportional(10.5),
-                            if b_hov { Color32::WHITE } else { col },
+                            if b_hov {
+                                if palette.is_light() { palette.text_primary } else { Color32::WHITE }
+                            } else {
+                                col
+                            },
                         );
                         if is_clicked && b_hov {
                             action = Some(btn_act);
@@ -1220,10 +1437,16 @@ impl CanvasViewport {
                 let ghost_x = (hp.x + 14.0).min((viewport_rect.max.x - ghost_w - 6.0).max(viewport_rect.min.x + 6.0));
                 let ghost_rect = Rect::from_min_size(pos2(ghost_x, hp.y + 14.0), vec2(ghost_w, 44.0));
                 painter.rect_filled(ghost_rect, CornerRadius::same(6), palette.card_bg);
+                let val_err = drop_target.as_ref().and_then(|dt| dt.validation_error.as_ref());
+                let ghost_border_col = if val_err.is_some() {
+                    palette.accent_danger
+                } else {
+                    accent_col
+                };
                 painter.rect_stroke(
                     ghost_rect,
                     CornerRadius::same(6),
-                    Stroke::new(1.5, accent_col),
+                    Stroke::new(1.5, ghost_border_col),
                     StrokeKind::Inside,
                 );
                 painter.text(
@@ -1233,21 +1456,23 @@ impl CanvasViewport {
                     FontId::proportional(12.0),
                     palette.text_primary,
                 );
-                let sub_msg = if let Some(ref dt) = drop_target {
-                    format!("-> Drop at: {}", dt.target_label)
+                let (sub_msg, sub_color) = if let Some(ref dt) = drop_target {
+                    if let Some(ref err) = dt.validation_error {
+                        (format!("-> ❌ {}", err), palette.accent_danger)
+                    } else if dt.create_new_rung {
+                        (format!("-> ✨ Create & Drop: {}", dt.target_label), palette.accent_ok)
+                    } else {
+                        (format!("-> Drop at: {}", dt.target_label), palette.accent_ok)
+                    }
                 } else {
-                    "Hover target Network or Element to place".to_string()
+                    ("Hover target Network or Empty Space to place".to_string(), palette.accent_warn)
                 };
                 painter.text(
                     pos2(ghost_rect.min.x + 10.0, ghost_rect.min.y + 31.0),
                     Align2::LEFT_CENTER,
                     sub_msg,
-                    FontId::proportional(11.0),
-                    if drop_target.is_some() {
-                        palette.accent_ok
-                    } else {
-                        palette.accent_warn
-                    },
+                    FontId::proportional(10.5),
+                    sub_color,
                 );
             }
         }
@@ -1349,7 +1574,7 @@ impl CanvasViewport {
                     lbl,
                     FontId::monospace(10.5),
                     if is_hov {
-                        Color32::WHITE
+                        if palette.is_light() { palette.text_primary } else { Color32::WHITE }
                     } else if kind == 0 {
                         palette.accent_heading
                     } else {
@@ -1377,25 +1602,72 @@ impl CanvasViewport {
         if primary_released {
             if let Some((drag_id, _)) = self.dragging_elem.take() {
                 if let Some(dt) = drop_target {
-                    doc.move_element(drag_id, dt.rung_idx, dt.target_elem_id, dt.insert_pos);
+                    if dt.validation_error.is_none() {
+                        if dt.create_new_rung {
+                            doc.move_element_to_new_rung(drag_id, Some(dt.rung_idx));
+                        } else {
+                            doc.move_element(drag_id, dt.rung_idx, dt.target_elem_id, dt.insert_pos);
+                        }
+                    }
+                } else if let Some(hp) = hover_pos {
+                    if viewport_rect.contains(hp) {
+                        let world_p = self.to_world(hp, origin);
+                        if doc.program.rungs.is_empty() || world_p.y >= cur_y - 8.0 {
+                            doc.move_element_to_new_rung(drag_id, None);
+                        } else {
+                            // Find closest rung by Y
+                            let mut best_r = 0;
+                            let mut min_dist = f32::MAX;
+                            for &(r_idx, r_start_y, r_end_y) in &rung_y_spans {
+                                let mid_y = (r_start_y + r_end_y) * 0.5;
+                                let dist = (world_p.y - mid_y).abs();
+                                if dist < min_dist {
+                                    min_dist = dist;
+                                    best_r = r_idx;
+                                }
+                            }
+                            doc.move_element(drag_id, best_r, None, InsertPosition::AppendRung);
+                        }
+                    }
                 }
                 action = None;
             } else if let Some((tool, _)) = self.dragging_tool.take() {
                 if let Some(dt) = drop_target {
-                    let next_id = doc.program.alloc_id();
-                    if let Some(elem) = tool.create_default_element(next_id) {
-                        doc.selected_rung_idx = Some(dt.rung_idx);
-                        doc.selected_element_id = dt.target_elem_id;
-                        doc.insert_element(elem, dt.insert_pos);
+                    if dt.validation_error.is_none() {
+                        let next_id = doc.program.alloc_id();
+                        if let Some(elem) = tool.create_default_element(next_id) {
+                            if dt.create_new_rung {
+                                doc.insert_element_to_new_rung(elem, Some(dt.rung_idx));
+                            } else {
+                                doc.selected_rung_idx = Some(dt.rung_idx);
+                                doc.selected_element_id = dt.target_elem_id;
+                                doc.insert_element(elem, dt.insert_pos);
+                            }
+                        }
                     }
                 } else if let Some(hp) = hover_pos {
                     if viewport_rect.contains(hp) {
-                        let target_r = doc.selected_rung_idx.unwrap_or(0);
+                        let world_p = self.to_world(hp, origin);
                         let next_id = doc.program.alloc_id();
                         if let Some(elem) = tool.create_default_element(next_id) {
-                            doc.selected_rung_idx = Some(target_r);
-                            doc.selected_element_id = None;
-                            doc.insert_element(elem, default_insert_pos);
+                            if doc.program.rungs.is_empty() || world_p.y >= cur_y - 8.0 {
+                                doc.insert_element_to_new_rung(elem, None);
+                            } else {
+                                // Snap to closest rung by Y
+                                let mut best_r = 0;
+                                let mut min_dist = f32::MAX;
+                                for &(r_idx, r_start_y, r_end_y) in &rung_y_spans {
+                                    let mid_y = (r_start_y + r_end_y) * 0.5;
+                                    let dist = (world_p.y - mid_y).abs();
+                                    if dist < min_dist {
+                                        min_dist = dist;
+                                        best_r = r_idx;
+                                    }
+                                }
+                                doc.selected_rung_idx = Some(best_r);
+                                doc.selected_element_id = None;
+                                doc.insert_element(elem, default_insert_pos);
+                            }
                         }
                     }
                 }
@@ -1438,15 +1710,15 @@ impl CanvasViewport {
                     if is_multi {
                         ui.label(egui::RichText::new(format!("Selected Group ({} Elements)", doc.selected_element_ids.len())).color(palette.accent_heading).strong());
                         ui.separator();
-                        if ui.button("+ Add in Parallel (ต่อขนาน - ล่าง)").clicked() {
+                        if ui.button("+ Add in Parallel (Below)").clicked() {
                             action = Some(CanvasAction::AddParallelToSelection);
                             close_menu = true;
                         }
-                        if ui.button("+ Add in Series (ต่ออนุกรม - ขวา / ถัดไป)").clicked() {
+                        if ui.button("+ Add in Series (Right / After)").clicked() {
                             action = Some(CanvasAction::AddSeriesToSelection(true));
                             close_menu = true;
                         }
-                        if ui.button("+ Add in Series (ต่ออนุกรม - ซ้าย / ก่อนหน้า)").clicked() {
+                        if ui.button("+ Add in Series (Left / Before)").clicked() {
                             action = Some(CanvasAction::AddSeriesToSelection(false));
                             close_menu = true;
                         }
@@ -1476,17 +1748,17 @@ impl CanvasViewport {
                             action = Some(CanvasAction::OpenConfigModal(el_id));
                             close_menu = true;
                         }
-                        if ui.button("+ Add in Parallel (ต่อขนาน - ล่าง)").clicked() {
+                        if ui.button("+ Add in Parallel (Below)").clicked() {
                             doc.set_single_selection(Some(r_idx), el_id);
                             action = Some(CanvasAction::AddParallelToSelection);
                             close_menu = true;
                         }
-                        if ui.button("+ Add in Series (ต่ออนุกรม - ขวา)").clicked() {
+                        if ui.button("+ Add in Series (Right / After)").clicked() {
                             doc.set_single_selection(Some(r_idx), el_id);
                             action = Some(CanvasAction::AddSeriesToSelection(true));
                             close_menu = true;
                         }
-                        if ui.button("+ Add in Series (ต่ออนุกรม - ซ้าย)").clicked() {
+                        if ui.button("+ Add in Series (Left / Before)").clicked() {
                             doc.set_single_selection(Some(r_idx), el_id);
                             action = Some(CanvasAction::AddSeriesToSelection(false));
                             close_menu = true;
@@ -1572,8 +1844,8 @@ impl CanvasViewport {
                     } else {
                         LadderElement::new_contact(
                             next_id,
-                            "X0",
-                            "IN_0",
+                            "%IX0.0",
+                            "START_PB",
                             ContactMode::NormallyOpen,
                         )
                     };
@@ -1586,7 +1858,7 @@ impl CanvasViewport {
                     } else {
                         LadderElement::new_contact(
                             next_id,
-                            "X0",
+                            "%IX0.0",
                             "PAR",
                             ContactMode::NormallyOpen,
                         )
@@ -1600,7 +1872,7 @@ impl CanvasViewport {
                     } else {
                         LadderElement::new_contact(
                             next_id,
-                            "X0",
+                            "%IX0.0",
                             "SER",
                             ContactMode::NormallyOpen,
                         )
@@ -1837,6 +2109,9 @@ impl CanvasViewport {
         default_contact_style: ContactStyle,
         default_coil_style: CoilStyle,
         palette: ThemePalette,
+        dragging_source_type: Option<TypeTag>,
+        target_is_first: bool,
+        target_is_last: bool,
     ) -> (f32, f32) {
         if elem.element_type == TypeTag::Branch {
             let pad_x = 14.0;
@@ -1866,7 +2141,10 @@ impl CanvasViewport {
                     palette,
                 );
 
-                for sub in path {
+                let sub_last_idx = path.len().saturating_sub(1);
+                for (sub_idx, sub) in path.iter().enumerate() {
+                    let sub_is_first = sub_idx == 0;
+                    let sub_is_last = sub_idx == sub_last_idx;
                     let (nx, my) = self.draw_element_tree(
                         painter,
                         origin,
@@ -1895,6 +2173,9 @@ impl CanvasViewport {
                         default_contact_style,
                         default_coil_style,
                         palette,
+                        dragging_source_type,
+                        sub_is_first,
+                        sub_is_last,
                     );
                     path_x = nx;
                     if my > path_max_y {
@@ -2022,27 +2303,39 @@ impl CanvasViewport {
 
             // Detect directional insertion zone when an insert tool OR element drag is active
             let mut hovered_zone: Option<InsertPosition> = None;
+            let mut validation_result: Result<InsertPosition, &'static str> = Ok(InsertPosition::Right);
+
             if let Some(hp) = hover_pos {
                 if is_hovered && is_dragging_other {
                     let rel_x = (hp.x - rect_screen.min.x) / rect_screen.width();
                     let rel_y = (hp.y - rect_screen.min.y) / rect_screen.height();
-                    if rel_x < 0.25 {
-                        hovered_zone = Some(InsertPosition::Left);
+                    let raw_zone = if rel_x < 0.25 {
+                        InsertPosition::Left
                     } else if rel_x > 0.75 {
-                        hovered_zone = Some(InsertPosition::Right);
+                        InsertPosition::Right
                     } else if rel_y < 0.30 {
-                        hovered_zone = Some(InsertPosition::TopParallel);
+                        InsertPosition::TopParallel
                     } else if rel_y > 0.70 {
-                        hovered_zone = Some(InsertPosition::BottomParallel);
+                        InsertPosition::BottomParallel
                     } else {
-                        hovered_zone = Some(InsertPosition::Right);
+                        InsertPosition::Right
+                    };
+
+                    if let Some(src_tag) = dragging_source_type {
+                        validation_result = validate_placement(src_tag, elem, raw_zone, target_is_first, target_is_last);
                     }
+                    hovered_zone = Some(raw_zone);
                 }
             }
 
             if is_dragging_other && is_hovered {
                 if let Some(zone) = hovered_zone {
-                    let pos_name = match zone {
+                    let (effective_zone, val_err) = match validation_result {
+                        Ok(adjusted_zone) => (adjusted_zone, None),
+                        Err(err_msg) => (zone, Some(err_msg.to_string())),
+                    };
+
+                    let pos_name = match effective_zone {
                         InsertPosition::Left => "Left of",
                         InsertPosition::Right => "Right of",
                         InsertPosition::TopParallel => "Parallel Above",
@@ -2052,13 +2345,15 @@ impl CanvasViewport {
                     *drop_target = Some(DropTarget {
                         rung_idx,
                         target_elem_id: Some(elem.id),
-                        insert_pos: zone,
+                        insert_pos: effective_zone,
                         target_label: format!(
                             "{} {} (Network #{:02})",
                             pos_name,
                             elem.name,
                             rung_idx + 1
                         ),
+                        validation_error: val_err,
+                        create_new_rung: false,
                     });
                 }
             }
@@ -2085,6 +2380,9 @@ impl CanvasViewport {
                 self.context_menu_elem = Some((rung_idx, elem.id));
             }
 
+            let is_valid = validation_result.is_ok();
+            let hovered_zone_with_validity = hovered_zone.map(|z| (z, is_valid));
+
             self.draw_modern_element(
                 painter,
                 rect_screen,
@@ -2093,7 +2391,7 @@ impl CanvasViewport {
                 is_hovered,
                 sim_active,
                 power_in,
-                hovered_zone,
+                hovered_zone_with_validity,
                 default_contact_style,
                 default_coil_style,
                 palette,
@@ -2113,7 +2411,7 @@ impl CanvasViewport {
         is_hovered: bool,
         sim_active: bool,
         power_in: bool,
-        hovered_zone: Option<InsertPosition>,
+        hovered_zone: Option<(InsertPosition, bool)>,
         default_contact_style: ContactStyle,
         default_coil_style: CoilStyle,
         palette: ThemePalette,
@@ -2170,30 +2468,35 @@ impl CanvasViewport {
         }
 
         // Directional Insertion Zone Highlight
-        if let Some(zone) = hovered_zone {
+        if let Some((zone, is_valid)) = hovered_zone {
             let (z_rect, z_label) = match zone {
                 InsertPosition::Left => (
                     Rect::from_min_max(rect_screen.min, pos2(x0 + w * 0.28, rect_screen.max.y)),
-                    "< Left",
+                    if is_valid { "< Left" } else { "❌ Block" },
                 ),
                 InsertPosition::Right => (
                     Rect::from_min_max(pos2(x0 + w * 0.72, y0), rect_screen.max),
-                    "Right >",
+                    if is_valid { "Right >" } else { "❌ Block" },
                 ),
                 InsertPosition::TopParallel => (
                     Rect::from_min_max(rect_screen.min, pos2(rect_screen.max.x, y0 + h * 0.30)),
-                    "^ Parallel",
+                    if is_valid { "^ Parallel" } else { "❌ Block" },
                 ),
                 InsertPosition::BottomParallel => (
                     Rect::from_min_max(pos2(x0, y0 + h * 0.70), rect_screen.max),
-                    "v Parallel",
+                    if is_valid { "v Parallel" } else { "❌ Block" },
                 ),
-                InsertPosition::AppendRung => (rect_screen, "+ Add"),
+                InsertPosition::AppendRung => (rect_screen, if is_valid { "+ Add" } else { "❌ Block" }),
+            };
+            let fill_col = if is_valid {
+                Color32::from_rgba_unmultiplied(35, 165, 240, 90)
+            } else {
+                Color32::from_rgba_unmultiplied(225, 45, 40, 110)
             };
             painter.rect_filled(
                 z_rect,
                 4.0 * self.zoom,
-                Color32::from_rgba_unmultiplied(35, 165, 240, 90),
+                fill_col,
             );
             painter.text(
                 z_rect.center(),
@@ -2204,13 +2507,23 @@ impl CanvasViewport {
             );
         }
 
-        // Address Color Accent based on prefix
-        let prefix = elem.name.chars().next().unwrap_or('X').to_ascii_uppercase();
+        // Address Color Accent based on IEC / prefix
+        let prefix = elem
+            .name
+            .trim_start_matches('%')
+            .chars()
+            .next()
+            .unwrap_or('I')
+            .to_ascii_uppercase();
         let badge_color = match prefix {
             'X' | 'I' => palette.accent_warn,
             'Y' | 'Q' => palette.accent_heading,
             'T' => palette.accent_ok,
-            'C' => Color32::from_rgb(155, 110, 235),
+            'C' => if palette.is_light() {
+                Color32::from_rgb(108, 42, 190)
+            } else {
+                Color32::from_rgb(165, 120, 245)
+            },
             _ => palette.rung_text_num,
         };
 
@@ -2440,9 +2753,13 @@ impl CanvasViewport {
                         };
 
                         let bg_col = if is_on {
-                            Color32::from_rgb(22, 54, 38)
+                            if palette.is_light() {
+                                Color32::from_rgb(208, 244, 218)
+                            } else {
+                                Color32::from_rgb(22, 54, 38)
+                            }
                         } else {
-                            Color32::from_rgb(32, 38, 50)
+                            palette.pill_bg
                         };
                         let border_col = if is_on {
                             palette.accent_ok
@@ -3513,5 +3830,73 @@ impl CanvasViewport {
             }
             x += grid_size;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use my_canvas_core::{CoilMode, ContactMode, LadderElement, TypeTag};
+
+    #[test]
+    fn test_validate_placement_rules() {
+        let contact = LadderElement::new_contact(1, "X0", "X0", ContactMode::NormallyOpen);
+        let coil = LadderElement::new_coil(2, "Y0", "Y0", CoilMode::Normal);
+        let jmp = LadderElement {
+            id: 3,
+            element_type: TypeTag::Jump,
+            name: "LBL1".to_string(),
+            ..Default::default()
+        };
+        let ton = LadderElement::new_ton(4, "T0", "T0", 1000);
+
+        // Rule 1: Label [LBL]
+        assert!(validate_placement(TypeTag::Label, &contact, InsertPosition::Left, true, false).is_ok());
+        assert!(validate_placement(TypeTag::Label, &contact, InsertPosition::Left, false, false).is_err());
+        assert!(validate_placement(TypeTag::Label, &contact, InsertPosition::Right, true, false).is_err());
+        assert!(validate_placement(TypeTag::Label, &contact, InsertPosition::TopParallel, true, false).is_err());
+
+        // Rule 2: Cannot place any components after Jump [JMP]
+        assert!(validate_placement(TypeTag::Contact, &jmp, InsertPosition::Right, false, true).is_err());
+        assert!(validate_placement(TypeTag::Contact, &jmp, InsertPosition::Left, false, true).is_ok());
+
+        // Rule 3: Output Coils terminate the rung & auto-correction
+        // Dropping coil to the right of coil -> auto-correct to BottomParallel
+        assert_eq!(
+            validate_placement(TypeTag::Coil, &coil, InsertPosition::Right, false, true).unwrap(),
+            InsertPosition::BottomParallel
+        );
+        // Dropping coil to the left of coil -> auto-correct to TopParallel
+        assert_eq!(
+            validate_placement(TypeTag::Coil, &coil, InsertPosition::Left, false, true).unwrap(),
+            InsertPosition::TopParallel
+        );
+        // Contact cannot be placed to the right of coil
+        assert!(validate_placement(TypeTag::Contact, &coil, InsertPosition::Right, false, true).is_err());
+        // Contact cannot parallel across coil
+        assert!(validate_placement(TypeTag::Contact, &coil, InsertPosition::BottomParallel, false, true).is_err());
+
+        // Rule 4: Cannot parallel an output coil across an input contact
+        assert!(validate_placement(TypeTag::Coil, &contact, InsertPosition::BottomParallel, true, false).is_err());
+        assert!(validate_placement(TypeTag::Coil, &contact, InsertPosition::TopParallel, true, false).is_err());
+        assert!(validate_placement(TypeTag::Coil, &contact, InsertPosition::Left, true, false).is_err());
+
+        // Rule 5: Cannot place an output coil before a function block
+        assert!(validate_placement(TypeTag::Coil, &ton, InsertPosition::Left, false, false).is_err());
+    }
+
+    #[test]
+    fn test_drop_target_create_new_rung() {
+        let dt = DropTarget {
+            rung_idx: 2,
+            target_elem_id: None,
+            insert_pos: InsertPosition::AppendRung,
+            target_label: "New Network #03".to_string(),
+            validation_error: None,
+            create_new_rung: true,
+        };
+        assert!(dt.create_new_rung);
+        assert_eq!(dt.rung_idx, 2);
+        assert!(dt.validation_error.is_none());
     }
 }

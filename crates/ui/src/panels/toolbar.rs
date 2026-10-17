@@ -45,7 +45,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
         ui.spacing_mut().item_spacing = egui::vec2(6.0, 4.0);
 
         // =========================================================================
-        // Group 1: Project & History (โครงการ & ประวัติ)
+        // Group 1: Project & History
         // =========================================================================
         toolbar_group(ui, palette, |ui| {
             // New File
@@ -60,10 +60,10 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 58.0,
                 palette,
             )
-            .on_hover_text("New Ladder Project (สร้างโปรแกรมใหม่)")
+            .on_hover_text("New Ladder Project (Ctrl+N)")
             .clicked()
             {
-                app.doc.clear();
+                app.new_program();
             }
 
             // Open File
@@ -165,7 +165,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
         });
 
         // =========================================================================
-        // Group 2: Ladder Component Palette & Drag-and-Drop (เครื่องมือวงจร & ลากวาง)
+        // Group 2: Ladder Component Palette & Drag-and-Drop
         // =========================================================================
         toolbar_group(ui, palette, |ui| {
             // Select Tool
@@ -181,14 +181,14 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 64.0,
                 palette,
             )
-            .on_hover_text("Select & Move Tool (คลิกเลือกหรือลากคลุมหลายตัว / กด Esc)");
+            .on_hover_text("Select & Move Tool (Click or drag box to select / Press Esc)");
             if sel_resp.clicked() {
                 app.active_tool = ActiveTool::Select;
             }
         });
 
         // =========================================================================
-        // Group 4: Simulation Station (สถานีจำลองการทำงาน PLC)
+        // Group 4: Simulation Station
         // =========================================================================
         let is_running = app.doc.simulator.is_running();
         let is_stopped = app.doc.simulator.is_stopped();
@@ -213,7 +213,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 start_w,
                 palette,
             )
-            .on_hover_text("Start / Continuous Simulation (กด F5 เพื่อเริ่มหรือหยุดรันแบบต่อเนื่อง)")
+            .on_hover_text("Start / Continuous Simulation (F5)")
             .clicked()
             {
                 if is_running {
@@ -235,7 +235,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 62.0,
                 palette,
             )
-            .on_hover_text("Execute Single Scan Step (สแกน 1 รอบ - กด F6)")
+            .on_hover_text("Execute Single Scan Step (F6)")
             .clicked()
             {
                 app.doc.single_step_simulation(app.doc.simulator.cycle_time_ms);
@@ -253,7 +253,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 62.0,
                 palette,
             )
-            .on_hover_text("Stop Simulation & Safe Output Shutdown (หยุดจำลองและตัด Output ทั้งหมดเพื่อความปลอดภัย)")
+            .on_hover_text("Stop Simulation & Safe Output Shutdown")
             .clicked()
             {
                 app.doc.stop_simulation();
@@ -271,7 +271,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 62.0,
                 palette,
             )
-            .on_hover_text("Reset Simulation & Clear Memory (รีเซ็ตเวลา, ตัวนับ และ Memory ทั้งหมด - กด Shift+F5)")
+            .on_hover_text("Reset Simulation & Clear Memory (Shift+F5)")
             .clicked()
             {
                 app.doc.reset_simulation();
@@ -315,7 +315,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
         });
 
         // =========================================================================
-        // Group 5: Environment, Style & Settings (มาตรฐานวงจร & สภาพแวดล้อม)
+        // Group 5: Environment, Style & Settings
         // =========================================================================
         toolbar_group(ui, palette, |ui| {
             // Unified Schematic Style (Switch & Coil synced)

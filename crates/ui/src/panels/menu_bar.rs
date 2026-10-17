@@ -7,8 +7,8 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
     egui::MenuBar::new().ui(ui, |ui| {
         // --- FILE MENU ---
         ui.menu_button("File", |ui| {
-            if ui.button("New Program").clicked() {
-                app.doc.clear();
+            if ui.button("New Program (Ctrl+N)").clicked() {
+                app.new_program();
                 ui.close();
             }
             if ui.button("Open Program (.il, .json)...").clicked() {
@@ -174,7 +174,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     }
                 }
             });
-            ui.menu_button("Schematic Style (รูปแบบวงจร)", |ui| {
+            ui.menu_button("Schematic Style", |ui| {
                 for st in SchematicStyle::ALL {
                     let is_cur = app.doc.schematic_style == st;
                     if ui.selectable_label(is_cur, st.label()).on_hover_text(st.description()).clicked() {
@@ -184,7 +184,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     }
                 }
             });
-            ui.menu_button("Window Size (ขนาดหน้าจอ)", |ui| {
+            ui.menu_button("Window Size", |ui| {
                 let current_size_label = match (app.window_width, app.window_height) {
                     (Some(w), Some(h)) => format!("Current: {:.0} × {:.0}", w, h),
                     _ => "Current: 1280 × 720".to_string(),
@@ -230,9 +230,9 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 }
                 ui.separator();
                 let max_text = if app.window_maximized {
-                    "Restore Window Size (ยกเลิกขยายเต็มจอ)"
+                    "Restore Window Size"
                 } else {
-                    "Maximize Window (ขยายเต็มจอ)"
+                    "Maximize Window"
                 };
                 if ui.button(max_text).clicked() {
                     let new_max = !app.window_maximized;

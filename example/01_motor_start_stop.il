@@ -7,27 +7,30 @@
 
 PROGRAM MainProgram
 VAR
-    X00 AT %IX0.0 : BOOL; (* Pin: 2 | Symbol: X00 | Hardware Pin 2 *)
-    X01 AT %IX0.1 : BOOL; (* Pin: 3 | Symbol: X01 | Hardware Pin 3 *)
-    X02 AT %IX0.2 : BOOL; (* Pin: 4 | Symbol: X02 | Hardware Pin 4 *)
-    Y00 AT %QX0.0 : BOOL; (* Pin: 8 | Symbol: Y00 | Hardware Pin 8 *)
-    Y01 AT %QX0.1 : BOOL; (* Pin: 9 | Symbol: Y01 | Hardware Pin 9 *)
-    Y02 AT %QX0.2 : BOOL; (* Pin: 10 | Symbol: Y02 | Hardware Pin 10 *)
+    (* --- Digital Inputs (%IX) --- *)
+    START_PB AT %IX0.0 : BOOL; (* Pin: D2 | Symbol: START_PB | Start Pushbutton (NO) *)
+    STOP_PB AT %IX0.1 : BOOL; (* Pin: D3 | Symbol: STOP_PB | Stop Pushbutton (NC) *)
+    OVERLOAD AT %IX0.2 : BOOL; (* Pin: D4 | Symbol: OVERLOAD | Thermal Overload Relay (NC) *)
+
+    (* --- Digital Outputs (%QX) --- *)
+    MOTOR_RUN AT %QX0.0 : BOOL; (* Pin: D8 | Symbol: MOTOR_RUN | Main Motor Contactor *)
+    LAMP_RUN AT %QX0.1 : BOOL; (* Pin: D9 | Symbol: LAMP_RUN | Green Run Indicator Lamp *)
+    LAMP_FAULT AT %QX0.2 : BOOL; (* Pin: D10 | Symbol: LAMP_FAULT | Red Overload Fault Alarm Lamp *)
 END_VAR
 
-(* Network 01: Rung 1: Motor Start/Stop with Self-Holding (X00=Start, X01=Stop, X02=Overload) *)
-    LD   X00
-    OR   Y00
-    ANDN X01
-    ANDN X02
-    ST   Y00
+(* Network 01: Motor Start/Stop with Self-Holding (%IX0.0=Start, %IX0.1=Stop, %IX0.2=Overload) *)
+    LD   %IX0.0
+    OR   %QX0.0
+    ANDN %IX0.1
+    ANDN %IX0.2
+    ST   %QX0.0
 
-(* Network 02: Rung 2: Green Run Indicator Lamp (Y01 ON when Motor Y00 is Running) *)
-    LD   Y00
-    ST   Y01
+(* Network 02: Green Run Indicator Lamp (%QX0.1 ON when Motor %QX0.0 is Running) *)
+    LD   %QX0.0
+    ST   %QX0.1
 
-(* Network 03: Rung 3: Red Overload Fault Alarm Lamp (Y02 ON when Overload X02 Trips) *)
-    LD   X02
-    ST   Y02
+(* Network 03: Red Overload Fault Alarm Lamp (%QX0.2 ON when Overload %IX0.2 Trips) *)
+    LD   %IX0.2
+    ST   %QX0.2
 
 END_PROGRAM

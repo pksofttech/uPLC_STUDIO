@@ -569,6 +569,7 @@ fn test_load_all_example_il_files() {
     let example_dir = manifest_dir.parent().unwrap().parent().unwrap().join("example");
 
     let files = [
+        "001",
         "01_motor_start_stop",
         "02_star_delta_timer",
         "03_traffic_light",
@@ -586,10 +587,46 @@ fn test_load_all_example_il_files() {
         assert!(!prog.rungs.is_empty());
         assert!(!prog.io_mappings.is_empty());
 
+        // Verify all hardware I/O mappings use standard IEC %IX / %QX addresses and symbolic names
+        for io in &prog.io_mappings {
+            assert!(
+                io.iec_address.starts_with("%IX") || io.iec_address.starts_with("%QX"),
+                "Example {} has non-IEC io_mapping address: {}",
+                base,
+                io.iec_address
+            );
+            assert!(!io.symbol.is_empty(), "Example {} has empty symbol", base);
+            assert!(
+                !io.symbol.starts_with("X0") && !io.symbol.starts_with("Y0"),
+                "Example {} still uses legacy X0/Y0 symbol: {}",
+                base,
+                io.symbol
+            );
+        }
+
+        // Verify all collected elements have valid IEC addresses (preserving bit index .0, .1, etc.) and symbols
+        let iec_elems = prog.collect_all_iec_elements();
+        assert!(!iec_elems.is_empty());
+        for (raw_name, iec_addr, symbol, _, _) in &iec_elems {
+            if raw_name.starts_with('%') {
+                assert_eq!(raw_name, iec_addr);
+                if raw_name.starts_with("%IX") || raw_name.starts_with("%QX") || raw_name.starts_with("%MX") {
+                    assert!(
+                        raw_name.contains('.'),
+                        "Example {} bit address {} lost its bit index",
+                        base,
+                        raw_name
+                    );
+                }
+            }
+            assert!(!symbol.is_empty());
+        }
+
         // Re-export and verify round-trip
         let exported = IlParser::export_il(&prog);
         let reloaded = IlParser::parse(&exported).expect(&format!("Failed to reload {:?}", il_path));
         assert_eq!(reloaded.rungs.len(), prog.rungs.len());
+        assert_eq!(reloaded.io_mappings.len(), prog.io_mappings.len());
     }
 }
 
@@ -1117,3 +1154,179 @@ fn test_label_left_rail_anchoring() {
     assert_eq!(rung_manual.elements[0].element_type, TypeTag::Label);
     assert_eq!(rung_manual.elements[0].name, "TARGET_2");
 }
+
+#[test]
+fn test_iec_address_aliases_and_simulation() {
+    use my_canvas_core::{ContactMode, Document, LadderElement, LadderProgram, PlcSimulator, Rung};
+
+    let mut sim = PlcSimulator::default();
+
+    // 1. Digital Input alias: X0 <-> %IX0.0
+    sim.set_input("%IX0.0", true);
+    assert!(sim.get_var_value("X0"));
+    assert!(sim.get_var_value("X00"));
+    assert!(sim.get_var_value("%IX0.0"));
+
+    sim.set_input("X0", false);
+    assert!(!sim.get_var_value("%IX0.0"));
+    assert!(!sim.get_var_value("X0"));
+
+    // 2. Digital Output alias: Y0 <-> %QX0.0
+    sim.set_var_value("%QX0.0", true);
+    assert!(sim.get_var_value("Y0"));
+    assert!(sim.get_var_value("Y00"));
+    assert!(sim.get_var_value("%QX0.0"));
+
+    sim.set_var_value("Y0", false);
+    assert!(!sim.get_var_value("%QX0.0"));
+    assert!(!sim.get_var_value("Y0"));
+
+    // 3. Marker alias: M0 <-> %MX0.0
+    sim.set_var_value("%MX0.0", true);
+    assert!(sim.get_var_value("M0"));
+    assert!(sim.get_var_value("R0"));
+    assert!(sim.get_var_value("%MX0.0"));
+
+    // 4. Test logic rung using pure IEC 61131-3 naming: [%IX0.0] -> (%QX0.0)
+    let mut prog = LadderProgram::new_empty();
+    let mut r0 = Rung::new(0);
+    r0.elements.push(LadderElement::new_contact(1, "%IX0.0", "START_PB", ContactMode::NormallyOpen));
+    r0.elements.push(LadderElement::new_coil(2, "%QX0.0", "MOTOR_RUN", my_canvas_core::CoilMode::Normal));
+    prog.rungs = vec![r0];
+
+    let mut doc = Document::new();
+    doc.program = prog;
+    doc.simulator.set_input("%IX0.0", true);
+    doc.step_simulation(10);
+
+    assert!(doc.simulator.get_var_value("%QX0.0"));
+    assert!(doc.simulator.get_var_value("Y0")); // Legacy Y0 also receives the output!
+
+    doc.simulator.set_input("%IX0.0", false);
+    doc.step_simulation(10);
+    assert!(!doc.simulator.get_var_value("%QX0.0"));
+    assert!(!doc.simulator.get_var_value("Y0"));
+}
+
+#[test]
+fn test_map_io_to_iec_var_table() {
+    use my_canvas_core::{IlParser, LadderProgram};
+
+    let prog = LadderProgram::new_demo_program();
+
+    // 1. Structured Entries mapping
+    let entries = prog.map_io_to_iec_var_entries(false);
+    assert_eq!(entries.len(), prog.io_mappings.len());
+    assert_eq!(entries[0].name, "X0");
+    assert_eq!(entries[0].address, "%IX0.0");
+    assert_eq!(entries[0].symbol, "START_PB");
+    assert_eq!(entries[0].data_type, "BOOL");
+    assert_eq!(entries[0].hw_pin, "D2");
+
+    // 2. Symbolic entries mapping
+    let sym_entries = prog.map_io_to_iec_var_entries(true);
+    assert_eq!(sym_entries[0].name, "START_PB");
+    assert_eq!(sym_entries[0].address, "%IX0.0");
+
+    // 3. IEC VAR Table text generation
+    let var_table = prog.map_io_to_iec_var_table();
+    assert!(var_table.starts_with("VAR\n"));
+    assert!(var_table.ends_with("END_VAR"));
+    assert!(var_table.contains("X0 AT %IX0.0 : BOOL;"));
+    assert!(var_table.contains("X1 AT %IX0.1 : BOOL;"));
+    assert!(var_table.contains("Y0 AT %QX0.0 : BOOL;"));
+    assert!(var_table.contains("Y1 AT %QX0.1 : BOOL;"));
+    assert!(var_table.contains("T0 : TON;"));
+
+    // 4. Symbolic VAR Table text generation
+    let sym_var_table = prog.map_io_to_iec_var_table_with_options(true);
+    assert!(sym_var_table.contains("START_PB AT %IX0.0 : BOOL;"));
+    assert!(sym_var_table.contains("STOP_PB AT %IX0.1 : BOOL;"));
+    assert!(sym_var_table.contains("MOTOR_RUN AT %QX0.0 : BOOL;"));
+
+    // 5. Verification with IlParser export and parse
+    let full_il = IlParser::export_il(&prog);
+    assert!(full_il.contains(&var_table));
+    let parsed = IlParser::parse(&full_il).expect("Failed to parse IL generated with VAR table");
+    assert_eq!(parsed.io_mappings.len(), prog.io_mappings.len());
+
+    // 6. Verification with custom edited IEC address
+    let mut custom_prog = prog.clone();
+    custom_prog.io_mappings[0].iec_address = "%IX2.7".to_string();
+    let custom_table = custom_prog.map_io_to_iec_var_table();
+    assert!(custom_table.contains("X0 AT %IX2.7 : BOOL;"));
+}
+
+#[test]
+fn test_new_program_clear_state() {
+    let mut doc = Document::default();
+    doc.program.hardware = "IEC 61131-3 Standard PLC".to_string();
+    doc.file_path = Some("example/01_motor_start_stop.il".to_string());
+    doc.add_rung();
+    doc.start_simulation();
+    doc.simulator.set_input("%IX0.0", true);
+    doc.step_simulation(10);
+
+    assert!(doc.can_undo());
+    assert!(doc.simulator.is_running());
+    assert!(doc.simulator.get_var_value("%IX0.0"));
+    assert!(doc.simulator.get_var_value("%QX0.0"));
+
+    // Execute New Program (clear)
+    doc.clear();
+
+    assert_eq!(doc.program.rungs.len(), 1);
+    assert!(doc.program.rungs[0].elements.is_empty());
+    assert!(doc.program.io_mappings.is_empty());
+    assert_eq!(doc.program.hardware, "IEC 61131-3 Standard PLC");
+    assert!(doc.simulator.is_stopped());
+    assert!(!doc.simulator.get_var_value("%IX0.0"));
+    assert!(!doc.simulator.get_var_value("%QX0.0"));
+    assert!(!doc.can_undo());
+    assert!(!doc.can_redo());
+    assert_eq!(doc.selected_rung_idx, Some(0));
+    assert!(doc.selected_element_id.is_none());
+    assert!(doc.selected_element_ids.is_empty());
+    assert!(doc.file_path.is_none());
+    assert!(!doc.is_dirty);
+}
+
+#[test]
+fn test_drop_to_new_rung() {
+    let mut doc = Document::default();
+    let initial_rungs = doc.program.rungs.len();
+
+    // 1. Insert new element onto a new rung (appended at end)
+    let elem_id = doc.program.alloc_id();
+    let elem = my_canvas_core::LadderElement::new_contact(
+        elem_id,
+        "X100",
+        "",
+        my_canvas_core::ContactMode::NormallyOpen,
+    );
+    let new_rung_idx = doc.insert_element_to_new_rung(elem, None);
+    assert_eq!(new_rung_idx, initial_rungs);
+    assert_eq!(doc.program.rungs.len(), initial_rungs + 1);
+    assert_eq!(doc.program.rungs[new_rung_idx].elements.len(), 1);
+    assert_eq!(doc.program.rungs[new_rung_idx].elements[0].id, elem_id);
+    assert_eq!(doc.selected_rung_idx, Some(new_rung_idx));
+
+    // 2. Undo should remove the new rung and the element atomically in 1 step
+    assert!(doc.can_undo());
+    doc.undo();
+    assert_eq!(doc.program.rungs.len(), initial_rungs);
+
+    // 3. Redo should restore it
+    assert!(doc.can_redo());
+    doc.redo();
+    assert_eq!(doc.program.rungs.len(), initial_rungs + 1);
+
+    // 4. Move an existing element from Rung 0 to a newly created rung at the end
+    let moving_elem_id = doc.program.rungs[0].elements[0].id;
+    let moved = doc.move_element_to_new_rung(moving_elem_id, None);
+    assert!(moved);
+    let last_rung_idx = doc.program.rungs.len() - 1;
+    assert_eq!(doc.selected_rung_idx, Some(last_rung_idx));
+    assert!(doc.program.rungs[last_rung_idx].elements.iter().any(|e| e.id == moving_elem_id));
+}
+

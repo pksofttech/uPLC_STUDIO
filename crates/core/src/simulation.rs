@@ -1,5 +1,67 @@
 use std::collections::HashMap;
-use crate::ladder::{CoilMode, ContactMode, LadderElement, LadderProgram, TypeTag};
+use crate::ladder::{CoilMode, ContactMode, IOPortMapping, LadderElement, LadderProgram, TypeTag};
+
+/// Parses IEC 61131-3 (%IX0.0, %QX0.0, %MX0.0) or legacy (X0, Y0, M0) addresses
+/// Returns location type ('I', 'Q', 'M') and 0-based bit index.
+fn get_iec_channel_info(name: &str) -> Option<(char, usize)> {
+    let s = name.trim().to_uppercase();
+
+    // Check IEC %IXb.b or %QXb.b or %MXb.b
+    if s.starts_with('%') {
+        let remainder = &s[1..];
+        if remainder.starts_with("IX") || remainder.starts_with("IB") || remainder.starts_with("IW") {
+            let num = remainder[2..].trim();
+            if let Some((b_str, bit_str)) = num.split_once('.') {
+                let byte: usize = b_str.parse().ok()?;
+                let bit: usize = bit_str.parse().ok()?;
+                return Some(('I', byte * 8 + bit));
+            } else if let Ok(idx) = num.parse::<usize>() {
+                return Some(('I', idx));
+            }
+        } else if remainder.starts_with("QX") || remainder.starts_with("QB") || remainder.starts_with("QW") {
+            let num = remainder[2..].trim();
+            if let Some((b_str, bit_str)) = num.split_once('.') {
+                let byte: usize = b_str.parse().ok()?;
+                let bit: usize = bit_str.parse().ok()?;
+                return Some(('Q', byte * 8 + bit));
+            } else if let Ok(idx) = num.parse::<usize>() {
+                return Some(('Q', idx));
+            }
+        } else if remainder.starts_with("MX") || remainder.starts_with("MB") || remainder.starts_with("MW") {
+            let num = remainder[2..].trim();
+            if let Some((b_str, bit_str)) = num.split_once('.') {
+                let byte: usize = b_str.parse().ok()?;
+                let bit: usize = bit_str.parse().ok()?;
+                return Some(('M', byte * 8 + bit));
+            } else if let Ok(idx) = num.parse::<usize>() {
+                return Some(('M', idx));
+            }
+        }
+    }
+
+    // Check legacy X0..X99 or I0..I99
+    if (s.starts_with('X') || s.starts_with('I')) && s.len() > 1 && s[1..].chars().all(|c| c.is_ascii_digit()) {
+        if let Ok(idx) = s[1..].parse::<usize>() {
+            return Some(('I', idx));
+        }
+    }
+
+    // Check legacy Y0..Y99 or Q0..Q99
+    if (s.starts_with('Y') || s.starts_with('Q')) && s.len() > 1 && s[1..].chars().all(|c| c.is_ascii_digit()) {
+        if let Ok(idx) = s[1..].parse::<usize>() {
+            return Some(('Q', idx));
+        }
+    }
+
+    // Check legacy M0..M99 or R0..R99
+    if (s.starts_with('M') || s.starts_with('R')) && s.len() > 1 && s[1..].chars().all(|c| c.is_ascii_digit()) {
+        if let Ok(idx) = s[1..].parse::<usize>() {
+            return Some(('M', idx));
+        }
+    }
+
+    None
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SimState {
@@ -17,17 +79,17 @@ pub struct PlcSimulator {
     pub scan_count: u64,
     pub simulation_time_ms: u64,
     
-    // Digital inputs X0..X7
+    // Digital inputs X0..X7 / %IX0.0..%IX0.7
     pub inputs: HashMap<String, bool>,
-    // Digital outputs Y0..Y7
+    // Digital outputs Y0..Y7 / %QX0.0..%QX0.7
     pub outputs: HashMap<String, bool>,
-    // Internal relays / markers M0..M31 or R0..R31
+    // Internal relays / markers M0..M31 or R0..R31 / %MX0.0..%MX3.7
     pub markers: HashMap<String, bool>,
     // Timer states: (accum_ms, done)
     pub timers: HashMap<String, (u32, bool)>,
     // Counter states: (count, done, last_input_edge)
     pub counters: HashMap<String, (i32, bool, bool)>,
-    // Data registers D0..D15 / V0..V15
+    // Data registers D0..D15 / V0..V15 / %MW0..%MW15
     pub registers: HashMap<String, i32>,
     // Edge detection states keyed by element ID
     pub edge_states: HashMap<u64, bool>,
@@ -36,28 +98,39 @@ pub struct PlcSimulator {
 impl Default for PlcSimulator {
     fn default() -> Self {
         let mut inputs = HashMap::new();
-        for i in 0..8 {
+        for i in 0..16 {
+            let byte = i / 8;
+            let bit = i % 8;
             inputs.insert(format!("X{}", i), false);
             inputs.insert(format!("X{:02}", i), false);
+            inputs.insert(format!("%IX{}.{}", byte, bit), false);
         }
         
         let mut outputs = HashMap::new();
-        for i in 0..8 {
+        for i in 0..16 {
+            let byte = i / 8;
+            let bit = i % 8;
             outputs.insert(format!("Y{}", i), false);
             outputs.insert(format!("Y{:02}", i), false);
+            outputs.insert(format!("%QX{}.{}", byte, bit), false);
         }
 
         let mut markers = HashMap::new();
-        for i in 0..16 {
+        for i in 0..32 {
+            let byte = i / 8;
+            let bit = i % 8;
             markers.insert(format!("M{}", i), false);
+            markers.insert(format!("M{:02}", i), false);
             markers.insert(format!("R{}", i), false);
             markers.insert(format!("R{:02}", i), false);
+            markers.insert(format!("%MX{}.{}", byte, bit), false);
         }
 
         let mut registers = HashMap::new();
         for i in 0..16 {
             registers.insert(format!("D{}", i), 0);
             registers.insert(format!("V{:02}", i), 0);
+            registers.insert(format!("%MW{}", i), 0);
         }
 
         Self {
@@ -114,7 +187,7 @@ impl PlcSimulator {
     }
 
     pub fn set_input(&mut self, name: &str, value: bool) {
-        self.inputs.insert(name.to_string(), value);
+        self.set_var_value(name, value);
     }
 
     pub fn toggle_input(&mut self, name: &str) -> bool {
@@ -125,7 +198,8 @@ impl PlcSimulator {
     }
 
     pub fn get_var_value(&self, name: &str) -> bool {
-        let upper = name.to_uppercase();
+        let upper = name.trim().to_uppercase();
+
         if let Some(&val) = self.inputs.get(&upper) {
             return val;
         }
@@ -141,17 +215,129 @@ impl PlcSimulator {
         if let Some((_, done, _)) = self.counters.get(&upper) {
             return *done;
         }
+
+        // Check IEC/Legacy aliases if exact key was not directly set
+        if let Some((loc, idx)) = get_iec_channel_info(&upper) {
+            let byte = idx / 8;
+            let bit = idx % 8;
+            match loc {
+                'I' => {
+                    if let Some(&v) = self.inputs.get(&format!("X{}", idx)) {
+                        return v;
+                    }
+                    if let Some(&v) = self.inputs.get(&format!("X{:02}", idx)) {
+                        return v;
+                    }
+                    if let Some(&v) = self.inputs.get(&format!("%IX{}.{}", byte, bit)) {
+                        return v;
+                    }
+                }
+                'Q' => {
+                    if let Some(&v) = self.outputs.get(&format!("Y{}", idx)) {
+                        return v;
+                    }
+                    if let Some(&v) = self.outputs.get(&format!("Y{:02}", idx)) {
+                        return v;
+                    }
+                    if let Some(&v) = self.outputs.get(&format!("%QX{}.{}", byte, bit)) {
+                        return v;
+                    }
+                }
+                'M' => {
+                    if let Some(&v) = self.markers.get(&format!("M{}", idx)) {
+                        return v;
+                    }
+                    if let Some(&v) = self.markers.get(&format!("M{:02}", idx)) {
+                        return v;
+                    }
+                    if let Some(&v) = self.markers.get(&format!("R{}", idx)) {
+                        return v;
+                    }
+                    if let Some(&v) = self.markers.get(&format!("%MX{}.{}", byte, bit)) {
+                        return v;
+                    }
+                }
+                _ => {}
+            }
+        }
+
         false
     }
 
     pub fn set_var_value(&mut self, name: &str, val: bool) {
-        let upper = name.to_uppercase();
+        let upper = name.trim().to_uppercase();
+        if let Some((loc, idx)) = get_iec_channel_info(&upper) {
+            let byte = idx / 8;
+            let bit = idx % 8;
+            match loc {
+                'I' => {
+                    self.inputs.insert(format!("X{}", idx), val);
+                    self.inputs.insert(format!("X{:02}", idx), val);
+                    self.inputs.insert(format!("%IX{}.{}", byte, bit), val);
+                    self.inputs.insert(upper, val);
+                }
+                'Q' => {
+                    self.outputs.insert(format!("Y{}", idx), val);
+                    self.outputs.insert(format!("Y{:02}", idx), val);
+                    self.outputs.insert(format!("%QX{}.{}", byte, bit), val);
+                    self.outputs.insert(upper, val);
+                }
+                'M' => {
+                    self.markers.insert(format!("M{}", idx), val);
+                    self.markers.insert(format!("M{:02}", idx), val);
+                    self.markers.insert(format!("R{}", idx), val);
+                    self.markers.insert(format!("R{:02}", idx), val);
+                    self.markers.insert(format!("%MX{}.{}", byte, bit), val);
+                    self.markers.insert(upper, val);
+                }
+                _ => {}
+            }
+            return;
+        }
+
         if upper.starts_with('Y') || upper.starts_with("%QX") || upper.starts_with('Q') {
             self.outputs.insert(upper, val);
         } else if upper.starts_with('M') || upper.starts_with('R') || upper.starts_with("%MX") {
             self.markers.insert(upper, val);
         } else {
             self.inputs.insert(upper, val);
+        }
+    }
+
+    /// Bidirectional synchronization between physical addresses, IEC addresses, and tag symbols
+    pub fn sync_io_mappings(&mut self, io_mappings: &[IOPortMapping]) {
+        for (idx, io) in io_mappings.iter().enumerate() {
+            let iec_addr = io.iec_address(idx);
+            let sym_upper = io.symbol.trim().to_uppercase();
+            if io.is_input {
+                let plc_val = self.get_var_value(&io.plc_address);
+                let iec_val = self.get_var_value(&iec_addr);
+                let sym_val = if !sym_upper.is_empty() {
+                    self.inputs.get(&sym_upper).copied().unwrap_or(false)
+                } else {
+                    false
+                };
+                let active = plc_val || iec_val || sym_val;
+                self.set_var_value(&io.plc_address, active);
+                self.set_var_value(&iec_addr, active);
+                if !sym_upper.is_empty() {
+                    self.inputs.insert(sym_upper, active);
+                }
+            } else {
+                let plc_val = self.get_var_value(&io.plc_address);
+                let iec_val = self.get_var_value(&iec_addr);
+                let sym_val = if !sym_upper.is_empty() {
+                    self.outputs.get(&sym_upper).copied().unwrap_or(false)
+                } else {
+                    false
+                };
+                let active = plc_val || iec_val || sym_val;
+                self.set_var_value(&io.plc_address, active);
+                self.set_var_value(&iec_addr, active);
+                if !sym_upper.is_empty() {
+                    self.outputs.insert(sym_upper, active);
+                }
+            }
         }
     }
 
