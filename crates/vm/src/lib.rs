@@ -456,7 +456,11 @@ impl MicroVm {
                 Ok(CMD_DOWNLOAD_PROGRAM)
             }
             CMD_RUN_STOP => {
-                self.running = !self.running;
+                if payload.len() == 1 {
+                    self.running = payload[0] != 0;
+                } else {
+                    self.running = !self.running;
+                }
                 if !self.running {
                     // Safe output shutdown on STOP
                     for y in 0x20..=0x3F {
@@ -565,6 +569,36 @@ mod tests {
         vm.step_scan(10);
         assert!(vm.get_digital_output(0), "LED_PIN (Y0) should restart ON phase at 1000ms");
         assert!(!vm.get_digital_output(1), "LED_ALT (Y1) should return OFF at 1000ms");
+    }
+
+    #[test]
+    fn test_vm_serial_run_and_stop_commands() {
+        let mut vm = MicroVm::new();
+        // Simple program: LDN X1 -> ST Y0 -> END
+        let raw: [u8; 12] = [
+            0x02, 0x01, 0x00, 0x00, // LDN X1
+            0x07, 0x20, 0x00, 0x00, // ST Y0
+            0xFF, 0x00, 0x00, 0x00, // END
+        ];
+        vm.load_bytecode(&raw).unwrap();
+        vm.step_scan(1);
+        assert!(vm.running);
+        assert!(vm.get_digital_output(0), "Y0 should be ON while running");
+
+        // Build STOP packet: SOF=0xAA, CMD=0x02, LEN=1 (0x01, 0x00), PAYLOAD=[0x00], CRC8
+        let mut stop_pkt = [0xAA, 0x02, 0x01, 0x00, 0x00, 0x00];
+        stop_pkt[5] = MicroVm::compute_crc8(&stop_pkt[1..5]);
+        assert_eq!(vm.process_serial_packet(&stop_pkt), Ok(CMD_RUN_STOP));
+        assert!(!vm.running, "VM should be in STOP state");
+        assert!(!vm.get_digital_output(0), "Y0 should be cleared immediately on STOP");
+
+        // Build RUN packet: SOF=0xAA, CMD=0x02, LEN=1 (0x01, 0x00), PAYLOAD=[0x01], CRC8
+        let mut run_pkt = [0xAA, 0x02, 0x01, 0x00, 0x01, 0x00];
+        run_pkt[5] = MicroVm::compute_crc8(&run_pkt[1..5]);
+        assert_eq!(vm.process_serial_packet(&run_pkt), Ok(CMD_RUN_STOP));
+        assert!(vm.running, "VM should return to RUN state");
+        vm.step_scan(1);
+        assert!(vm.get_digital_output(0), "Y0 should be ON again after resuming RUN");
     }
 }
 

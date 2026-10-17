@@ -12,10 +12,12 @@ pub const PACKET_SOF: u8 = 0xAA;
 pub enum PlcSerialCommand {
     /// 0x01: Download Bytecode Program to RAM / Flash
     DownloadProgram = 0x01,
-    /// 0x02: PLC RUN / STOP Control
+    /// 0x02 (Payload = 0x01): Start / RUN PLC Scan Execution
     RunStopControl = 0x02,
     /// 0x03: Request Online Status Monitor (bit_mem & word_mem)
     MonitorStatus = 0x03,
+    /// 0x02 (Payload = 0x00): Stop / HALT PLC Scan Execution & Safe Output Shutdown
+    StopPlc = 0x12,
 }
 
 /// 8-bit Opcodes for the Accumulator-based Micro-VM (RP2040)
@@ -298,13 +300,18 @@ impl BytecodeProgram {
     }
 
     /// Build a complete Serial/UART Packet Frame:
-    /// `[SOF (0xAA)] [CMD (1B)] [LEN_LO (1B)] [LEN_HI (1B)] [PAYLOAD (4*N B)] [CRC8 (1B)]`
+    /// `[SOF (0xAA)] [CMD (1B)] [LEN_LO (1B)] [LEN_HI (1B)] [PAYLOAD] [CRC8 (1B)]`
     pub fn to_serial_packet(&self, cmd: PlcSerialCommand) -> Vec<u8> {
-        let payload = self.to_raw_bytes();
+        let (wire_cmd, payload) = match cmd {
+            PlcSerialCommand::DownloadProgram => (0x01u8, self.to_raw_bytes()),
+            PlcSerialCommand::RunStopControl => (0x02u8, vec![0x01u8]),
+            PlcSerialCommand::StopPlc => (0x02u8, vec![0x00u8]),
+            PlcSerialCommand::MonitorStatus => (0x03u8, Vec::new()),
+        };
         let len = (payload.len() as u16).to_le_bytes();
         let mut packet = Vec::with_capacity(5 + payload.len());
         packet.push(PACKET_SOF);
-        packet.push(cmd as u8);
+        packet.push(wire_cmd);
         packet.push(len[0]);
         packet.push(len[1]);
         packet.extend_from_slice(&payload);

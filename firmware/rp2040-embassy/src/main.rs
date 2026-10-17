@@ -58,11 +58,20 @@ bind_interrupts!(struct Irqs {
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
+    for pin_idx in 0..30 {
+        embassy_rp::pac::PADS_BANK0.gpio(pin_idx).modify(|w| {
+            w.set_ie(true);
+            w.set_pde(true);
+            w.set_pue(false);
+        });
+    }
+    cortex_m::asm::delay(10_000);
+    let boot_gpio_mask = embassy_rp::pac::SIO.gpio_in(0).read();
     info!("====================================================");
     info!("uPLC Studio - RP2040 Micro-VM Firmware Initialized!");
     info!(
-        "Scan Cycle: {} ms | USB-CDC Serial & UART0 (GP0/GP1) @ 115200",
-        SCAN_CYCLE_MS
+        "Scan Cycle: {} ms | Boot High GPIOs: 0x{:08X}",
+        SCAN_CYCLE_MS, boot_gpio_mask
     );
     info!("Demo LED Pin: GP25 <- PLC Output Y0 (%QX0.0)");
     info!("====================================================");
