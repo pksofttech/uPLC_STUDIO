@@ -288,6 +288,7 @@ impl MicroVm {
                         self.word_mem[addr] = 0;
                         self.bit_mem[addr] = 0;
                     }
+                    acc = self.bit_mem[addr] != 0;
                 }
                 0x22 => {
                     // TOF (Timer Off-Delay)
@@ -304,6 +305,7 @@ impl MicroVm {
                             self.word_mem[addr] = next_cv;
                         }
                     }
+                    acc = self.bit_mem[addr] != 0;
                 }
                 0x23 => {
                     // TP (Pulse Timer)
@@ -322,6 +324,7 @@ impl MicroVm {
                     } else if !acc {
                         self.word_mem[addr] = 0;
                     }
+                    acc = self.bit_mem[addr] != 0;
                 }
                 0x21 | 0x25 => {
                     // CTU / CTUD (Counter Up)
@@ -334,6 +337,7 @@ impl MicroVm {
                         }
                     }
                     self.ctu_prev[c_idx] = u8::from(acc && mc_active);
+                    acc = self.bit_mem[addr] != 0;
                 }
                 0x24 => {
                     // CTD (Counter Down)
@@ -346,6 +350,7 @@ impl MicroVm {
                         }
                     }
                     self.ctu_prev[c_idx] = u8::from(acc && mc_active);
+                    acc = self.bit_mem[addr] != 0;
                 }
 
                 // Comparisons
@@ -517,4 +522,49 @@ mod tests {
         assert!(!vm.get_digital_output(0), "Y0 should turn OFF");
         assert!(!vm.get_digital_output(1), "Y1 should turn OFF");
     }
+
+    #[test]
+    fn test_vm_demo_led_blink_oscillator() {
+        let mut vm = MicroVm::new();
+        // 14-instruction Demo LED Blinker from example/08_rp2040_demo_led_blink.il:
+        let raw: [u8; 56] = [
+            0x02, 0x01, 0x00, 0x00, // 0: LDN  X1
+            0x04, 0x41, 0x00, 0x00, // 1: ANDN M1
+            0x20, 0xC0, 0xF4, 0x01, // 2: TON  T0, K500
+            0x07, 0x40, 0x00, 0x00, // 3: ST   M0
+            0x01, 0x40, 0x00, 0x00, // 4: LD   M0
+            0x20, 0xC1, 0xF4, 0x01, // 5: TON  T1, K500
+            0x07, 0x41, 0x00, 0x00, // 6: ST   M1
+            0x02, 0x01, 0x00, 0x00, // 7: LDN  X1
+            0x04, 0x40, 0x00, 0x00, // 8: ANDN M0
+            0x05, 0x00, 0x00, 0x00, // 9: OR   X0
+            0x07, 0x20, 0x00, 0x00, // 10: ST  Y0 (LED_PIN GP25)
+            0x01, 0x40, 0x00, 0x00, // 11: LD  M0
+            0x07, 0x21, 0x00, 0x00, // 12: ST  Y1 (LED_ALT GP11)
+            0xFF, 0x00, 0x00, 0x00, // 13: END
+        ];
+        vm.load_bytecode(&raw).unwrap();
+
+        // Phase 1 (0..490ms): Y0 (LED_PIN) is ON, Y1 is OFF
+        for _ in 0..49 {
+            vm.step_scan(10);
+            assert!(vm.get_digital_output(0), "LED_PIN (Y0) should be ON during first 500ms");
+            assert!(!vm.get_digital_output(1), "LED_ALT (Y1) should be OFF during first 500ms");
+        }
+
+        // Phase 2 (500..980ms): T0 reaches 500ms -> M0=1 -> Y0 (LED_PIN) turns OFF, Y1 turns ON
+        for _ in 0..49 {
+            vm.step_scan(10);
+            assert!(!vm.get_digital_output(0), "LED_PIN (Y0) should be OFF during second 500ms");
+            assert!(vm.get_digital_output(1), "LED_ALT (Y1) should be ON during second 500ms");
+        }
+
+        // At 990ms (50th scan of T1): T1 reaches 500ms -> M1=1
+        vm.step_scan(10);
+        // Next scan (1000ms): M1=1 resets T0 -> M0=0 -> Y0 (LED_PIN) turns back ON!
+        vm.step_scan(10);
+        assert!(vm.get_digital_output(0), "LED_PIN (Y0) should restart ON phase at 1000ms");
+        assert!(!vm.get_digital_output(1), "LED_ALT (Y1) should return OFF at 1000ms");
+    }
 }
+

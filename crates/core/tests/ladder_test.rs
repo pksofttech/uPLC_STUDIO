@@ -577,13 +577,18 @@ fn test_load_all_example_il_files() {
         "05_auto_door_control",
         "06_math_compare_analog",
         "07_all_iec_components",
+        "08_rp2040_demo_led_blink",
     ];
 
     for base in files {
         let il_path = example_dir.join(format!("{}.il", base));
         let il_content = std::fs::read_to_string(&il_path).expect(&format!("Failed to read {:?}", il_path));
         let prog = IlParser::parse(&il_content).expect(&format!("Failed to parse {:?}", il_path));
-        assert_eq!(prog.hardware, "Arduino UNO R3");
+        assert!(
+            prog.hardware == "Arduino UNO R3" || prog.hardware == "Raspberry Pi Pico (RP2040)",
+            "Unexpected hardware: {}",
+            prog.hardware
+        );
         assert!(!prog.rungs.is_empty());
         assert!(!prog.io_mappings.is_empty());
 

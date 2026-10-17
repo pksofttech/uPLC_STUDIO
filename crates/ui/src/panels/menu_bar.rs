@@ -41,6 +41,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     ("05 - Automatic Sliding Door", "example/05_auto_door_control.il"),
                     ("06 - Register Math & Compare", "example/06_math_compare_analog.il"),
                     ("07 - All IEC Components (Comprehensive Test)", "example/07_all_iec_components.il"),
+                    ("08 - RP2040 Demo LED Blink (GP25)", "example/08_rp2040_demo_led_blink.il"),
                 ];
                 for (label, path_str) in examples {
                     if ui.button(label).clicked() {

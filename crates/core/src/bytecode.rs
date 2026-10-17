@@ -1097,4 +1097,29 @@ END_PROGRAM
         assert!(disasm.contains("OPCODE"));
         assert!(disasm.contains("END"));
     }
+
+    #[test]
+    fn test_rp2040_demo_led_blink_example() {
+        let il = include_str!("../../../example/08_rp2040_demo_led_blink.il");
+        let bc = BytecodeCompiler::compile_il(il).expect("Failed to compile 08_rp2040_demo_led_blink.il");
+        assert_eq!(bc.hardware, "Raspberry Pi Pico (RP2040)");
+        assert_eq!(bc.instructions.last().unwrap().op, VmOpcode::End);
+
+        // Verify LED_PIN (%QX0.0 -> Y0 -> Unified Address 0x20, GP25) is in memory map
+        let y0_entry = bc
+            .memory_map
+            .iter()
+            .find(|e| e.addr == 0x20)
+            .expect("Y0 (0x20) should be in memory map");
+        assert_eq!(y0_entry.canonical_name, "Y0");
+        assert_eq!(y0_entry.iec_address, "%QX0.0");
+        assert_eq!(y0_entry.hw_pin, "GP25");
+
+        // Verify Serial Packet framing (SOF 0xAA + CMD 0x01 + LEN + Payload + CRC8)
+        let pkt = bc.to_serial_packet(PlcSerialCommand::DownloadProgram);
+        assert_eq!(pkt[0], PACKET_SOF);
+        assert_eq!(pkt[1], PlcSerialCommand::DownloadProgram as u8);
+        assert_eq!(pkt.len(), 5 + bc.payload_size_bytes());
+    }
 }
+
