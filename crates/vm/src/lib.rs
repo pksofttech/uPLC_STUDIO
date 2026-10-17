@@ -27,10 +27,13 @@ pub const CMD_DOWNLOAD_PROGRAM: u8 = 0x01;
 pub const CMD_RUN_STOP: u8 = 0x02;
 pub const CMD_MONITOR_STATUS: u8 = 0x03;
 pub const CMD_STATUS_RESPONSE: u8 = 0x83;
+pub const CMD_UPLOAD_PROGRAM: u8 = 0x04;
+pub const CMD_UPLOAD_PROGRAM_RESPONSE: u8 = 0x84;
 
-/// Online Monitoring Status Packet Lengths
-pub const STATUS_SNAPSHOT_PAYLOAD_LEN: usize = 1 + 4 + 1 + 4 + 256 + 64 + 64 + 64; // 458 bytes
-pub const STATUS_PACKET_LEN: usize = 5 + STATUS_SNAPSHOT_PAYLOAD_LEN; // 463 bytes
+/// Online Monitoring Status Packet Lengths (includes 2B prog_len + 2B prog_crc16 signature)
+pub const STATUS_SNAPSHOT_PAYLOAD_LEN: usize = 1 + 4 + 1 + 4 + 256 + 64 + 64 + 64 + 2 + 2; // 462 bytes
+pub const STATUS_PACKET_LEN: usize = 5 + STATUS_SNAPSHOT_PAYLOAD_LEN; // 467 bytes
+pub const MAX_PROGRAM_PACKET_LEN: usize = 5 + (MAX_INSTRUCTIONS * 4); // 2053 bytes
 
 /// 32-bit Fixed-Width VM Instruction (`4 Bytes`)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -68,6 +71,7 @@ struct StackItem {
 pub struct MicroVm {
     pub program: [VmInstruction; MAX_INSTRUCTIONS],
     pub prog_len: u16,
+    pub prog_crc: u16,
     pub running: bool,
     pub scan_count: u32,
     pub acc_bool: bool,
@@ -100,6 +104,7 @@ impl MicroVm {
                 imm: 0,
             }; MAX_INSTRUCTIONS],
             prog_len: 0,
+            prog_crc: 0,
             running: true,
             scan_count: 0,
             acc_bool: false,
@@ -138,6 +143,7 @@ impl MicroVm {
             self.program[i] = VmInstruction::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
         }
         self.prog_len = count as u16;
+        self.prog_crc = Self::compute_crc16(payload);
         // Clear outputs Y0..Y31 on program reload for safety
         for y in 0x20..=0x3F {
             self.bit_mem[y] = 0;
@@ -505,6 +511,47 @@ impl MicroVm {
             idx += 4;
         }
 
+        // Program Signature: prog_len (u16 LE) + prog_crc (u16 LE)
+        out[idx..idx + 2].copy_from_slice(&self.prog_len.to_le_bytes());
+        idx += 2;
+        out[idx..idx + 2].copy_from_slice(&self.prog_crc.to_le_bytes());
+        idx += 2;
+
+        let crc = Self::compute_crc8(&out[1..idx]);
+        out[idx] = crc;
+        idx += 1;
+        Ok(idx)
+    }
+
+    /// Construct a complete `CMD_UPLOAD_PROGRAM_RESPONSE (0x84)` Serial Packet Frame containing
+    /// the full currently loaded 32-bit bytecode program (`prog_len * 4` bytes).
+    ///
+    /// Frame layout:
+    /// - `[0x00]`: `PACKET_SOF` (`0xAA`)
+    /// - `[0x01]`: `CMD_UPLOAD_PROGRAM_RESPONSE` (`0x84`)
+    /// - `[0x02..0x04]`: Payload length in bytes (`prog_len * 4`, 16-bit LE)
+    /// - `[0x04..4 + N]`: Raw instructions (`[op, addr, imm_lo, imm_hi] * prog_len`)
+    /// - `[4 + N]`: CRC-8 checksum over bytes `1..4 + N`
+    pub fn write_program_packet(&self, out: &mut [u8]) -> Result<usize, &'static str> {
+        let payload_len = (self.prog_len as usize) * 4;
+        let total_len = 5 + payload_len;
+        if out.len() < total_len {
+            return Err("Buffer too small for program packet");
+        }
+
+        out[0] = PACKET_SOF;
+        out[1] = CMD_UPLOAD_PROGRAM_RESPONSE;
+        let [len_lo, len_hi] = (payload_len as u16).to_le_bytes();
+        out[2] = len_lo;
+        out[3] = len_hi;
+
+        let mut idx = 4;
+        for i in 0..(self.prog_len as usize) {
+            let ins_bytes = self.program[i].to_le_bytes();
+            out[idx..idx + 4].copy_from_slice(&ins_bytes);
+            idx += 4;
+        }
+
         let crc = Self::compute_crc8(&out[1..idx]);
         out[idx] = crc;
         idx += 1;
@@ -519,6 +566,22 @@ impl MicroVm {
             for _ in 0..8 {
                 if (crc & 0x80) != 0 {
                     crc = (crc << 1) ^ 0x07;
+                } else {
+                    crc <<= 1;
+                }
+            }
+        }
+        crc
+    }
+
+    /// Compute CRC-16/CCITT-FALSE (polynomial 0x1021, init 0xFFFF) over `data` for Bytecode Signature Verification
+    pub fn compute_crc16(data: &[u8]) -> u16 {
+        let mut crc: u16 = 0xFFFF;
+        for &byte in data {
+            crc ^= (byte as u16) << 8;
+            for _ in 0..8 {
+                if (crc & 0x8000) != 0 {
+                    crc = (crc << 1) ^ 0x1021;
                 } else {
                     crc <<= 1;
                 }
@@ -569,6 +632,7 @@ impl MicroVm {
                 Ok(CMD_RUN_STOP)
             }
             CMD_MONITOR_STATUS => Ok(CMD_MONITOR_STATUS),
+            CMD_UPLOAD_PROGRAM => Ok(CMD_UPLOAD_PROGRAM),
             _ => Err("Unknown command code"),
         }
     }
@@ -735,6 +799,33 @@ mod tests {
         let expected_crc = buf[STATUS_PACKET_LEN - 1];
         let actual_crc = MicroVm::compute_crc8(&buf[1..STATUS_PACKET_LEN - 1]);
         assert_eq!(expected_crc, actual_crc);
+    }
+
+    #[test]
+    fn test_vm_upload_program_packet() {
+        let mut vm = MicroVm::new();
+        let raw: [u8; 16] = [
+            0x01, 0x00, 0x00, 0x00, // LD X0
+            0x03, 0x01, 0x00, 0x00, // AND X1
+            0x07, 0x20, 0x00, 0x00, // ST Y0
+            0xFF, 0x00, 0x00, 0x00, // END
+        ];
+        vm.load_bytecode(&raw).unwrap();
+
+        // 1. Process Upload Request: SOF=0xAA, CMD=0x04, LEN=0, CRC8
+        let mut req = [PACKET_SOF, CMD_UPLOAD_PROGRAM, 0x00, 0x00, 0x00];
+        req[4] = MicroVm::compute_crc8(&req[1..4]);
+        assert_eq!(vm.process_serial_packet(&req), Ok(CMD_UPLOAD_PROGRAM));
+
+        // 2. Write Program Packet (Response 0x84)
+        let mut tx_buf = [0u8; 64];
+        let written = vm.write_program_packet(&mut tx_buf).unwrap();
+        assert_eq!(written, 5 + 16); // 21 bytes
+        assert_eq!(tx_buf[0], PACKET_SOF);
+        assert_eq!(tx_buf[1], CMD_UPLOAD_PROGRAM_RESPONSE);
+        assert_eq!(u16::from_le_bytes([tx_buf[2], tx_buf[3]]), 16);
+        assert_eq!(&tx_buf[4..20], &raw);
+        assert_eq!(tx_buf[20], MicroVm::compute_crc8(&tx_buf[1..20]));
     }
 }
 

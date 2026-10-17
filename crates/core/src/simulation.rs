@@ -373,13 +373,20 @@ impl PlcSimulator {
         self.edge_states.clear();
 
         // De-energize visual power flow on rungs and elements
+        self.clear_conduction(program);
+    }
+
+    /// De-energize visual power flow on all rungs and elements (e.g. on CODE MISMATCH or paused monitoring)
+    pub fn clear_conduction(&mut self, program: &mut LadderProgram) {
         for rung in &mut program.rungs {
             rung.is_energized = false;
             for el in &mut rung.elements {
                 el.is_energized = false;
+                el.is_done = false;
                 for path in &mut el.branch_paths {
                     for sub in path {
                         sub.is_energized = false;
+                        sub.is_done = false;
                     }
                 }
             }
@@ -798,6 +805,8 @@ impl PlcSimulator {
             timer_cv,
             counter_cv,
             data_reg,
+            prog_len: 0,
+            prog_crc: 0,
         }
     }
 

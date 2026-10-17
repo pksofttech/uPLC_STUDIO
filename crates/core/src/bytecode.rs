@@ -16,6 +16,8 @@ pub enum PlcSerialCommand {
     RunStopControl = 0x02,
     /// 0x03: Request Online Status Monitor (bit_mem & word_mem)
     MonitorStatus = 0x03,
+    /// 0x04: Upload / Read Bytecode Program from PLC
+    UploadProgram = 0x04,
     /// 0x02 (Payload = 0x00): Stop / HALT PLC Scan Execution & Safe Output Shutdown
     StopPlc = 0x12,
 }
@@ -31,6 +33,8 @@ pub struct PlcStatusSnapshot {
     pub timer_cv: [u32; 16],
     pub counter_cv: [i32; 16],
     pub data_reg: [i32; 16],
+    pub prog_len: u16,
+    pub prog_crc: u16,
 }
 
 impl Default for PlcStatusSnapshot {
@@ -44,17 +48,26 @@ impl Default for PlcStatusSnapshot {
             timer_cv: [0; 16],
             counter_cv: [0; 16],
             data_reg: [0; 16],
+            prog_len: 0,
+            prog_crc: 0,
         }
     }
 }
 
 impl PlcStatusSnapshot {
-    pub const PAYLOAD_LEN: usize = 1 + 4 + 1 + 4 + 256 + 64 + 64 + 64; // 458 bytes
-    pub const PACKET_LEN: usize = 5 + Self::PAYLOAD_LEN; // 463 bytes
+    pub const LEGACY_PAYLOAD_LEN: usize = 1 + 4 + 1 + 4 + 256 + 64 + 64 + 64; // 458 bytes
+    pub const PAYLOAD_LEN: usize = Self::LEGACY_PAYLOAD_LEN + 2 + 2; // 462 bytes
+    pub const PACKET_LEN: usize = 5 + Self::PAYLOAD_LEN; // 467 bytes
+
+    /// Verify if the bytecode currently running on the PLC matches the compiled IDE BytecodeProgram
+    pub fn matches_program(&self, bc: &BytecodeProgram) -> bool {
+        let (ide_len, ide_crc) = bc.program_signature();
+        self.prog_len == ide_len && self.prog_crc == ide_crc
+    }
 
     /// Parse a complete response frame (`SOF 0xAA | CMD 0x83 | LEN | PAYLOAD | CRC8`)
     pub fn parse_from_packet(packet: &[u8]) -> Result<Self, &'static str> {
-        if packet.len() < Self::PACKET_LEN {
+        if packet.len() < 5 + Self::LEGACY_PAYLOAD_LEN {
             return Err("Packet too short for status snapshot");
         }
         if packet[0] != PACKET_SOF {
@@ -64,8 +77,11 @@ impl PlcStatusSnapshot {
             return Err("Unexpected command ID (expected 0x83)");
         }
         let len = u16::from_le_bytes([packet[2], packet[3]]) as usize;
-        if len != Self::PAYLOAD_LEN {
+        if len != Self::PAYLOAD_LEN && len != Self::LEGACY_PAYLOAD_LEN {
             return Err("Invalid payload length");
+        }
+        if packet.len() < 5 + len {
+            return Err("Incomplete status snapshot packet");
         }
         let expected_crc = packet[4 + len];
         let actual_crc = BytecodeProgram::compute_crc8(&packet[1..4 + len]);
@@ -101,6 +117,14 @@ impl PlcStatusSnapshot {
             offset += 4;
         }
 
+        let (prog_len, prog_crc) = if len >= Self::PAYLOAD_LEN {
+            let pl = u16::from_le_bytes([p[offset], p[offset + 1]]);
+            let pc = u16::from_le_bytes([p[offset + 2], p[offset + 3]]);
+            (pl, pc)
+        } else {
+            (0, 0)
+        };
+
         Ok(Self {
             running,
             scan_count,
@@ -110,6 +134,8 @@ impl PlcStatusSnapshot {
             timer_cv,
             counter_cv,
             data_reg,
+            prog_len,
+            prog_crc,
         })
     }
 }
@@ -169,6 +195,60 @@ pub enum VmOpcode {
 }
 
 impl VmOpcode {
+    pub fn from_u8(val: u8) -> Option<Self> {
+        match val {
+            0x00 => Some(Self::Nop),
+            0x01 => Some(Self::Ld),
+            0x02 => Some(Self::Ldn),
+            0x03 => Some(Self::And),
+            0x04 => Some(Self::Andn),
+            0x05 => Some(Self::Or),
+            0x06 => Some(Self::Orn),
+            0x07 => Some(Self::St),
+            0x08 => Some(Self::Stn),
+            0x09 => Some(Self::S),
+            0x0A => Some(Self::R),
+            0x0B => Some(Self::Ldp),
+            0x0C => Some(Self::Ldf),
+            0x0D => Some(Self::Andp),
+            0x0E => Some(Self::Andf),
+            0x0F => Some(Self::Orp),
+            0x10 => Some(Self::AndLp),
+            0x11 => Some(Self::OrLp),
+            0x12 => Some(Self::Rp),
+            0x13 => Some(Self::Orf),
+            0x14 => Some(Self::Stp),
+            0x15 => Some(Self::Stf),
+            0x16 => Some(Self::RTrig),
+            0x17 => Some(Self::FTrig),
+            0x18 => Some(Self::Sr),
+            0x19 => Some(Self::Rs),
+            0x1A => Some(Self::Mc),
+            0x20 => Some(Self::Ton),
+            0x21 => Some(Self::Ctu),
+            0x22 => Some(Self::Tof),
+            0x23 => Some(Self::Tp),
+            0x24 => Some(Self::Ctd),
+            0x25 => Some(Self::Ctud),
+            0x30 => Some(Self::Eq),
+            0x31 => Some(Self::Ne),
+            0x32 => Some(Self::Gt),
+            0x33 => Some(Self::Lt),
+            0x34 => Some(Self::Ge),
+            0x35 => Some(Self::Le),
+            0x40 => Some(Self::Move),
+            0x41 => Some(Self::Add),
+            0x42 => Some(Self::Sub),
+            0x43 => Some(Self::Mul),
+            0x44 => Some(Self::Div),
+            0x45 => Some(Self::Mod),
+            0x50 => Some(Self::Jmpc),
+            0x51 => Some(Self::Lbl),
+            0xFF => Some(Self::End),
+            _ => None,
+        }
+    }
+
     pub fn mnemonic(&self) -> &'static str {
         match self {
             Self::Nop => "NOP",
@@ -393,6 +473,28 @@ impl BytecodeProgram {
         crc
     }
 
+    /// Calculate CRC-16/CCITT-FALSE (polynomial 0x1021, init 0xFFFF) over raw bytecode bytes
+    pub fn compute_crc16(data: &[u8]) -> u16 {
+        let mut crc: u16 = 0xFFFF;
+        for &byte in data {
+            crc ^= (byte as u16) << 8;
+            for _ in 0..8 {
+                if (crc & 0x8000) != 0 {
+                    crc = (crc << 1) ^ 0x1021;
+                } else {
+                    crc <<= 1;
+                }
+            }
+        }
+        crc
+    }
+
+    /// Return the deterministic Bytecode Program Signature `(prog_len: u16, prog_crc: u16)`
+    pub fn program_signature(&self) -> (u16, u16) {
+        let raw = self.to_raw_bytes();
+        (self.instructions.len() as u16, Self::compute_crc16(&raw))
+    }
+
     /// Build a complete Serial/UART Packet Frame:
     /// `[SOF (0xAA)] [CMD (1B)] [LEN_LO (1B)] [LEN_HI (1B)] [PAYLOAD] [CRC8 (1B)]`
     pub fn to_serial_packet(&self, cmd: PlcSerialCommand) -> Vec<u8> {
@@ -401,6 +503,7 @@ impl BytecodeProgram {
             PlcSerialCommand::RunStopControl => (0x02u8, vec![0x01u8]),
             PlcSerialCommand::StopPlc => (0x02u8, vec![0x00u8]),
             PlcSerialCommand::MonitorStatus => (0x03u8, Vec::new()),
+            PlcSerialCommand::UploadProgram => (0x04u8, Vec::new()),
         };
         let len = (payload.len() as u16).to_le_bytes();
         let mut packet = Vec::with_capacity(5 + payload.len());
@@ -413,6 +516,309 @@ impl BytecodeProgram {
         let crc = Self::compute_crc8(&packet[1..]);
         packet.push(crc);
         packet
+    }
+
+    /// Decode raw 32-bit aligned bytecode payload bytes (`4 * N` bytes) into a `BytecodeProgram`
+    pub fn from_raw_bytes(payload: &[u8], hardware: &str) -> Result<Self, String> {
+        if payload.len() % 4 != 0 {
+            return Err("Payload size must be a multiple of 4 bytes".to_string());
+        }
+        let count = payload.len() / 4;
+        let mut instructions = Vec::with_capacity(count);
+        let mut mem_table: HashMap<(u8, bool), MemoryMapEntry> = HashMap::new();
+
+        for (i, chunk) in payload.chunks_exact(4).enumerate() {
+            let op_byte = chunk[0];
+            let addr = chunk[1];
+            let imm = u16::from_le_bytes([chunk[2], chunk[3]]);
+
+            let op = VmOpcode::from_u8(op_byte)
+                .ok_or_else(|| format!("Unknown VM opcode 0x{:02X} at instruction {}", op_byte, i))?;
+
+            let for_word = match op {
+                VmOpcode::Eq
+                | VmOpcode::Ne
+                | VmOpcode::Gt
+                | VmOpcode::Lt
+                | VmOpcode::Ge
+                | VmOpcode::Le
+                | VmOpcode::Move
+                | VmOpcode::Add
+                | VmOpcode::Sub
+                | VmOpcode::Mul
+                | VmOpcode::Div
+                | VmOpcode::Mod => true,
+                _ => false,
+            };
+
+            let (canonical, iec_addr, region) = BytecodeCompiler::format_address(addr, for_word);
+
+            let il_source = match op {
+                VmOpcode::Nop => "NOP".to_string(),
+                VmOpcode::End => "END".to_string(),
+                VmOpcode::AndLp => "AND(".to_string(),
+                VmOpcode::OrLp => "OR(".to_string(),
+                VmOpcode::Rp => ")".to_string(),
+                VmOpcode::Ton => format!("TON {}, {}", canonical, imm),
+                VmOpcode::Tof => format!("TOF {}, {}", canonical, imm),
+                VmOpcode::Tp => format!("TP {}, {}", canonical, imm),
+                VmOpcode::Ctu => format!("CTU {}, {}", canonical, imm),
+                VmOpcode::Ctd => format!("CD {}, {}", canonical, imm),
+                VmOpcode::Ctud => format!("CTUD {}, {}", canonical, imm),
+                VmOpcode::Eq
+                | VmOpcode::Ne
+                | VmOpcode::Gt
+                | VmOpcode::Lt
+                | VmOpcode::Ge
+                | VmOpcode::Le
+                | VmOpcode::Move
+                | VmOpcode::Add
+                | VmOpcode::Sub
+                | VmOpcode::Mul
+                | VmOpcode::Div
+                | VmOpcode::Mod => format!("{} {} {}", op.mnemonic(), canonical, imm),
+                VmOpcode::Jmpc => format!("JMPC {}", imm),
+                VmOpcode::Lbl => format!("LBL {}", addr),
+                _ => format!("{} {}", op.mnemonic(), canonical),
+            };
+
+            if region != MemoryRegion::None {
+                mem_table.entry((addr, for_word)).or_insert_with(|| MemoryMapEntry {
+                    addr,
+                    canonical_name: canonical.clone(),
+                    iec_address: iec_addr,
+                    symbol: String::new(),
+                    region,
+                    hw_pin: String::new(),
+                });
+            }
+
+            instructions.push(BytecodeInstruction {
+                pc: i as u16,
+                op,
+                addr,
+                imm,
+                region,
+                operand_name: canonical,
+                symbol: String::new(),
+                il_source,
+            });
+        }
+
+        let mut memory_map: Vec<MemoryMapEntry> = mem_table.into_values().collect();
+        memory_map.sort_by_key(|e| (BytecodeCompiler::region_sort_order(e.region), e.addr));
+
+        Ok(Self {
+            hardware: hardware.to_string(),
+            instructions,
+            memory_map,
+        })
+    }
+
+    /// Parse a complete response frame (`SOF 0xAA | CMD 0x84 | LEN | PAYLOAD | CRC8`)
+    pub fn parse_upload_packet(packet: &[u8], hardware: &str) -> Result<Self, String> {
+        if packet.len() < 5 {
+            return Err("Packet too short (minimum 5 bytes)".to_string());
+        }
+        if packet[0] != PACKET_SOF {
+            return Err("Invalid SOF byte (expected 0xAA)".to_string());
+        }
+        if packet[1] != 0x84 {
+            return Err(format!(
+                "Unexpected command ID 0x{:02X} (expected 0x84)",
+                packet[1]
+            ));
+        }
+        let payload_len = u16::from_le_bytes([packet[2], packet[3]]) as usize;
+        if packet.len() < 5 + payload_len {
+            return Err(format!(
+                "Incomplete upload packet frame: expected {} bytes, got {}",
+                5 + payload_len,
+                packet.len()
+            ));
+        }
+        let expected_crc = packet[4 + payload_len];
+        let actual_crc = Self::compute_crc8(&packet[1..4 + payload_len]);
+        if actual_crc != expected_crc {
+            return Err(format!(
+                "CRC8 checksum error: computed 0x{:02X}, received 0x{:02X}",
+                actual_crc, expected_crc
+            ));
+        }
+
+        Self::from_raw_bytes(&packet[4..4 + payload_len], hardware)
+    }
+
+    /// Decompile the bytecode instructions back into IEC 61131-3 Instruction List (IL) standard text
+    pub fn decompile_to_il(&self) -> String {
+        let mut out = String::new();
+        out.push_str("(* ==================================================================== *)\n");
+        out.push_str("(* IEC 61131-3 IL Program (Decompiled from PLC Micro-VM Bytecode)        *)\n");
+        out.push_str(&format!("(* Target Hardware: {:<51} *)\n", self.hardware));
+        out.push_str("(* Generated by uPLC Studio Bytecode Decompiler                         *)\n");
+        out.push_str("(* ==================================================================== *)\n\n");
+        out.push_str("PROGRAM MainProgram\n");
+
+        // Emit VAR table from memory_map
+        if !self.memory_map.is_empty() {
+            out.push_str("VAR\n");
+            for m in &self.memory_map {
+                match m.region {
+                    MemoryRegion::DigitalInputX => {
+                        out.push_str(&format!("    {} AT {} : BOOL;\n", m.canonical_name, m.iec_address));
+                    }
+                    MemoryRegion::DigitalOutputY => {
+                        out.push_str(&format!("    {} AT {} : BOOL;\n", m.canonical_name, m.iec_address));
+                    }
+                    MemoryRegion::InternalRelayM => {
+                        out.push_str(&format!("    {} AT {} : BOOL;\n", m.canonical_name, m.iec_address));
+                    }
+                    MemoryRegion::TimerT => {
+                        out.push_str(&format!("    {} : TON;\n", m.canonical_name));
+                    }
+                    MemoryRegion::CounterC => {
+                        out.push_str(&format!("    {} : CTU;\n", m.canonical_name));
+                    }
+                    MemoryRegion::DataRegisterD => {
+                        out.push_str(&format!("    {} AT {} : INT;\n", m.canonical_name, m.iec_address));
+                    }
+                    _ => {}
+                }
+            }
+            out.push_str("END_VAR\n\n");
+        }
+
+        // Decompile instructions into Networks / Rungs
+        let mut network_idx = 1;
+        let mut need_network_header = true;
+        let mut paren_depth: usize = 0;
+
+        for ins in &self.instructions {
+            if ins.op == VmOpcode::End {
+                break;
+            }
+
+            let is_lead_load = matches!(
+                ins.op,
+                VmOpcode::Ld | VmOpcode::Ldn | VmOpcode::Ldp | VmOpcode::Ldf
+            ) && paren_depth == 0;
+
+            if (is_lead_load || ins.op == VmOpcode::Lbl) && !need_network_header {
+                out.push('\n');
+                need_network_header = true;
+            }
+
+            if need_network_header {
+                out.push_str(&format!("(* Network {:02}: Auto-generated from PLC *)\n", network_idx));
+                network_idx += 1;
+                need_network_header = false;
+            }
+
+            let indent = if paren_depth > 0 && ins.op != VmOpcode::Rp && ins.op != VmOpcode::AndLp && ins.op != VmOpcode::OrLp {
+                "        "
+            } else {
+                "    "
+            };
+
+            match ins.op {
+                VmOpcode::Ld => out.push_str(&format!("{}LD   {}\n", indent, ins.operand_name)),
+                VmOpcode::Ldn => out.push_str(&format!("{}LDN  {}\n", indent, ins.operand_name)),
+                VmOpcode::Ldp => out.push_str(&format!("{}LDP  {}\n", indent, ins.operand_name)),
+                VmOpcode::Ldf => out.push_str(&format!("{}LDF  {}\n", indent, ins.operand_name)),
+                VmOpcode::And => out.push_str(&format!("{}AND  {}\n", indent, ins.operand_name)),
+                VmOpcode::Andn => out.push_str(&format!("{}ANDN {}\n", indent, ins.operand_name)),
+                VmOpcode::Andp => out.push_str(&format!("{}ANDP {}\n", indent, ins.operand_name)),
+                VmOpcode::Andf => out.push_str(&format!("{}ANDF {}\n", indent, ins.operand_name)),
+                VmOpcode::Or => out.push_str(&format!("{}OR   {}\n", indent, ins.operand_name)),
+                VmOpcode::Orn => out.push_str(&format!("{}ORN  {}\n", indent, ins.operand_name)),
+                VmOpcode::Orp => out.push_str(&format!("{}ORP  {}\n", indent, ins.operand_name)),
+                VmOpcode::Orf => out.push_str(&format!("{}ORF  {}\n", indent, ins.operand_name)),
+                VmOpcode::OrLp => {
+                    out.push_str("    OR(\n");
+                    paren_depth += 1;
+                }
+                VmOpcode::AndLp => {
+                    out.push_str("    AND(\n");
+                    paren_depth += 1;
+                }
+                VmOpcode::Rp => {
+                    paren_depth = paren_depth.saturating_sub(1);
+                    out.push_str("    )\n");
+                }
+                VmOpcode::St => {
+                    out.push_str(&format!("{}ST   {}\n", indent, ins.operand_name));
+                }
+                VmOpcode::Stn => {
+                    out.push_str(&format!("{}STN  {}\n", indent, ins.operand_name));
+                }
+                VmOpcode::S => {
+                    out.push_str(&format!("{}S    {}\n", indent, ins.operand_name));
+                }
+                VmOpcode::R => {
+                    out.push_str(&format!("{}R    {}\n", indent, ins.operand_name));
+                }
+                VmOpcode::Ton => {
+                    out.push_str(&format!("{}CAL  {}(IN := TRUE, PT := T#{}ms)\n", indent, ins.operand_name, ins.imm));
+                }
+                VmOpcode::Tof => {
+                    out.push_str(&format!("{}CAL  {}(IN := FALSE, PT := T#{}ms)\n", indent, ins.operand_name, ins.imm));
+                }
+                VmOpcode::Tp => {
+                    out.push_str(&format!("{}CAL  {}(IN := TRUE, PT := T#{}ms)\n", indent, ins.operand_name, ins.imm));
+                }
+                VmOpcode::Ctu => {
+                    out.push_str(&format!("{}CAL  {}(CU := TRUE, PV := {})\n", indent, ins.operand_name, ins.imm));
+                }
+                VmOpcode::Ctd => {
+                    out.push_str(&format!("{}CAL  {}(CD := TRUE, PV := {})\n", indent, ins.operand_name, ins.imm));
+                }
+                VmOpcode::Ctud => {
+                    out.push_str(&format!("{}CAL  {}(CU := TRUE, PV := {})\n", indent, ins.operand_name, ins.imm));
+                }
+                VmOpcode::Eq => out.push_str(&format!("{}EQ   {} {}\n", indent, ins.operand_name, ins.imm)),
+                VmOpcode::Ne => out.push_str(&format!("{}NE   {} {}\n", indent, ins.operand_name, ins.imm)),
+                VmOpcode::Gt => out.push_str(&format!("{}GT   {} {}\n", indent, ins.operand_name, ins.imm)),
+                VmOpcode::Lt => out.push_str(&format!("{}LT   {} {}\n", indent, ins.operand_name, ins.imm)),
+                VmOpcode::Ge => out.push_str(&format!("{}GE   {} {}\n", indent, ins.operand_name, ins.imm)),
+                VmOpcode::Le => out.push_str(&format!("{}LE   {} {}\n", indent, ins.operand_name, ins.imm)),
+                VmOpcode::Move => {
+                    out.push_str(&format!("{}MOVE {} {}\n", indent, ins.operand_name, ins.imm));
+                }
+                VmOpcode::Add => {
+                    out.push_str(&format!("{}ADD  {} {}\n", indent, ins.operand_name, ins.imm));
+                }
+                VmOpcode::Sub => {
+                    out.push_str(&format!("{}SUB  {} {}\n", indent, ins.operand_name, ins.imm));
+                }
+                VmOpcode::Mul => {
+                    out.push_str(&format!("{}MUL  {} {}\n", indent, ins.operand_name, ins.imm));
+                }
+                VmOpcode::Div => {
+                    out.push_str(&format!("{}DIV  {} {}\n", indent, ins.operand_name, ins.imm));
+                }
+                VmOpcode::Mod => {
+                    out.push_str(&format!("{}MOD  {} {}\n", indent, ins.operand_name, ins.imm));
+                }
+                VmOpcode::Jmpc => {
+                    out.push_str(&format!("{}JMPC LBL_{}\n", indent, ins.imm));
+                }
+                VmOpcode::Lbl => {
+                    out.push_str(&format!("LBL_{}:\n", ins.addr));
+                }
+                _ => {}
+            }
+        }
+
+        out.push_str("\nEND_PROGRAM\n");
+        out
+    }
+
+    /// Decompile the bytecode directly back into a full `LadderProgram` (Rungs and Elements)
+    pub fn decompile_to_ladder(&self) -> Result<LadderProgram, String> {
+        let il_code = self.decompile_to_il();
+        let mut prog = IlParser::parse(&il_code)?;
+        prog.hardware = self.hardware.clone();
+        Ok(prog)
     }
 
     /// Format the complete Serial Packet as a hex string
@@ -471,6 +877,49 @@ impl BytecodeProgram {
 pub struct BytecodeCompiler;
 
 impl BytecodeCompiler {
+    /// Format raw memory address into standard canonical name, IEC 61131-3 address, and MemoryRegion
+    pub fn format_address(addr: u8, for_word_op: bool) -> (String, String, MemoryRegion) {
+        if for_word_op {
+            if addr < 0x10 {
+                (format!("AI{}", addr), format!("%IW{}", addr), MemoryRegion::AnalogInputAI)
+            } else if addr < 0x20 {
+                let idx = addr - 0x10;
+                (format!("AO{}", idx), format!("%QW{}", idx), MemoryRegion::AnalogOutputAO)
+            } else if addr < 0xC0 {
+                let idx = addr - 0x20;
+                (format!("D{}", idx), format!("%MW{}", idx), MemoryRegion::DataRegisterD)
+            } else if addr < 0xE0 {
+                let idx = addr - 0xC0;
+                (format!("T{}", idx), format!("%TM{}", idx), MemoryRegion::TimerT)
+            } else {
+                let idx = addr - 0xE0;
+                (format!("C{}", idx), format!("%CT{}", idx), MemoryRegion::CounterC)
+            }
+        } else {
+            if addr < 0x20 {
+                let byte = addr / 8;
+                let bit = addr % 8;
+                (format!("X{}", addr), format!("%IX{}.{}", byte, bit), MemoryRegion::DigitalInputX)
+            } else if addr < 0x40 {
+                let idx = addr - 0x20;
+                let byte = idx / 8;
+                let bit = idx % 8;
+                (format!("Y{}", idx), format!("%QX{}.{}", byte, bit), MemoryRegion::DigitalOutputY)
+            } else if addr < 0xC0 {
+                let idx = addr - 0x40;
+                let byte = idx / 8;
+                let bit = idx % 8;
+                (format!("M{}", idx), format!("%MX{}.{}", byte, bit), MemoryRegion::InternalRelayM)
+            } else if addr < 0xE0 {
+                let idx = addr - 0xC0;
+                (format!("T{}", idx), format!("%TM{}", idx), MemoryRegion::TimerT)
+            } else {
+                let idx = addr - 0xE0;
+                (format!("C{}", idx), format!("%CT{}", idx), MemoryRegion::CounterC)
+            }
+        }
+    }
+
     /// Resolve any operand string (`"X0"`, `"%IX0.0"`, `"Y1"`, `"%QX0.1"`, `"M0"`, `"T0"`, `"C0"`, `"D0"`, or symbol)
     /// into `(addr: u8, canonical_name: String, region: MemoryRegion, symbol: String, hw_pin: String)`
     pub fn resolve_address(
@@ -1239,6 +1688,9 @@ END_PROGRAM
         let mut data_reg = [0i32; 16];
         data_reg[0] = 42; // %MW0 = 42
 
+        let bc = doc.compile_to_bytecode();
+        let (expected_prog_len, expected_prog_crc) = bc.program_signature();
+
         let snap = PlcStatusSnapshot {
             running: true,
             scan_count: 12345,
@@ -1248,10 +1700,12 @@ END_PROGRAM
             timer_cv,
             counter_cv: [0i32; 16],
             data_reg,
+            prog_len: expected_prog_len,
+            prog_crc: expected_prog_crc,
         };
 
-        // Round-trip serialize + parse 463-byte packet
-        let mut payload = [0u8; 458];
+        // Round-trip serialize + parse 467-byte packet (462-byte payload with prog_len + prog_crc)
+        let mut payload = [0u8; 462];
         payload[0] = u8::from(snap.running);
         payload[1..5].copy_from_slice(&snap.scan_count.to_le_bytes());
         payload[5] = u8::from(snap.acc_bool);
@@ -1269,10 +1723,13 @@ END_PROGRAM
             let off = 394 + i * 4;
             payload[off..off + 4].copy_from_slice(&snap.data_reg[i].to_le_bytes());
         }
-        let mut packet = Vec::with_capacity(463);
+        payload[458..460].copy_from_slice(&snap.prog_len.to_le_bytes());
+        payload[460..462].copy_from_slice(&snap.prog_crc.to_le_bytes());
+
+        let mut packet = Vec::with_capacity(467);
         packet.push(0xAA);
         packet.push(0x83);
-        packet.extend_from_slice(&458u16.to_le_bytes());
+        packet.extend_from_slice(&462u16.to_le_bytes());
         packet.extend_from_slice(&payload);
         let crc = BytecodeProgram::compute_crc8(&packet[1..]);
         packet.push(crc);
@@ -1282,6 +1739,9 @@ END_PROGRAM
         assert!(parsed.running);
         assert!(parsed.acc_bool);
         assert_eq!(parsed.acc_word, 320);
+        assert_eq!(parsed.prog_len, expected_prog_len);
+        assert_eq!(parsed.prog_crc, expected_prog_crc);
+        assert!(parsed.matches_program(&bc), "Snapshot signature should match compiled program");
 
         // Apply snapshot to document
         doc.apply_online_snapshot(&parsed);
@@ -1319,6 +1779,75 @@ END_PROGRAM
         let online_il = doc.generate_il_code_online();
         assert!(online_il.contains("ACC="));
         assert!(online_il.contains("ET=320ms/500ms"));
+    }
+
+    #[test]
+    fn test_bytecode_decompile_to_ladder_and_packet_upload() {
+        let prog = LadderProgram::new_demo_program();
+        let bc = BytecodeCompiler::compile_program(&prog);
+        assert!(!bc.instructions.is_empty());
+
+        // 1. Emulate PLC responding with CMD 0x84 packet containing raw bytecode
+        let raw_bytes = bc.to_raw_bytes();
+        let payload_len = raw_bytes.len();
+        let mut upload_frame = Vec::new();
+        upload_frame.push(PACKET_SOF); // 0xAA
+        upload_frame.push(0x84);       // CMD_UPLOAD_PROGRAM_RESPONSE
+        let [l_lo, l_hi] = (payload_len as u16).to_le_bytes();
+        upload_frame.push(l_lo);
+        upload_frame.push(l_hi);
+        upload_frame.extend_from_slice(&raw_bytes);
+        let crc = BytecodeProgram::compute_crc8(&upload_frame[1..]);
+        upload_frame.push(crc);
+
+        // 2. Parse upload frame on IDE side
+        let uploaded_bc = BytecodeProgram::parse_upload_packet(&upload_frame, &prog.hardware).unwrap();
+        assert_eq!(uploaded_bc.instructions.len(), bc.instructions.len());
+        assert_eq!(uploaded_bc.to_raw_bytes(), raw_bytes);
+
+        // 3. Decompile back into a LadderProgram
+        let decompiled_ladder = uploaded_bc.decompile_to_ladder().unwrap();
+        assert!(!decompiled_ladder.rungs.is_empty());
+        assert_eq!(decompiled_ladder.hardware, prog.hardware);
+
+        // Verify Network 01: Has start/stop logic with contacts and output coil
+        let r0 = &decompiled_ladder.rungs[0];
+        assert!(r0.elements.iter().any(|e| e.element_type == TypeTag::Coil));
+        assert!(r0.elements.iter().any(|e| e.element_type == TypeTag::Contact || e.element_type == TypeTag::Branch));
+    }
+
+    #[test]
+    fn test_rp2040_demo_led_blink_decompile_recompile_signature_match() {
+        let il = include_str!("../../../example/08_rp2040_demo_led_blink.il");
+        let mut doc = crate::Document::default();
+        doc.load_from_il_str(il).expect("Should load 08_rp2040_demo_led_blink.il");
+        let bc = doc.compile_to_bytecode();
+        let decompiled_prog = bc.decompile_to_ladder().unwrap();
+        let recompiled_bc = BytecodeCompiler::compile_program(&decompiled_prog);
+        println!("Original BC len={}, crc=0x{:04X}", bc.instructions.len(), bc.program_signature().1);
+        println!("Recompiled BC len={}, crc=0x{:04X}", recompiled_bc.instructions.len(), recompiled_bc.program_signature().1);
+        for (i, ins) in bc.instructions.iter().enumerate() {
+            let re_ins = recompiled_bc.instructions.get(i);
+            println!("  [{:02}] Orig: {:?} {} {} | Re: {:?}", i, ins.op, ins.operand_name, ins.imm, re_ins.map(|r| (r.op, &r.operand_name, r.imm)));
+        }
+        if recompiled_bc.instructions.len() > bc.instructions.len() {
+            for i in bc.instructions.len()..recompiled_bc.instructions.len() {
+                let re_ins = &recompiled_bc.instructions[i];
+                println!("  [{:02}] Extra Re: {:?} {} {}", i, re_ins.op, re_ins.operand_name, re_ins.imm);
+            }
+        }
+        assert_eq!(bc.program_signature(), recompiled_bc.program_signature());
+
+        // Also verify end-to-end through raw upload packet serialization
+        let mut upload_frame = vec![0xAA, 0x84, 64, 0];
+        upload_frame.extend_from_slice(&bc.to_raw_bytes());
+        let crc = BytecodeProgram::compute_crc8(&upload_frame[1..]);
+        upload_frame.push(crc);
+
+        let uploaded_bc = BytecodeProgram::parse_upload_packet(&upload_frame, "Raspberry Pi Pico (RP2040)").unwrap();
+        let decompiled_uploaded = uploaded_bc.decompile_to_ladder().unwrap();
+        let recompiled_uploaded_bc = BytecodeCompiler::compile_program(&decompiled_uploaded);
+        assert_eq!(recompiled_uploaded_bc.program_signature(), (16, 0xD7F1));
     }
 }
 

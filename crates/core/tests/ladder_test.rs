@@ -1384,4 +1384,57 @@ fn test_online_monitoring_snapshot_and_conduction() {
     assert!(!doc.program.rungs[0].elements[0].is_done, "Contact X0 should be OPEN");
 }
 
+#[test]
+fn test_online_monitoring_code_mismatch_suppresses_conduction() {
+    let mut doc = Document::default();
+    doc.program = LadderProgram::new_empty();
+    doc.program.rungs.clear();
+
+    // Rung 0: LD X0 -> ST Y0
+    let mut r0 = my_canvas_core::Rung::new(1);
+    r0.elements.push(LadderElement::new_contact(1, "X0", "%IX0.0", ContactMode::NormallyOpen));
+    r0.elements.push(LadderElement::new_coil(2, "Y0", "%QX0.0", CoilMode::Normal));
+    doc.program.rungs.push(r0);
+
+    // Initial state: not energized
+    assert!(!doc.simulator.is_active());
+
+    // 1. Simulate matching snapshot: X0 = 1, Y0 = 1
+    let mut snapshot = my_canvas_core::PlcStatusSnapshot::default();
+    snapshot.running = true;
+    snapshot.bit_mem[0] = 1;
+    snapshot.bit_mem[0x20] = 1;
+
+    let bc = doc.compile_to_bytecode();
+    let (prog_len, prog_crc) = bc.program_signature();
+    snapshot.prog_len = prog_len;
+    snapshot.prog_crc = prog_crc;
+    assert!(snapshot.matches_program(&bc));
+
+    // When matched: live monitoring is active
+    doc.set_online_mode(true);
+    doc.apply_online_snapshot(&snapshot);
+    assert!(doc.simulator.is_active());
+    assert!(doc.program.rungs[0].is_energized);
+    assert!(doc.program.rungs[0].elements[0].is_done);
+
+    // 2. Now simulate CODE MISMATCH (e.g. PLC runs a different program with different CRC16)
+    snapshot.prog_crc ^= 0x1234;
+    assert!(!snapshot.matches_program(&bc), "Snapshot must report code mismatch");
+
+    // When mismatched: simulation / conduction MUST NOT be shown
+    let is_matched = snapshot.matches_program(&bc);
+    if !is_matched {
+        doc.set_online_mode(false);
+        doc.clear_conduction();
+    }
+
+    assert!(!doc.simulator.is_active(), "Simulator should NOT be active on code mismatch");
+    assert!(!doc.program.rungs[0].is_energized, "Rung should NOT be energized");
+    assert!(!doc.program.rungs[0].elements[0].is_energized, "Contact should NOT be energized");
+    assert!(!doc.program.rungs[0].elements[0].is_done, "Contact done flag should be cleared");
+    assert!(!doc.program.rungs[0].elements[1].is_energized, "Coil should NOT be energized");
+    assert!(!doc.program.rungs[0].elements[1].is_done, "Coil done flag should be cleared");
+}
+
 

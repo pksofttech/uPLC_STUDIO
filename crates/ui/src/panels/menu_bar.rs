@@ -103,6 +103,10 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 }
                 ui.close();
             }
+            if ui.button("📥 Upload Program from Connected PLC...").clicked() {
+                app.transmit_bytecode_to_plc(my_canvas_core::PlcSerialCommand::UploadProgram);
+                ui.close();
+            }
             if ui.button("Save As (.json)...").clicked() {
                 if let Some(path) = rfd::FileDialog::new()
                     .add_filter("uPLC JSON Project (*.json)", &["json"])

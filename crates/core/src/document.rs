@@ -336,9 +336,13 @@ impl Document {
         self.simulator.evaluate_conduction_only(&mut self.program);
     }
 
-    /// Capture status snapshot from current document/simulator state
+    /// Capture status snapshot from current document/simulator state (including Bytecode signature)
     pub fn capture_status_snapshot(&self) -> PlcStatusSnapshot {
-        self.simulator.capture_status_snapshot()
+        let mut snap = self.simulator.capture_status_snapshot();
+        let (prog_len, prog_crc) = self.compile_to_bytecode().program_signature();
+        snap.prog_len = prog_len;
+        snap.prog_crc = prog_crc;
+        snap
     }
 
     /// Enable or disable Online Monitoring mode
@@ -348,20 +352,13 @@ impl Document {
             self.simulator.evaluate_conduction_only(&mut self.program);
         } else if self.simulator.is_stopped() {
             // Clear energized states if not simulating
-            for rung in &mut self.program.rungs {
-                rung.is_energized = false;
-                for elem in &mut rung.elements {
-                    elem.is_energized = false;
-                    elem.is_done = false;
-                    for path in &mut elem.branch_paths {
-                        for sub in path {
-                            sub.is_energized = false;
-                            sub.is_done = false;
-                        }
-                    }
-                }
-            }
+            self.clear_conduction();
         }
+    }
+
+    /// Clear visual power flow and de-energize all elements on the canvas
+    pub fn clear_conduction(&mut self) {
+        self.simulator.clear_conduction(&mut self.program);
     }
 
     pub fn selected_rung_mut(&mut self) -> Option<&mut Rung> {

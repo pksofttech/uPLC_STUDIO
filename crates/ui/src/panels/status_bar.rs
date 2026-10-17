@@ -17,11 +17,35 @@ pub fn render(ui: &mut Ui, app: &CanvasApp) {
         // 2. Online Monitoring / Simulation Status
         if app.online_mode {
             let target = if app.online_target_hw { "HW MCU" } else { "SIM" };
-            ui.label(
-                RichText::new(format!("🟢 ONLINE MONITORING ({})", target))
-                    .color(palette.accent_ok)
-                    .strong(),
-            );
+            match app.online_program_match_info() {
+                Some((true, _, ide_crc, _, _)) => {
+                    ui.label(
+                        RichText::new(format!(
+                            "🟢 ONLINE ({}) ✔ CODE MATCH [0x{:04X}]",
+                            target, ide_crc
+                        ))
+                        .color(palette.accent_ok)
+                        .strong(),
+                    );
+                }
+                Some((false, _, ide_crc, _, plc_crc)) => {
+                    ui.label(
+                        RichText::new(format!(
+                            "⚠ ONLINE ({}) CODE MISMATCH [IDE:0x{:04X} ≠ PLC:0x{:04X}]",
+                            target, ide_crc, plc_crc
+                        ))
+                        .color(palette.accent_warn)
+                        .strong(),
+                    );
+                }
+                None => {
+                    ui.label(
+                        RichText::new(format!("🟢 ONLINE MONITORING ({})", target))
+                            .color(palette.accent_ok)
+                            .strong(),
+                    );
+                }
+            }
         } else {
             match app.doc.simulator.state {
                 SimState::Running => {
@@ -51,21 +75,33 @@ pub fn render(ui: &mut Ui, app: &CanvasApp) {
         ui.label(format!("Port: {} @ {} bps", app.com_port, app.baud_rate));
         ui.separator();
 
-        ui.label(format!(
-            "Scans: {} | Cycle: {}ms",
-            app.doc.simulator.scan_count, app.doc.simulator.cycle_time_ms
-        ));
+        let (scan_cnt, cycle_ms) = if app.online_mode && app.online_target_hw {
+            let sc = app.latest_snapshot.as_ref().map_or(0, |s| s.scan_count as u64);
+            (sc, 1u32) // Deterministic 1ms scan cycle on RP2040 hardware
+        } else {
+            (app.doc.simulator.scan_count, app.doc.simulator.cycle_time_ms)
+        };
+        ui.label(format!("Scans: {} | Cycle: {}ms", scan_cnt, cycle_ms));
 
         if app.online_mode || app.doc.simulator.is_active() {
             ui.separator();
+            let (acc_b, acc_w) = if app.online_mode && app.online_target_hw {
+                if let Some(snap) = app.latest_snapshot.as_ref() {
+                    (snap.acc_bool, snap.acc_word)
+                } else {
+                    (false, 0)
+                }
+            } else {
+                (app.doc.simulator.acc_bool, app.doc.simulator.acc_word)
+            };
             ui.label(
                 RichText::new(format!(
                     "ACC: Bit={} | Word={}",
-                    u8::from(app.doc.simulator.acc_bool),
-                    app.doc.simulator.acc_word
+                    u8::from(acc_b),
+                    acc_w
                 ))
                 .monospace()
-                .color(if app.doc.simulator.acc_bool {
+                .color(if acc_b {
                     palette.accent_ok
                 } else {
                     palette.accent_heading

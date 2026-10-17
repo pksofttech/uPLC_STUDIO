@@ -1286,13 +1286,23 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette) {
                             .color(palette.accent_heading),
                     );
                     if app.online_mode {
+                        let is_matched = app.online_program_match_info().map_or(true, |(m, _, _, _, _)| m);
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(
-                                RichText::new("🟢 LIVE")
-                                    .size(10.0)
-                                    .strong()
-                                    .color(palette.accent_ok),
-                            );
+                            if app.online_target_hw && !is_matched {
+                                ui.label(
+                                    RichText::new("⚠ MISMATCH (PAUSED)")
+                                        .size(10.0)
+                                        .strong()
+                                        .color(palette.accent_warn),
+                                );
+                            } else {
+                                ui.label(
+                                    RichText::new("🟢 LIVE")
+                                        .size(10.0)
+                                        .strong()
+                                        .color(palette.accent_ok),
+                                );
+                            }
                         });
                     }
                 });

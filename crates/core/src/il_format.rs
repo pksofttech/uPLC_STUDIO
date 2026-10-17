@@ -409,8 +409,19 @@ impl IlParser {
         let mut in_var_section = false;
         let mut current_rung_comment = String::new();
         let mut current_rung_elements: Vec<LadderElement> = Vec::new();
-        let mut in_or_paren = false;
-        let mut or_paren_elements: Vec<LadderElement> = Vec::new();
+
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        enum ParenKind {
+            Or,
+            And,
+        }
+
+        struct ParenFrame {
+            kind: ParenKind,
+            elements: Vec<LadderElement>,
+        }
+
+        let mut paren_stack: Vec<ParenFrame> = Vec::new();
 
         while i < lines.len() {
             let raw_line = lines[i];
@@ -463,6 +474,7 @@ impl IlParser {
                     });
                     current_rung_elements.clear();
                     current_rung_comment.clear();
+                    paren_stack.clear();
                 }
                 break;
             }
@@ -488,6 +500,7 @@ impl IlParser {
                     });
                     current_rung_elements.clear();
                     current_rung_comment.clear();
+                    paren_stack.clear();
                 }
 
                 let comment_text = if let Some(colon_pos) = line.find(':') {
@@ -506,32 +519,6 @@ impl IlParser {
                 continue;
             }
 
-            if line == ")" {
-                if in_or_paren {
-                    in_or_paren = false;
-                    if !or_paren_elements.is_empty() {
-                        let path = std::mem::take(&mut or_paren_elements);
-                        if let Some(last) = current_rung_elements.last_mut() {
-                            if last.element_type == TypeTag::Branch {
-                                last.branch_paths.push(path);
-                            } else {
-                                let prev = current_rung_elements.pop().unwrap();
-                                next_id += 1;
-                                current_rung_elements.push(LadderElement::new_branch(
-                                    next_id,
-                                    vec![vec![prev], path],
-                                ));
-                            }
-                        } else {
-                            next_id += 1;
-                            current_rung_elements.push(LadderElement::new_branch(next_id, vec![path]));
-                        }
-                    }
-                }
-                i += 1;
-                continue;
-            }
-
             let clean_line = if let Some(idx) = line.find("(*") {
                 line[..idx].trim()
             } else if let Some(idx) = line.find("//") {
@@ -545,44 +532,106 @@ impl IlParser {
                 continue;
             }
 
-            if clean_line.starts_with("OR(") {
-                in_or_paren = true;
-                or_paren_elements.clear();
-                let rest = clean_line.strip_prefix("OR(").unwrap_or("").trim();
-                if !rest.is_empty() {
-                    if let Some(el) = Self::parse_il_instruction(rest, &mut next_id, &fb_presets) {
-                        or_paren_elements.push(el);
+            if clean_line == ")" {
+                if let Some(frame) = paren_stack.pop() {
+                    let child_elements = frame.elements;
+                    if !child_elements.is_empty() {
+                        let target_elements = if let Some(parent) = paren_stack.last_mut() {
+                            &mut parent.elements
+                        } else {
+                            &mut current_rung_elements
+                        };
+
+                        match frame.kind {
+                            ParenKind::And => {
+                                target_elements.extend(child_elements);
+                            }
+                            ParenKind::Or => {
+                                if let Some(last) = target_elements.last_mut() {
+                                    if last.element_type == TypeTag::Branch {
+                                        last.branch_paths.push(child_elements);
+                                    } else {
+                                        let prev = target_elements.pop().unwrap();
+                                        next_id += 1;
+                                        target_elements.push(LadderElement::new_branch(
+                                            next_id,
+                                            vec![vec![prev], child_elements],
+                                        ));
+                                    }
+                                } else {
+                                    next_id += 1;
+                                    target_elements.push(LadderElement::new_branch(
+                                        next_id,
+                                        vec![child_elements],
+                                    ));
+                                }
+                            }
+                        }
                     }
                 }
                 i += 1;
                 continue;
             }
 
+            if clean_line.starts_with("OR(") {
+                let rest = clean_line.strip_prefix("OR(").unwrap_or("").trim();
+                let mut frame_elements = Vec::new();
+                if !rest.is_empty() && rest != ")" {
+                    if let Some(el) = Self::parse_il_instruction(rest, &mut next_id, &fb_presets) {
+                        frame_elements.push(el);
+                    }
+                }
+                paren_stack.push(ParenFrame {
+                    kind: ParenKind::Or,
+                    elements: frame_elements,
+                });
+                i += 1;
+                continue;
+            }
+
+            if clean_line.starts_with("AND(") {
+                let rest = clean_line.strip_prefix("AND(").unwrap_or("").trim();
+                let mut frame_elements = Vec::new();
+                if !rest.is_empty() && rest != ")" {
+                    if let Some(el) = Self::parse_il_instruction(rest, &mut next_id, &fb_presets) {
+                        frame_elements.push(el);
+                    }
+                }
+                paren_stack.push(ParenFrame {
+                    kind: ParenKind::And,
+                    elements: frame_elements,
+                });
+                i += 1;
+                continue;
+            }
+
             if let Some(elem) = Self::parse_il_instruction(clean_line, &mut next_id, &fb_presets) {
-                if in_or_paren {
-                    or_paren_elements.push(elem);
+                let target_elements = if let Some(top) = paren_stack.last_mut() {
+                    &mut top.elements
                 } else {
-                    let is_or = clean_line.starts_with("OR ") || clean_line.starts_with("ORN ")
-                        || clean_line.starts_with("OR\t") || clean_line.starts_with("ORN\t");
-                    if is_or {
-                        if let Some(last) = current_rung_elements.last_mut() {
-                            if last.element_type == TypeTag::Branch {
-                                last.branch_paths.push(vec![elem]);
-                            } else {
-                                let prev = current_rung_elements.pop().unwrap();
-                                next_id += 1;
-                                current_rung_elements.push(LadderElement::new_branch(
-                                    next_id,
-                                    vec![vec![prev], vec![elem]],
-                                ));
-                            }
+                    &mut current_rung_elements
+                };
+
+                let is_or = clean_line.starts_with("OR ") || clean_line.starts_with("ORN ")
+                    || clean_line.starts_with("OR\t") || clean_line.starts_with("ORN\t");
+                if is_or {
+                    if let Some(last) = target_elements.last_mut() {
+                        if last.element_type == TypeTag::Branch {
+                            last.branch_paths.push(vec![elem]);
                         } else {
+                            let prev = target_elements.pop().unwrap();
                             next_id += 1;
-                            current_rung_elements.push(LadderElement::new_branch(next_id, vec![vec![elem]]));
+                            target_elements.push(LadderElement::new_branch(
+                                next_id,
+                                vec![vec![prev], vec![elem]],
+                            ));
                         }
                     } else {
-                        current_rung_elements.push(elem);
+                        next_id += 1;
+                        target_elements.push(LadderElement::new_branch(next_id, vec![vec![elem]]));
                     }
+                } else {
+                    target_elements.push(elem);
                 }
             }
 

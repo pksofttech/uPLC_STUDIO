@@ -29,7 +29,8 @@ use embassy_usb::class::cdc_acm::{CdcAcmClass, State as CdcAcmState};
 use embassy_usb::{Builder as UsbBuilder, Config as UsbConfig, UsbDevice};
 use static_cell::StaticCell;
 use uplc_vm::{
-    MicroVm, CMD_DOWNLOAD_PROGRAM, CMD_MONITOR_STATUS, CMD_RUN_STOP, MAX_INSTRUCTIONS, PACKET_SOF,
+    MicroVm, CMD_DOWNLOAD_PROGRAM, CMD_MONITOR_STATUS, CMD_RUN_STOP, CMD_UPLOAD_PROGRAM,
+    MAX_INSTRUCTIONS, PACKET_SOF,
 };
 use panic_halt as _;
 
@@ -275,6 +276,20 @@ async fn usb_cdc_comm_task(mut class: CdcAcmClass<'static, UsbDriver<'static, US
                                     }
                                 }
                             }
+                            Ok(CMD_UPLOAD_PROGRAM) => {
+                                let len = {
+                                    let vm = SHARED_VM.lock().await;
+                                    vm.write_program_packet(frame_buf).unwrap_or(0)
+                                };
+                                if len > 0 {
+                                    let mut offset = 0;
+                                    while offset < len {
+                                        let chunk = (len - offset).min(64);
+                                        let _ = class.write_packet(&frame_buf[offset..offset + chunk]).await;
+                                        offset += chunk;
+                                    }
+                                }
+                            }
                             Err(e) => {
                                 info!("USB-CDC Packet Error: {}", e);
                                 let _ = class.write_packet(&[PACKET_SOF, 0xFF, 0x01]).await;
@@ -418,6 +433,15 @@ async fn uart_comm_task(mut uart: BufferedUart<'static, UART0>) {
                 };
                 if len > 0 {
                     let _ = uart.write_all(&status_buf[..len]).await;
+                }
+            }
+            Ok(CMD_UPLOAD_PROGRAM) => {
+                let len = {
+                    let vm = SHARED_VM.lock().await;
+                    vm.write_program_packet(frame_buf).unwrap_or(0)
+                };
+                if len > 0 {
+                    let _ = uart.write_all(&frame_buf[..len]).await;
                 }
             }
             Err(e) => {

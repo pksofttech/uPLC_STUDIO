@@ -244,9 +244,138 @@ impl CanvasApp {
         None
     }
 
+    /// Read the compiled bytecode directly from the connected PLC Micro-VM via CMD 0x04
+    /// and decompile it back into an active `LadderProgram` (Rungs & Elements).
+    pub fn upload_program_from_plc(&mut self) -> Result<my_canvas_core::LadderProgram, String> {
+        let was_online = self.online_mode && self.online_target_hw;
+        if was_online {
+            self.stop_online_monitoring();
+            thread::sleep(Duration::from_millis(60));
+        }
+
+        let raw_port = self.com_port.split_whitespace().next().unwrap_or("/dev/ttyACM1");
+        let mut port_path = if raw_port.starts_with("tty") {
+            format!("/dev/{}", raw_port)
+        } else {
+            raw_port.to_string()
+        };
+
+        let is_debugprobe = port_path
+            .strip_prefix("/dev/")
+            .and_then(|n| std::fs::read_to_string(format!("/sys/class/tty/{}/device/../product", n)).ok())
+            .map(|p| p.contains("Debugprobe"))
+            .unwrap_or(false);
+        if (!std::path::Path::new(&port_path).exists() || is_debugprobe)
+            && Self::detect_uplc_usb_port().is_some()
+        {
+            if let Some(detected) = Self::detect_uplc_usb_port() {
+                port_path = detected.clone();
+                self.com_port = detected;
+            }
+        }
+
+        if !std::path::Path::new(&port_path).exists() {
+            if was_online {
+                self.start_online_monitoring();
+            }
+            return Err(format!("Serial port '{}' not connected", port_path));
+        }
+
+        // Configure raw mode via stty on Linux
+        let _ = std::process::Command::new("stty")
+            .args(["-F", &port_path, &self.baud_rate, "raw", "-echo", "-hupcl", "min", "0", "time", "2"])
+            .output();
+
+        let res = (|| -> Result<my_canvas_core::LadderProgram, String> {
+            use std::io::{Read, Write};
+            let mut file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&port_path)
+                .map_err(|e| format!("Failed to open {}: {}", port_path, e))?;
+
+            // Drain any pending bytes
+            let mut drain = [0u8; 512];
+            let _ = file.read(&mut drain);
+
+            // Construct CMD 0x04 request packet: [0xAA, 0x04, 0x00, 0x00, CRC8]
+            let dummy_bc = my_canvas_core::BytecodeProgram {
+                hardware: self.doc.program.hardware.clone(),
+                instructions: Vec::new(),
+                memory_map: Vec::new(),
+            };
+            let req = dummy_bc.to_serial_packet(my_canvas_core::PlcSerialCommand::UploadProgram);
+
+            file.write_all(&req)
+                .map_err(|e| format!("Failed to write to {}: {}", port_path, e))?;
+            file.flush()
+                .map_err(|e| format!("Failed to flush {}: {}", port_path, e))?;
+
+            let mut rx_accum = Vec::with_capacity(2048);
+            let mut chunk = [0u8; 512];
+            let start = Instant::now();
+
+            while start.elapsed().as_millis() < 800 {
+                match file.read(&mut chunk) {
+                    Ok(0) => thread::sleep(Duration::from_millis(10)),
+                    Ok(n) => {
+                        rx_accum.extend_from_slice(&chunk[..n]);
+                        if let Some(pos) = rx_accum.windows(2).position(|w| w == [0xAA, 0x84]) {
+                            if pos > 0 {
+                                rx_accum.drain(..pos);
+                            }
+                            if rx_accum.len() >= 4 {
+                                let plen = u16::from_le_bytes([rx_accum[2], rx_accum[3]]) as usize;
+                                let frame_len = 5 + plen;
+                                if rx_accum.len() >= frame_len {
+                                    let frame: Vec<u8> = rx_accum.drain(..frame_len).collect();
+                                    let uploaded_bc = my_canvas_core::BytecodeProgram::parse_upload_packet(
+                                        &frame,
+                                        &self.doc.program.hardware,
+                                    )?;
+                                    return uploaded_bc.decompile_to_ladder();
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => return Err(format!("Serial read error: {}", e)),
+                }
+            }
+
+            Err("Timed out waiting for CMD 0x84 program response from PLC".to_string())
+        })();
+
+        if was_online {
+            self.online_mode = false;
+            self.start_online_monitoring();
+        }
+
+        res
+    }
+
     pub fn transmit_bytecode_to_plc(&mut self, cmd: my_canvas_core::PlcSerialCommand) {
         use std::io::{Read, Write};
         let bc = self.doc.compile_to_bytecode();
+        if cmd == my_canvas_core::PlcSerialCommand::UploadProgram {
+            match self.upload_program_from_plc() {
+                Ok(ladder) => {
+                    let n_rungs = ladder.rungs.len();
+                    self.doc.program = ladder;
+                    self.doc.selected_rung_idx = Some(0);
+                    self.update_plc_is_error = false;
+                    self.update_plc_status = format!(
+                        "✔ Successfully uploaded & decompiled program from PLC ({} Networks)",
+                        n_rungs
+                    );
+                }
+                Err(e) => {
+                    self.update_plc_is_error = true;
+                    self.update_plc_status = format!("✖ Upload from PLC failed: {}", e);
+                }
+            }
+            return;
+        }
+
         let packet = bc.to_serial_packet(cmd);
 
         // If Hardware Online Monitoring is currently polling the serial port, pause it during transmission
@@ -328,6 +457,7 @@ impl CanvasApp {
                                 port_path
                             );
                         }
+                        my_canvas_core::PlcSerialCommand::UploadProgram => {}
                     }
                 }
                 Err(e) => {
@@ -381,7 +511,13 @@ impl CanvasApp {
             return;
         }
         self.online_mode = true;
-        self.doc.set_online_mode(true);
+        if !self.online_target_hw {
+            self.doc.set_online_mode(true);
+        } else {
+            // For HW MCU, wait until a matching program snapshot is verified before activating live conduction
+            self.doc.set_online_mode(false);
+            self.doc.clear_conduction();
+        }
 
         if self.online_target_hw {
             self.online_status_text = "Connecting to PLC...".to_string();
@@ -418,7 +554,6 @@ impl CanvasApp {
                 use std::io::{Read, Write};
                 // Pre-constructed MonitorStatus request packet: [0xAA, 0x03, 0x00, 0x00, 0xBD]
                 let req = [0xAAu8, 0x03, 0x00, 0x00, 0xBD];
-                let expected_hdr = [0xAAu8, 0x83, 0xCA, 0x01];
                 let mut chunk = [0u8; 512];
                 let mut rx_accum: Vec<u8> = Vec::with_capacity(1024);
 
@@ -447,27 +582,36 @@ impl CanvasApp {
                                             Ok(0) => thread::sleep(Duration::from_millis(4)),
                                             Ok(n) => {
                                                 rx_accum.extend_from_slice(&chunk[..n]);
-                                                // Search for [0xAA, 0x83, 0xCA, 0x01] header
-                                                if let Some(pos) = rx_accum
-                                                    .windows(4)
-                                                    .position(|w| w == expected_hdr)
-                                                {
+                                                // Search for [0xAA, 0x83, len_lo, len_hi] where payload len is 462 (0x01CE) or 458 (0x01CA)
+                                                if let Some(pos) = rx_accum.windows(4).position(|w| {
+                                                    if w[0] == 0xAA && w[1] == 0x83 {
+                                                        let plen = u16::from_le_bytes([w[2], w[3]]) as usize;
+                                                        plen == PlcStatusSnapshot::PAYLOAD_LEN
+                                                            || plen == PlcStatusSnapshot::LEGACY_PAYLOAD_LEN
+                                                    } else {
+                                                        false
+                                                    }
+                                                }) {
                                                     if pos > 0 {
                                                         rx_accum.drain(..pos);
                                                     }
-                                                    if rx_accum.len() >= 463 {
-                                                        let frame: Vec<u8> =
-                                                            rx_accum.drain(..463).collect();
-                                                        if let Ok(snap) =
-                                                            PlcStatusSnapshot::parse_from_packet(
-                                                                &frame,
-                                                            )
-                                                        {
-                                                            if tx.send(snap).is_err() {
-                                                                return; // UI receiver dropped
+                                                    if rx_accum.len() >= 4 {
+                                                        let plen = u16::from_le_bytes([rx_accum[2], rx_accum[3]]) as usize;
+                                                        let frame_len = plen + 5;
+                                                        if rx_accum.len() >= frame_len {
+                                                            let frame: Vec<u8> =
+                                                                rx_accum.drain(..frame_len).collect();
+                                                            if let Ok(snap) =
+                                                                PlcStatusSnapshot::parse_from_packet(
+                                                                    &frame,
+                                                                )
+                                                            {
+                                                                if tx.send(snap).is_err() {
+                                                                    return; // UI receiver dropped
+                                                                }
                                                             }
+                                                            break;
                                                         }
-                                                        break;
                                                     }
                                                 } else if rx_accum.len() > 1024 {
                                                     rx_accum.clear();
@@ -509,6 +653,15 @@ impl CanvasApp {
         } else {
             self.start_online_monitoring();
         }
+    }
+
+    /// Returns `(matched, ide_len, ide_crc16, plc_len, plc_crc16)` when a live `PlcStatusSnapshot` is available.
+    pub fn online_program_match_info(&self) -> Option<(bool, u16, u16, u16, u16)> {
+        let snap = self.latest_snapshot.as_ref()?;
+        let bc = self.doc.compile_to_bytecode();
+        let (ide_len, ide_crc) = bc.program_signature();
+        let matched = snap.matches_program(&bc);
+        Some((matched, ide_len, ide_crc, snap.prog_len, snap.prog_crc))
     }
 
     pub fn set_online_target_hw(&mut self, is_hw: bool) {
@@ -679,20 +832,50 @@ impl eframe::App for CanvasApp {
                 }
                 if let Some(snap) = latest {
                     self.plc_remote_running = snap.running;
-                    self.online_status_text = format!(
-                        "Online (HW) | Scan #{} | {}",
-                        snap.scan_count,
-                        if snap.running { "RUN" } else { "STOP" }
-                    );
-                    self.doc.apply_online_snapshot(&snap);
                     self.latest_snapshot = Some(snap);
+                }
+
+                // Verify code match against latest snapshot
+                let bc = self.doc.compile_to_bytecode();
+                let is_matched = self
+                    .latest_snapshot
+                    .as_ref()
+                    .map_or(false, |snap| snap.matches_program(&bc));
+
+                if is_matched {
+                    if let Some(ref snap) = self.latest_snapshot {
+                        self.doc.set_online_mode(true);
+                        self.doc.apply_online_snapshot(snap);
+                    }
+                } else {
+                    // Safety & Accuracy: Do NOT show simulation/live conduction on canvas if code is mismatched!
+                    self.doc.set_online_mode(false);
+                    self.doc.clear_conduction();
+                }
+
+                if let Some((matched, _ide_len, ide_crc, _plc_len, plc_crc)) =
+                    self.online_program_match_info()
+                {
+                    let snap = self.latest_snapshot.as_ref().unwrap();
+                    let match_tag = if matched {
+                        format!("✔ MATCH (0x{:04X})", plc_crc)
+                    } else {
+                        format!("⚠ MISMATCH (IDE:0x{:04X}≠PLC:0x{:04X})", ide_crc, plc_crc)
+                    };
+                    self.online_status_text = format!(
+                        "Online (HW) | Scan #{} | {} | {}",
+                        snap.scan_count,
+                        if snap.running { "RUN" } else { "STOP" },
+                        match_tag
+                    );
                 }
             } else {
                 let snap = self.doc.capture_status_snapshot();
                 self.online_status_text = format!(
-                    "Online (Sim) | Scan #{} | {}",
+                    "Online (Sim) | Scan #{} | {} | ✔ MATCH (0x{:04X})",
                     snap.scan_count,
-                    if snap.running { "RUN" } else { "STOP" }
+                    if snap.running { "RUN" } else { "STOP" },
+                    snap.prog_crc
                 );
                 self.latest_snapshot = Some(snap);
             }
@@ -902,6 +1085,9 @@ impl eframe::App for CanvasApp {
                 });
         }
 
+        let mut banner_cmd = None;
+        let mut open_upload_dialog = false;
+
         // 7. Central Panel: Interactive Ladder Diagram Canvas
         CentralPanel::default()
             .frame(
@@ -933,14 +1119,23 @@ impl eframe::App for CanvasApp {
                 // Floating Live Online Monitoring Telemetry HUD
                 if self.online_mode {
                     let max_rect = ui.max_rect();
-                    let hud_w = 264.0;
-                    let hud_h = 56.0;
+                    let hud_w = 304.0;
+                    let hud_h = 74.0;
                     let hud_pos = egui::pos2(max_rect.max.x - hud_w - 18.0, max_rect.min.y + 14.0);
                     let hud_rect = egui::Rect::from_min_size(hud_pos, egui::vec2(hud_w, hud_h));
 
+                    let match_info = self.online_program_match_info();
+                    let is_matched = match_info.map_or(true, |(m, _, _, _, _)| m);
+
                     let painter = ui.painter();
                     let is_hw = self.online_target_hw;
-                    let glow_color = if is_hw { palette.accent_ok } else { palette.accent_heading };
+                    let glow_color = if !is_matched {
+                        palette.accent_warn
+                    } else if is_hw {
+                        palette.accent_ok
+                    } else {
+                        palette.accent_heading
+                    };
                     painter.rect_filled(hud_rect, egui::CornerRadius::same(8), palette.banner_bg.gamma_multiply(0.95));
                     painter.rect_stroke(
                         hud_rect,
@@ -960,14 +1155,14 @@ impl eframe::App for CanvasApp {
                     let run_color = if is_run { palette.accent_ok } else { palette.accent_danger };
 
                     painter.text(
-                        egui::pos2(hud_rect.min.x + 10.0, hud_rect.min.y + 16.0),
+                        egui::pos2(hud_rect.min.x + 10.0, hud_rect.min.y + 15.0),
                         egui::Align2::LEFT_CENTER,
                         format!("🟢 ONLINE: {}", target_str),
                         egui::FontId::proportional(12.5),
                         palette.text_primary,
                     );
                     painter.text(
-                        egui::pos2(hud_rect.max.x - 12.0, hud_rect.min.y + 16.0),
+                        egui::pos2(hud_rect.max.x - 12.0, hud_rect.min.y + 15.0),
                         egui::Align2::RIGHT_CENTER,
                         run_str,
                         egui::FontId::monospace(11.5),
@@ -975,7 +1170,7 @@ impl eframe::App for CanvasApp {
                     );
 
                     painter.text(
-                        egui::pos2(hud_rect.min.x + 10.0, hud_rect.min.y + 38.0),
+                        egui::pos2(hud_rect.min.x + 10.0, hud_rect.min.y + 36.0),
                         egui::Align2::LEFT_CENTER,
                         format!("Scan: #{}", scan_txt),
                         egui::FontId::monospace(11.0),
@@ -983,14 +1178,95 @@ impl eframe::App for CanvasApp {
                     );
 
                     painter.text(
-                        egui::pos2(hud_rect.max.x - 12.0, hud_rect.min.y + 38.0),
+                        egui::pos2(hud_rect.max.x - 12.0, hud_rect.min.y + 36.0),
                         egui::Align2::RIGHT_CENTER,
                         format!("ACC: Bit={} | Word={}", if acc_b { "1" } else { "0" }, acc_w),
                         egui::FontId::monospace(11.0),
                         if acc_b { palette.accent_ok } else { palette.accent_heading },
                     );
+
+                    let (sig_text, sig_color) = match match_info {
+                        Some((true, ide_len, ide_crc, _, _)) => (
+                            format!("✔ CODE MATCH: {} Inst (CRC16 0x{:04X})", ide_len / 4, ide_crc),
+                            palette.accent_ok,
+                        ),
+                        Some((false, _ide_len, ide_crc, _plc_len, plc_crc)) => (
+                            format!("⚠ MISMATCH! IDE:0x{:04X} ≠ PLC:0x{:04X}", ide_crc, plc_crc),
+                            palette.accent_warn,
+                        ),
+                        None => (
+                            "⏳ Verifying PLC Bytecode CRC16...".to_string(),
+                            palette.rung_text_dim,
+                        ),
+                    };
+                    painter.text(
+                        egui::pos2(hud_rect.min.x + 10.0, hud_rect.min.y + 57.0),
+                        egui::Align2::LEFT_CENTER,
+                        sig_text,
+                        egui::FontId::monospace(10.5),
+                        sig_color,
+                    );
+
+                    // If HW MCU code mismatch, display prominent warning banner explaining live monitoring is paused
+                    if is_hw && !is_matched {
+                        let banner_pos = egui::pos2(max_rect.center().x - 260.0, max_rect.min.y + 14.0);
+
+                        egui::Area::new(egui::Id::new("online_mismatch_banner"))
+                            .order(egui::Order::Foreground)
+                            .fixed_pos(banner_pos)
+                            .interactable(true)
+                            .show(ui.ctx(), |ui| {
+                                egui::Frame::NONE
+                                    .fill(egui::Color32::from_rgba_unmultiplied(38, 28, 8, 245))
+                                    .stroke(egui::Stroke::new(1.2, palette.accent_warn))
+                                    .corner_radius(egui::CornerRadius::same(6))
+                                    .inner_margin(egui::Margin::symmetric(12, 6))
+                                    .show(ui, |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.label(
+                                                RichText::new("⚠ LIVE MONITORING PAUSED (CODE MISMATCH)")
+                                                    .color(palette.accent_warn)
+                                                    .strong()
+                                                    .size(11.5),
+                                            );
+                                            ui.add_space(8.0);
+                                            if ui
+                                                .button(
+                                                    RichText::new("📥 Read PLC")
+                                                        .size(11.0)
+                                                        .strong()
+                                                        .color(egui::Color32::WHITE),
+                                                )
+                                                .on_hover_text("Read bytecode from connected PLC and decompile into Ladder Diagram")
+                                                .clicked()
+                                            {
+                                                banner_cmd = Some(my_canvas_core::PlcSerialCommand::UploadProgram);
+                                            }
+                                            if ui
+                                                .button(
+                                                    RichText::new("⬆ Upload to PLC")
+                                                        .size(11.0)
+                                                        .strong()
+                                                        .color(egui::Color32::WHITE),
+                                                )
+                                                .on_hover_text("Open Update to PLC dialog to download current program")
+                                                .clicked()
+                                            {
+                                                open_upload_dialog = true;
+                                            }
+                                        });
+                                    });
+                            });
+                    }
                 }
             });
+
+        if let Some(cmd) = banner_cmd {
+            self.transmit_bytecode_to_plc(cmd);
+        }
+        if open_upload_dialog {
+            self.show_update_plc = true;
+        }
 
         // --- Full-Screen Frosted / Dimmed Modal Backdrop Shield for all In-App Dialogs ---
         if modal_open {
@@ -1470,6 +1746,7 @@ impl eframe::App for CanvasApp {
                         });
 
                     // 2. Telemetry & Bytecode Metrics Strip (4 Modern Cards)
+                    let (_, prog_crc16) = bc.program_signature();
                     ui.columns(4, |cols| {
                         let metrics = [
                             (
@@ -1487,8 +1764,8 @@ impl eframe::App for CanvasApp {
                                 palette.accent_heading,
                             ),
                             (
-                                "CRC-8 CHECKSUM",
-                                format!("0x{:02X} (Poly 0x07)", crc8),
+                                "FINGERPRINT (CRC16 / CRC8)",
+                                format!("0x{:04X} | Frame 0x{:02X}", prog_crc16, crc8),
                                 egui::Color32::from_rgb(52, 152, 219),
                             ),
                             (
@@ -1700,14 +1977,14 @@ impl eframe::App for CanvasApp {
                     // 6. Primary Bottom Action Bar (Unified PLC Controls)
                     ui.horizontal(|ui| {
                         let upload_btn = egui::Button::new(
-                            RichText::new("⚡ Upload to PLC (Send via Serial)")
+                            RichText::new("⚡ Upload to PLC")
                                 .strong()
-                                .size(13.0)
+                                .size(12.5)
                                 .color(egui::Color32::WHITE),
                         )
                         .fill(egui::Color32::from_rgb(24, 130, 90))
                         .corner_radius(egui::CornerRadius::same(6))
-                        .min_size(egui::vec2(260.0, 32.0));
+                        .min_size(egui::vec2(160.0, 32.0));
 
                         if ui
                             .add(upload_btn)
@@ -1717,6 +1994,26 @@ impl eframe::App for CanvasApp {
                             .clicked()
                         {
                             trigger_cmd = Some(my_canvas_core::PlcSerialCommand::DownloadProgram);
+                        }
+
+                        let read_plc_btn = egui::Button::new(
+                            RichText::new("📥 Read from PLC (Decompile)")
+                                .strong()
+                                .size(12.5)
+                                .color(egui::Color32::WHITE),
+                        )
+                        .fill(egui::Color32::from_rgb(41, 128, 185))
+                        .corner_radius(egui::CornerRadius::same(6))
+                        .min_size(egui::vec2(195.0, 32.0));
+
+                        if ui
+                            .add(read_plc_btn)
+                            .on_hover_text(
+                                "Request Bytecode from connected PLC (CMD 0x04) and decompile it back into Ladder Diagram networks on Canvas",
+                            )
+                            .clicked()
+                        {
+                            trigger_cmd = Some(my_canvas_core::PlcSerialCommand::UploadProgram);
                         }
 
                         ui.separator();
