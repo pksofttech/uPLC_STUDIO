@@ -1018,11 +1018,34 @@ fn render_elements_explorer(
                         );
 
                         let (live_val, val_color) = match el_type {
-                            TypeTag::Contact | TypeTag::Coil => {
+                            TypeTag::Contact | TypeTag::Coil | TypeTag::Sr | TypeTag::Rs => {
                                 if is_active {
                                     ("● ON (1)".to_string(), palette.accent_ok)
                                 } else {
                                     ("○ OFF (0)".to_string(), palette.rung_text_dim)
+                                }
+                            }
+                            TypeTag::Ton | TypeTag::Tof | TypeTag::Tp if sim_active => {
+                                if let Some(&(accum, done)) = app.doc.simulator.timers.get(&raw_name.to_uppercase()) {
+                                    let col = if done { palette.accent_ok } else { palette.accent_warn };
+                                    (format!("{}ms / {}", accum, val_str), col)
+                                } else {
+                                    (val_str.clone(), palette.text_primary)
+                                }
+                            }
+                            TypeTag::Ctu | TypeTag::Ctd | TypeTag::Ctud if sim_active => {
+                                if let Some(&(count, done, _)) = app.doc.simulator.counters.get(&raw_name.to_uppercase()) {
+                                    let col = if done { palette.accent_ok } else { palette.accent_warn };
+                                    (format!("{} / {}", count, val_str), col)
+                                } else {
+                                    (val_str.clone(), palette.text_primary)
+                                }
+                            }
+                            TypeTag::Compare | TypeTag::Move | TypeTag::Math if sim_active => {
+                                if let Some(&reg_v) = app.doc.simulator.registers.get(&raw_name.to_uppercase()) {
+                                    (format!("={} ({})", reg_v, val_str), palette.accent_heading)
+                                } else {
+                                    (val_str.clone(), palette.text_primary)
                                 }
                             }
                             _ => (val_str.clone(), palette.text_primary),
@@ -1246,6 +1269,136 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette) {
                             if ui.add(egui::TextEdit::singleline(&mut io.symbol).desired_width(sym_w)).changed() {
                                 app.doc.is_dirty = true;
                             }
+                            ui.end_row();
+                        }
+                    });
+            });
+
+            ui.add_space(6.0);
+
+            // Live Process Image (%MX, %MW, T, C, ACC)
+            ui.group(|ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("Process Image (%MX, %MW, T, C)")
+                            .strong()
+                            .color(palette.accent_heading),
+                    );
+                    if app.online_mode {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                RichText::new("🟢 LIVE")
+                                    .size(10.0)
+                                    .strong()
+                                    .color(palette.accent_ok),
+                            );
+                        });
+                    }
+                });
+                ui.separator();
+
+                // 1. Accumulator row
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("ACC:").strong().small().color(palette.rung_text_dim));
+                    let acc_b = app.doc.simulator.acc_bool;
+                    let acc_w = app.doc.simulator.acc_word;
+                    ui.label(
+                        RichText::new(format!("Bit = {}", u8::from(acc_b)))
+                            .monospace()
+                            .small()
+                            .color(if acc_b { palette.accent_ok } else { palette.text_primary }),
+                    );
+                    ui.separator();
+                    ui.label(
+                        RichText::new(format!("Word = {}", acc_w))
+                            .monospace()
+                            .small()
+                            .color(palette.accent_heading),
+                    );
+                });
+
+                ui.add_space(3.0);
+
+                // 2. Internal Markers (%MX0.0 .. %MX0.7)
+                ui.label(RichText::new("Markers (%MX0.0..%MX0.7):").small().color(palette.rung_text_dim));
+                ui.horizontal_wrapped(|ui| {
+                    for i in 0..8 {
+                        let addr = format!("%MX0.{}", i);
+                        let m_on = app.doc.simulator.get_var_value(&addr);
+                        let col = if m_on { palette.accent_ok } else { palette.rung_text_dim };
+                        let txt = format!("M{}:{}", i, u8::from(m_on));
+                        if ui
+                            .selectable_label(m_on, RichText::new(txt).monospace().size(10.5).color(col))
+                            .on_hover_text(format!("{} (M{:02}) — Click to toggle in simulation", addr, i))
+                            .clicked()
+                        {
+                            toggle_port_var = Some(addr);
+                        }
+                    }
+                });
+
+                ui.add_space(3.0);
+
+                // 3. Timers (T0..T3) & Counters (C0..C3)
+                egui::Grid::new("live_tc_mw_grid")
+                    .striped(true)
+                    .num_columns(3)
+                    .spacing([10.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label(RichText::new("TIMERS (T)").strong().small().color(palette.rung_text_dim));
+                        ui.label(RichText::new("COUNTERS (C)").strong().small().color(palette.rung_text_dim));
+                        ui.label(RichText::new("WORDS (%MW)").strong().small().color(palette.rung_text_dim));
+                        ui.end_row();
+
+                        for i in 0..4 {
+                            let (t_cv, t_q) = app
+                                .doc
+                                .simulator
+                                .timers
+                                .get(&format!("T{}", i))
+                                .copied()
+                                .unwrap_or((0, false));
+                            let t_col = if t_q { palette.accent_ok } else { palette.text_primary };
+                            ui.label(
+                                RichText::new(format!("T{}: {}ms (Q={})", i, t_cv, u8::from(t_q)))
+                                    .monospace()
+                                    .size(10.5)
+                                    .color(t_col),
+                            );
+
+                            let (c_cv, c_q, _) = app
+                                .doc
+                                .simulator
+                                .counters
+                                .get(&format!("C{}", i))
+                                .copied()
+                                .unwrap_or((0, false, false));
+                            let c_col = if c_q { palette.accent_ok } else { palette.text_primary };
+                            ui.label(
+                                RichText::new(format!("C{}: {} (Q={})", i, c_cv, u8::from(c_q)))
+                                    .monospace()
+                                    .size(10.5)
+                                    .color(c_col),
+                            );
+
+                            let mw_val = app
+                                .doc
+                                .simulator
+                                .registers
+                                .get(&format!("%MW{}", i))
+                                .copied()
+                                .unwrap_or(0);
+                            ui.label(
+                                RichText::new(format!("%MW{}: {}", i, mw_val))
+                                    .monospace()
+                                    .size(10.5)
+                                    .color(if mw_val != 0 {
+                                        palette.accent_heading
+                                    } else {
+                                        palette.text_primary
+                                    }),
+                            );
                             ui.end_row();
                         }
                     });

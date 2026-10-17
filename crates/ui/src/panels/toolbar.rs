@@ -315,6 +315,70 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
         });
 
         // =========================================================================
+        // Group 4.5: Online Mode / Live Monitoring & Telemetry
+        // =========================================================================
+        toolbar_group(ui, palette, |ui| {
+            let is_online = app.online_mode;
+            let online_btn_text = if is_online { "🟢 Online" } else { "🌐 Go Online" };
+            let online_btn_color = if is_online { palette.accent_ok } else { palette.accent_heading };
+
+            if modern_tool_button(
+                ui,
+                Some(VectorIcon::SerialComm),
+                online_btn_text,
+                online_btn_color,
+                is_online,
+                true,
+                false,
+                88.0,
+                palette,
+            )
+            .on_hover_text(if is_online {
+                "Online Monitoring ACTIVE: Real-time live status from PLC / Simulator (Ctrl+M / F7 to stop)"
+            } else {
+                "Start Online Monitoring: Live debug Process Image (%IX,%QX,%MX,%MW,T,C) and Acc in real time (Ctrl+M / F7)"
+            })
+            .clicked()
+            {
+                app.toggle_online_mode();
+            }
+
+            toolbar_divider(ui, palette);
+
+            // Target selector: Hardware (RP2040) vs Local Simulator
+            let cur_target_label = if app.online_target_hw { "🔌 HW (MCU)" } else { "💻 Sim" };
+            egui::ComboBox::from_id_salt("toolbar_online_target_combo")
+                .width(80.0)
+                .selected_text(cur_target_label)
+                .show_ui(ui, |ui| {
+                    if ui.selectable_label(app.online_target_hw, "🔌 Hardware (USB CDC /dev/ttyACM)").on_hover_text("Monitor physical RP2040 Micro-VM over USB CDC-ACM Serial").clicked() {
+                        app.set_online_target_hw(true);
+                    }
+                    if ui.selectable_label(!app.online_target_hw, "💻 Virtual Simulator").on_hover_text("Monitor internal local PLC software simulation engine").clicked() {
+                        app.set_online_target_hw(false);
+                    }
+                });
+
+            if is_online {
+                toolbar_divider(ui, palette);
+                let badge_frame = egui::Frame::new()
+                    .fill(if app.online_target_hw { palette.accent_ok.linear_multiply(0.15) } else { palette.accent_heading.linear_multiply(0.15) })
+                    .stroke(Stroke::new(1.0, if app.online_target_hw { palette.accent_ok } else { palette.accent_heading }))
+                    .corner_radius(CornerRadius::same(4))
+                    .inner_margin(egui::Margin::symmetric(6, 3));
+
+                badge_frame.show(ui, |ui| {
+                    ui.label(
+                        RichText::new(&app.online_status_text)
+                            .monospace()
+                            .size(11.0)
+                            .color(if app.online_target_hw { palette.accent_ok } else { palette.accent_heading }),
+                    );
+                });
+            }
+        });
+
+        // =========================================================================
         // Group 5: Environment, Style & Settings
         // =========================================================================
         toolbar_group(ui, palette, |ui| {

@@ -14,26 +14,35 @@ pub fn render(ui: &mut Ui, app: &CanvasApp) {
         );
         ui.separator();
 
-        // 2. Simulation Status
-        match app.doc.simulator.state {
-            SimState::Running => {
-                ui.label(
-                    RichText::new("● SIMULATION RUNNING")
-                        .color(palette.accent_ok)
-                        .strong(),
-                );
-            }
-            SimState::Step => {
-                ui.label(
-                    RichText::new("● SIMULATION STEP")
-                        .color(palette.accent_warn)
-                        .strong(),
-                );
-            }
-            SimState::Stopped => {
-                ui.label(
-                    RichText::new("■ READY (EDIT MODE)").color(palette.rung_text_dim),
-                );
+        // 2. Online Monitoring / Simulation Status
+        if app.online_mode {
+            let target = if app.online_target_hw { "HW MCU" } else { "SIM" };
+            ui.label(
+                RichText::new(format!("🟢 ONLINE MONITORING ({})", target))
+                    .color(palette.accent_ok)
+                    .strong(),
+            );
+        } else {
+            match app.doc.simulator.state {
+                SimState::Running => {
+                    ui.label(
+                        RichText::new("● SIMULATION RUNNING")
+                            .color(palette.accent_ok)
+                            .strong(),
+                    );
+                }
+                SimState::Step => {
+                    ui.label(
+                        RichText::new("● SIMULATION STEP")
+                            .color(palette.accent_warn)
+                            .strong(),
+                    );
+                }
+                SimState::Stopped => {
+                    ui.label(
+                        RichText::new("■ READY (EDIT MODE)").color(palette.rung_text_dim),
+                    );
+                }
             }
         }
         ui.separator();
@@ -46,6 +55,23 @@ pub fn render(ui: &mut Ui, app: &CanvasApp) {
             "Scans: {} | Cycle: {}ms",
             app.doc.simulator.scan_count, app.doc.simulator.cycle_time_ms
         ));
+
+        if app.online_mode || app.doc.simulator.is_active() {
+            ui.separator();
+            ui.label(
+                RichText::new(format!(
+                    "ACC: Bit={} | Word={}",
+                    u8::from(app.doc.simulator.acc_bool),
+                    app.doc.simulator.acc_word
+                ))
+                .monospace()
+                .color(if app.doc.simulator.acc_bool {
+                    palette.accent_ok
+                } else {
+                    palette.accent_heading
+                }),
+            );
+        }
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(format!("Theme: {}", app.theme.label()));

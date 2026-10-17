@@ -20,6 +20,100 @@ pub enum PlcSerialCommand {
     StopPlc = 0x12,
 }
 
+/// Online Monitoring Status Snapshot received from RP2040 Micro-VM or Local Simulator
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlcStatusSnapshot {
+    pub running: bool,
+    pub scan_count: u32,
+    pub acc_bool: bool,
+    pub acc_word: i32,
+    pub bit_mem: [u8; 256],
+    pub timer_cv: [u32; 16],
+    pub counter_cv: [i32; 16],
+    pub data_reg: [i32; 16],
+}
+
+impl Default for PlcStatusSnapshot {
+    fn default() -> Self {
+        Self {
+            running: false,
+            scan_count: 0,
+            acc_bool: false,
+            acc_word: 0,
+            bit_mem: [0; 256],
+            timer_cv: [0; 16],
+            counter_cv: [0; 16],
+            data_reg: [0; 16],
+        }
+    }
+}
+
+impl PlcStatusSnapshot {
+    pub const PAYLOAD_LEN: usize = 1 + 4 + 1 + 4 + 256 + 64 + 64 + 64; // 458 bytes
+    pub const PACKET_LEN: usize = 5 + Self::PAYLOAD_LEN; // 463 bytes
+
+    /// Parse a complete response frame (`SOF 0xAA | CMD 0x83 | LEN | PAYLOAD | CRC8`)
+    pub fn parse_from_packet(packet: &[u8]) -> Result<Self, &'static str> {
+        if packet.len() < Self::PACKET_LEN {
+            return Err("Packet too short for status snapshot");
+        }
+        if packet[0] != PACKET_SOF {
+            return Err("Invalid SOF byte");
+        }
+        if packet[1] != 0x83 {
+            return Err("Unexpected command ID (expected 0x83)");
+        }
+        let len = u16::from_le_bytes([packet[2], packet[3]]) as usize;
+        if len != Self::PAYLOAD_LEN {
+            return Err("Invalid payload length");
+        }
+        let expected_crc = packet[4 + len];
+        let actual_crc = BytecodeProgram::compute_crc8(&packet[1..4 + len]);
+        if actual_crc != expected_crc {
+            return Err("CRC8 checksum error");
+        }
+
+        let p = &packet[4..4 + len];
+        let running = p[0] != 0;
+        let scan_count = u32::from_le_bytes([p[1], p[2], p[3], p[4]]);
+        let acc_bool = p[5] != 0;
+        let acc_word = i32::from_le_bytes([p[6], p[7], p[8], p[9]]);
+
+        let mut bit_mem = [0u8; 256];
+        bit_mem.copy_from_slice(&p[10..10 + 256]);
+
+        let mut offset = 10 + 256;
+        let mut timer_cv = [0u32; 16];
+        for i in 0..16 {
+            timer_cv[i] = u32::from_le_bytes([p[offset], p[offset + 1], p[offset + 2], p[offset + 3]]);
+            offset += 4;
+        }
+
+        let mut counter_cv = [0i32; 16];
+        for i in 0..16 {
+            counter_cv[i] = i32::from_le_bytes([p[offset], p[offset + 1], p[offset + 2], p[offset + 3]]);
+            offset += 4;
+        }
+
+        let mut data_reg = [0i32; 16];
+        for i in 0..16 {
+            data_reg[i] = i32::from_le_bytes([p[offset], p[offset + 1], p[offset + 2], p[offset + 3]]);
+            offset += 4;
+        }
+
+        Ok(Self {
+            running,
+            scan_count,
+            acc_bool,
+            acc_word,
+            bit_mem,
+            timer_cv,
+            counter_cv,
+            data_reg,
+        })
+    }
+}
+
 /// 8-bit Opcodes for the Accumulator-based Micro-VM (RP2040)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
@@ -1127,6 +1221,104 @@ END_PROGRAM
         assert_eq!(pkt[0], PACKET_SOF);
         assert_eq!(pkt[1], PlcSerialCommand::DownloadProgram as u8);
         assert_eq!(pkt.len(), 5 + bc.payload_size_bytes());
+    }
+
+    #[test]
+    fn test_online_monitoring_snapshot_and_branch_conduction() {
+        let il = include_str!("../../../example/08_rp2040_demo_led_blink.il");
+        let mut doc = crate::Document::default();
+        doc.load_from_il_str(il).expect("Should load 08_rp2040_demo_led_blink.il");
+
+        // Build a simulated hardware snapshot where T0 CV=320ms, %MX0.0=1 (BLINK_PHASE ON), %QX0.0=1 (LED_PIN ON)
+        let mut bit_mem = [0u8; 256];
+        bit_mem[0x40] = 1; // %MX0.0 = 1
+        bit_mem[0x20] = 1; // %QX0.0 = 1
+        let mut timer_cv = [0u32; 16];
+        timer_cv[0] = 320; // T0 = 320ms
+        timer_cv[1] = 180; // T1 = 180ms
+        let mut data_reg = [0i32; 16];
+        data_reg[0] = 42; // %MW0 = 42
+
+        let snap = PlcStatusSnapshot {
+            running: true,
+            scan_count: 12345,
+            acc_bool: true,
+            acc_word: 320,
+            bit_mem,
+            timer_cv,
+            counter_cv: [0i32; 16],
+            data_reg,
+        };
+
+        // Round-trip serialize + parse 463-byte packet
+        let mut payload = [0u8; 458];
+        payload[0] = u8::from(snap.running);
+        payload[1..5].copy_from_slice(&snap.scan_count.to_le_bytes());
+        payload[5] = u8::from(snap.acc_bool);
+        payload[6..10].copy_from_slice(&snap.acc_word.to_le_bytes());
+        payload[10..266].copy_from_slice(&snap.bit_mem);
+        for i in 0..16 {
+            let off = 266 + i * 4;
+            payload[off..off + 4].copy_from_slice(&snap.timer_cv[i].to_le_bytes());
+        }
+        for i in 0..16 {
+            let off = 330 + i * 4;
+            payload[off..off + 4].copy_from_slice(&snap.counter_cv[i].to_le_bytes());
+        }
+        for i in 0..16 {
+            let off = 394 + i * 4;
+            payload[off..off + 4].copy_from_slice(&snap.data_reg[i].to_le_bytes());
+        }
+        let mut packet = Vec::with_capacity(463);
+        packet.push(0xAA);
+        packet.push(0x83);
+        packet.extend_from_slice(&458u16.to_le_bytes());
+        packet.extend_from_slice(&payload);
+        let crc = BytecodeProgram::compute_crc8(&packet[1..]);
+        packet.push(crc);
+
+        let parsed = PlcStatusSnapshot::parse_from_packet(&packet).expect("Packet should parse");
+        assert_eq!(parsed.scan_count, 12345);
+        assert!(parsed.running);
+        assert!(parsed.acc_bool);
+        assert_eq!(parsed.acc_word, 320);
+
+        // Apply snapshot to document
+        doc.apply_online_snapshot(&parsed);
+
+        // Local simulator state must remain Stopped so it does NOT fight hardware polling,
+        // while simulator.is_active() and remote_running are true!
+        assert_eq!(doc.simulator.state, crate::SimState::Stopped);
+        assert!(doc.simulator.is_active());
+        assert!(doc.simulator.remote_running);
+        assert_eq!(doc.simulator.registers.get("%MW0").copied(), Some(42));
+
+        // Network 03 is: (LDN %IX0.1 ANDN %MX0.0) OR %IX0.0 -> ST %QX0.0
+        // When %MX0.0 = 1 and %IX0.0 = 0, Network 04 (%MX0.0 -> %QX0.1) is energized,
+        // and when %MX0.0 = 0 (first 500ms phase), Network 03's top branch path conducts!
+        let net4 = &doc.program.rungs[3];
+        assert!(net4.is_energized, "Network 04 should be energized when %MX0.0=1");
+
+        // Now test snapshot during the ON phase of Network 03 (%MX0.0 = 0, %QX0.0 = 1)
+        let mut snap_on = parsed.clone();
+        snap_on.bit_mem[0x40] = 0; // %MX0.0 = 0
+        doc.apply_online_snapshot(&snap_on);
+
+        let net3 = &doc.program.rungs[2];
+        assert!(net3.is_energized, "Network 03 should be energized when %MX0.0=0 and %IX0.1=0");
+        assert_eq!(net3.elements[0].element_type, TypeTag::Contact);
+        assert!(net3.elements[0].is_energized, "First contact (%IX0.1 NC) should conduct");
+        let branch_el = &net3.elements[1];
+        assert_eq!(branch_el.element_type, TypeTag::Branch);
+        assert!(branch_el.is_energized, "Parallel branch in Network 03 should conduct");
+        assert!(branch_el.branch_paths[0][0].is_energized, "Top branch (%MX0.0 NC) should be energized");
+        assert!(!branch_el.branch_paths[1][0].is_energized, "Bottom branch (%IX0.0 NO) should be de-energized");
+
+        // Verify live IL code with Accumulator annotations
+        doc.selected_rung_idx = Some(0);
+        let online_il = doc.generate_il_code_online();
+        assert!(online_il.contains("ACC="));
+        assert!(online_il.contains("ET=320ms/500ms"));
     }
 }
 

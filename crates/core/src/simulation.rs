@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use crate::bytecode::PlcStatusSnapshot;
 use crate::ladder::{CoilMode, ContactMode, IOPortMapping, LadderElement, LadderProgram, TypeTag};
 
 /// Parses IEC 61131-3 (%IX0.0, %QX0.0, %MX0.0) or legacy (X0, Y0, M0) addresses
@@ -74,10 +75,14 @@ pub enum SimState {
 pub struct PlcSimulator {
     pub state: SimState,
     pub simulation_enabled: bool,
+    pub online_mode: bool,
+    pub remote_running: bool,
     pub cycle_time_ms: u32,
     pub speed_multiplier: u32,
     pub scan_count: u64,
     pub simulation_time_ms: u64,
+    pub acc_bool: bool,
+    pub acc_word: i32,
     
     // Digital inputs X0..X7 / %IX0.0..%IX0.7
     pub inputs: HashMap<String, bool>,
@@ -129,6 +134,8 @@ impl Default for PlcSimulator {
         let mut registers = HashMap::new();
         for i in 0..16 {
             registers.insert(format!("D{}", i), 0);
+            registers.insert(format!("D{:02}", i), 0);
+            registers.insert(format!("V{}", i), 0);
             registers.insert(format!("V{:02}", i), 0);
             registers.insert(format!("%MW{}", i), 0);
         }
@@ -136,10 +143,14 @@ impl Default for PlcSimulator {
         Self {
             state: SimState::Stopped,
             simulation_enabled: false,
+            online_mode: false,
+            remote_running: false,
             cycle_time_ms: 10,
             speed_multiplier: 1,
             scan_count: 0,
             simulation_time_ms: 0,
+            acc_bool: false,
+            acc_word: 0,
             inputs,
             outputs,
             markers,
@@ -158,7 +169,7 @@ impl PlcSimulator {
 
     #[inline]
     pub fn is_active(&self) -> bool {
-        self.state != SimState::Stopped
+        self.online_mode || self.state != SimState::Stopped
     }
 
     #[inline]
@@ -443,8 +454,10 @@ impl PlcSimulator {
             }
 
             let mut power_flow = true;
+            self.acc_bool = true;
             for elem in &mut rung.elements {
                 power_flow = self.eval_element(elem, power_flow, scaled_dt);
+                self.acc_bool = power_flow;
                 if elem.element_type == TypeTag::Jump && power_flow {
                     jump_target = Some(elem.name.clone());
                 }
@@ -519,6 +532,7 @@ impl PlcSimulator {
                 }
                 elem.current_accum = entry.0 as i32;
                 elem.is_done = entry.1;
+                self.acc_word = elem.current_accum;
                 power_in && entry.1
             }
             TypeTag::Tof => {
@@ -534,6 +548,7 @@ impl PlcSimulator {
                 }
                 elem.current_accum = entry.0 as i32;
                 elem.is_done = entry.1;
+                self.acc_word = elem.current_accum;
                 entry.1
             }
             TypeTag::Tp => {
@@ -558,6 +573,7 @@ impl PlcSimulator {
 
                 elem.current_accum = entry.0 as i32;
                 elem.is_done = entry.1;
+                self.acc_word = elem.current_accum;
                 entry.1
             }
             TypeTag::Ctu | TypeTag::Ctud => {
@@ -572,6 +588,7 @@ impl PlcSimulator {
                 }
                 elem.current_accum = entry.0;
                 elem.is_done = entry.1;
+                self.acc_word = elem.current_accum;
                 power_in && entry.1
             }
             TypeTag::Ctd => {
@@ -584,6 +601,7 @@ impl PlcSimulator {
                 }
                 elem.current_accum = entry.0;
                 elem.is_done = entry.1;
+                self.acc_word = elem.current_accum;
                 power_in && entry.1
             }
             TypeTag::Branch => {
@@ -620,7 +638,9 @@ impl PlcSimulator {
                     "<=" | "LE" => reg_val <= elem.preset_value,
                     _ => false,
                 };
+                elem.current_accum = reg_val;
                 elem.is_done = conducts;
+                self.acc_word = reg_val;
                 power_in && conducts
             }
             TypeTag::RTrig => {
@@ -648,8 +668,10 @@ impl PlcSimulator {
                         "%" => if elem.preset_value != 0 { cur % elem.preset_value } else { cur },
                         _ => cur,
                     };
-                    self.registers.insert(elem.target_reg.to_uppercase(), res);
+                    let reg_upper = elem.target_reg.to_uppercase();
+                    self.registers.insert(reg_upper, res);
                     elem.current_accum = res;
+                    self.acc_word = res;
                 }
                 power_in
             }
@@ -662,6 +684,7 @@ impl PlcSimulator {
                     };
                     self.registers.insert(reg.to_uppercase(), elem.preset_value);
                     elem.current_accum = elem.preset_value;
+                    self.acc_word = elem.preset_value;
                 }
                 elem.is_done = power_in;
                 power_in
@@ -721,5 +744,282 @@ impl PlcSimulator {
 
         elem.is_energized = power_out;
         power_out
+    }
+
+    /// Capture a complete Online Monitoring Status Snapshot from the current simulator state
+    pub fn capture_status_snapshot(&self) -> PlcStatusSnapshot {
+        let mut bit_mem = [0u8; 256];
+        // Digital Inputs 0x00..0x1F
+        for i in 0..16 {
+            if *self.inputs.get(&format!("X{}", i)).unwrap_or(&false) {
+                bit_mem[i] = 1;
+            }
+        }
+        // Digital Outputs 0x20..0x3F
+        for i in 0..16 {
+            if *self.outputs.get(&format!("Y{}", i)).unwrap_or(&false) {
+                bit_mem[0x20 + i] = 1;
+            }
+        }
+        // Internal Markers 0x40..0x5F
+        for i in 0..32 {
+            if *self.markers.get(&format!("M{}", i)).unwrap_or(&false) {
+                bit_mem[0x40 + i] = 1;
+            }
+        }
+        // Timers 0xC0..0xCF
+        let mut timer_cv = [0u32; 16];
+        for i in 0..16 {
+            if let Some(&(accum, done)) = self.timers.get(&format!("T{}", i)) {
+                bit_mem[0xC0 + i] = u8::from(done);
+                timer_cv[i] = accum;
+            }
+        }
+        // Counters 0xE0..0xEF
+        let mut counter_cv = [0i32; 16];
+        for i in 0..16 {
+            if let Some(&(count, done, _)) = self.counters.get(&format!("C{}", i)) {
+                bit_mem[0xE0 + i] = u8::from(done);
+                counter_cv[i] = count;
+            }
+        }
+        // Data Registers D0..D15 / %MW0..%MW15
+        let mut data_reg = [0i32; 16];
+        for i in 0..16 {
+            data_reg[i] = *self.registers.get(&format!("D{}", i)).unwrap_or(&0);
+        }
+
+        PlcStatusSnapshot {
+            running: self.state == SimState::Running,
+            scan_count: self.scan_count as u32,
+            acc_bool: self.acc_bool,
+            acc_word: self.acc_word,
+            bit_mem,
+            timer_cv,
+            counter_cv,
+            data_reg,
+        }
+    }
+
+    /// Apply an Online Monitoring Status Snapshot (from RP2040 Micro-VM or Simulator) into memory
+    pub fn apply_online_snapshot(&mut self, snapshot: &PlcStatusSnapshot) {
+        self.scan_count = snapshot.scan_count as u64;
+        self.remote_running = snapshot.running;
+        self.simulation_enabled = true;
+        self.online_mode = true;
+        self.acc_bool = snapshot.acc_bool;
+        self.acc_word = snapshot.acc_word;
+
+        // 1. Digital Inputs: X0..X15 / %IX0.0..%IX1.7
+        for i in 0..16 {
+            let byte = i / 8;
+            let bit = i % 8;
+            let val = snapshot.bit_mem[i] != 0;
+            self.inputs.insert(format!("X{}", i), val);
+            self.inputs.insert(format!("X{:02}", i), val);
+            self.inputs.insert(format!("%IX{}.{}", byte, bit), val);
+        }
+
+        // 2. Digital Outputs: Y0..Y15 / %QX0.0..%QX1.7
+        for i in 0..16 {
+            let byte = i / 8;
+            let bit = i % 8;
+            let val = snapshot.bit_mem[0x20 + i] != 0;
+            self.outputs.insert(format!("Y{}", i), val);
+            self.outputs.insert(format!("Y{:02}", i), val);
+            self.outputs.insert(format!("%QX{}.{}", byte, bit), val);
+        }
+
+        // 3. Internal Relays / Markers: M0..M31 / %MX0.0..%MX3.7
+        for i in 0..32 {
+            let byte = i / 8;
+            let bit = i % 8;
+            let val = snapshot.bit_mem[0x40 + i] != 0;
+            self.markers.insert(format!("M{}", i), val);
+            self.markers.insert(format!("M{:02}", i), val);
+            self.markers.insert(format!("R{}", i), val);
+            self.markers.insert(format!("R{:02}", i), val);
+            self.markers.insert(format!("%MX{}.{}", byte, bit), val);
+        }
+
+        // 4. Timers: T0..T15
+        for i in 0..16 {
+            let done = snapshot.bit_mem[0xC0 + i] != 0;
+            let accum = snapshot.timer_cv[i];
+            self.timers.insert(format!("T{}", i), (accum, done));
+            self.timers.insert(format!("T{:02}", i), (accum, done));
+        }
+
+        // 5. Counters: C0..C15
+        for i in 0..16 {
+            let done = snapshot.bit_mem[0xE0 + i] != 0;
+            let count = snapshot.counter_cv[i];
+            self.counters.insert(format!("C{}", i), (count, done, false));
+            self.counters.insert(format!("C{:02}", i), (count, done, false));
+        }
+
+        // 6. Data Registers: D0..D15 / %MW0..%MW15
+        for i in 0..16 {
+            let val = snapshot.data_reg[i];
+            self.registers.insert(format!("D{}", i), val);
+            self.registers.insert(format!("D{:02}", i), val);
+            self.registers.insert(format!("V{}", i), val);
+            self.registers.insert(format!("V{:02}", i), val);
+            self.registers.insert(format!("%MW{}", i), val);
+        }
+    }
+
+    /// Re-evaluates conduction states (is_done, is_energized, rung.is_energized) without mutating variables.
+    /// Used for Online Monitoring to light up wires, contacts, coils, timers, and parallel branches in real time.
+    pub fn evaluate_conduction_only(&mut self, program: &mut LadderProgram) {
+        let mut jump_target: Option<String> = None;
+        let mut rung_idx = 0;
+        while rung_idx < program.rungs.len() {
+            let rung = &mut program.rungs[rung_idx];
+
+            if let Some(target) = &jump_target {
+                let matches_label = rung.comment.trim().eq_ignore_ascii_case(target)
+                    || rung.elements.iter().any(|e| {
+                        (e.element_type == TypeTag::Label || e.element_type == TypeTag::Comment)
+                            && e.name.trim().eq_ignore_ascii_case(target)
+                    });
+                if matches_label {
+                    jump_target = None;
+                } else {
+                    rung.is_energized = false;
+                    for el in &mut rung.elements {
+                        el.is_energized = false;
+                        for path in &mut el.branch_paths {
+                            for sub in path {
+                                sub.is_energized = false;
+                            }
+                        }
+                    }
+                    rung_idx += 1;
+                    continue;
+                }
+            }
+
+            let mut power_flow = true;
+            for elem in &mut rung.elements {
+                power_flow = self.eval_element_read_only(elem, power_flow);
+                if elem.element_type == TypeTag::Jump && power_flow {
+                    jump_target = Some(elem.name.clone());
+                }
+            }
+            rung.is_energized = power_flow;
+            rung_idx += 1;
+        }
+    }
+
+    fn eval_element_read_only(&mut self, elem: &mut LadderElement, power_in: bool) -> bool {
+        let conducts = match elem.element_type {
+            TypeTag::Contact => {
+                let var_val = self.get_var_value(&elem.name);
+                let c = match elem.contact_mode {
+                    ContactMode::NormallyOpen => var_val,
+                    ContactMode::NormallyClosed => !var_val,
+                    ContactMode::PositiveTransition => var_val,
+                    ContactMode::NegativeTransition => !var_val,
+                };
+                elem.is_done = c;
+                power_in && c
+            }
+            TypeTag::Coil => {
+                elem.is_done = self.get_var_value(&elem.name);
+                power_in
+            }
+            TypeTag::Ton => {
+                if let Some(entry) = self.timers.get(&elem.name.to_uppercase()) {
+                    elem.current_accum = entry.0 as i32;
+                    elem.is_done = entry.1;
+                }
+                power_in && elem.is_done
+            }
+            TypeTag::Tof | TypeTag::Tp => {
+                if let Some(entry) = self.timers.get(&elem.name.to_uppercase()) {
+                    elem.current_accum = entry.0 as i32;
+                    elem.is_done = entry.1;
+                }
+                elem.is_done
+            }
+            TypeTag::Ctu | TypeTag::Ctd | TypeTag::Ctud => {
+                if let Some(entry) = self.counters.get(&elem.name.to_uppercase()) {
+                    elem.current_accum = entry.0;
+                    elem.is_done = entry.1;
+                }
+                power_in && elem.is_done
+            }
+            TypeTag::Branch => {
+                if elem.branch_paths.is_empty() {
+                    power_in
+                } else {
+                    let mut any_path_conducts = false;
+                    for path in &mut elem.branch_paths {
+                        let mut sub_flow = power_in;
+                        for sub_elem in path {
+                            sub_flow = self.eval_element_read_only(sub_elem, sub_flow);
+                        }
+                        if sub_flow {
+                            any_path_conducts = true;
+                        }
+                    }
+                    elem.is_done = any_path_conducts;
+                    power_in && any_path_conducts
+                }
+            }
+            TypeTag::OpenCircuit => {
+                elem.is_done = false;
+                false
+            }
+            TypeTag::Compare => {
+                let reg_val = *self.registers.get(&elem.name.to_uppercase()).unwrap_or(&0);
+                let op = elem.compare_op.trim().to_uppercase();
+                let c = match op.as_str() {
+                    "==" | "EQ" => reg_val == elem.preset_value,
+                    "!=" | "<>" | "NE" => reg_val != elem.preset_value,
+                    ">" | "GT" => reg_val > elem.preset_value,
+                    "<" | "LT" => reg_val < elem.preset_value,
+                    ">=" | "GE" => reg_val >= elem.preset_value,
+                    "<=" | "LE" => reg_val <= elem.preset_value,
+                    _ => false,
+                };
+                elem.current_accum = reg_val;
+                elem.is_done = c;
+                power_in && c
+            }
+            TypeTag::Math | TypeTag::Move => {
+                let reg_name = if !elem.target_reg.is_empty() {
+                    &elem.target_reg
+                } else {
+                    &elem.name
+                };
+                if let Some(&val) = self.registers.get(&reg_name.to_uppercase()) {
+                    elem.current_accum = val;
+                }
+                elem.is_done = power_in;
+                power_in
+            }
+            TypeTag::Sr | TypeTag::Rs => {
+                let q1 = if !elem.name.is_empty() {
+                    self.get_var_value(&elem.name)
+                } else {
+                    power_in
+                };
+                elem.is_done = q1;
+                q1
+            }
+            TypeTag::Label => {
+                elem.is_done = true;
+                power_in
+            }
+            _ => {
+                elem.is_done = power_in;
+                power_in
+            }
+        };
+
+        elem.is_energized = conducts;
+        conducts
     }
 }

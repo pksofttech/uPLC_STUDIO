@@ -318,6 +318,26 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 app.doc.reset_simulation();
                 ui.close();
             }
+            ui.separator();
+            let online_label = if app.online_mode {
+                "🛑 Stop Online Monitoring (Ctrl+M / F7)"
+            } else {
+                "🌐 Start Online Monitoring (Ctrl+M / F7)"
+            };
+            if ui.button(online_label).clicked() {
+                app.toggle_online_mode();
+                ui.close();
+            }
+            ui.menu_button("Online Target Device", |ui| {
+                if ui.selectable_label(app.online_target_hw, "🔌 Hardware (RP2040 Micro-VM)").clicked() {
+                    app.set_online_target_hw(true);
+                    ui.close();
+                }
+                if ui.selectable_label(!app.online_target_hw, "💻 Virtual Simulator").clicked() {
+                    app.set_online_target_hw(false);
+                    ui.close();
+                }
+            });
         });
 
         // --- OPTIONS MENU ---

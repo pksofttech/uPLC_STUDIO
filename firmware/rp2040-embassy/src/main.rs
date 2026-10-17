@@ -193,6 +193,8 @@ async fn usb_device_task(mut usb: UsbDevice<'static, UsbDriver<'static, USB>>) {
 async fn usb_cdc_comm_task(mut class: CdcAcmClass<'static, UsbDriver<'static, USB>>) {
     static USB_FRAME_BUF: StaticCell<[u8; MAX_INSTRUCTIONS * 4 + 8]> = StaticCell::new();
     let frame_buf = USB_FRAME_BUF.init([0u8; MAX_INSTRUCTIONS * 4 + 8]);
+    static USB_STATUS_BUF: StaticCell<[u8; uplc_vm::STATUS_PACKET_LEN]> = StaticCell::new();
+    let status_buf = USB_STATUS_BUF.init([0u8; uplc_vm::STATUS_PACKET_LEN]);
 
     loop {
         class.wait_connection().await;
@@ -260,7 +262,18 @@ async fn usb_cdc_comm_task(mut class: CdcAcmClass<'static, UsbDriver<'static, US
                                 let _ = class.write_packet(&[PACKET_SOF, 0x82, 0x00]).await;
                             }
                             Ok(CMD_MONITOR_STATUS) => {
-                                let _ = class.write_packet(&[PACKET_SOF, 0x83, 0x00, 0x01]).await;
+                                let len = {
+                                    let vm = SHARED_VM.lock().await;
+                                    vm.write_status_packet(status_buf).unwrap_or(0)
+                                };
+                                if len > 0 {
+                                    let mut offset = 0;
+                                    while offset < len {
+                                        let chunk = (len - offset).min(64);
+                                        let _ = class.write_packet(&status_buf[offset..offset + chunk]).await;
+                                        offset += chunk;
+                                    }
+                                }
                             }
                             Err(e) => {
                                 info!("USB-CDC Packet Error: {}", e);
@@ -341,6 +354,8 @@ async fn uart_comm_task(mut uart: BufferedUart<'static, UART0>) {
 
     static FRAME_BUF_CELL: StaticCell<[u8; MAX_INSTRUCTIONS * 4 + 8]> = StaticCell::new();
     let frame_buf = FRAME_BUF_CELL.init([0u8; MAX_INSTRUCTIONS * 4 + 8]);
+    static UART_STATUS_BUF: StaticCell<[u8; uplc_vm::STATUS_PACKET_LEN]> = StaticCell::new();
+    let status_buf = UART_STATUS_BUF.init([0u8; uplc_vm::STATUS_PACKET_LEN]);
 
     info!("UART Comm Task Ready and Listening on UART0 (115200 baud)...");
 
@@ -397,13 +412,13 @@ async fn uart_comm_task(mut uart: BufferedUart<'static, UART0>) {
                 let _ = uart.write_all(&[PACKET_SOF, 0x82, 0x00]).await;
             }
             Ok(CMD_MONITOR_STATUS) => {
-                info!("UART CMD 0x03: Sending 256-byte bit_mem status snapshot");
-                let snapshot = {
+                let len = {
                     let vm = SHARED_VM.lock().await;
-                    vm.bit_mem
+                    vm.write_status_packet(status_buf).unwrap_or(0)
                 };
-                let _ = uart.write_all(&[PACKET_SOF, 0x83, 0x00, 0x01]).await;
-                let _ = uart.write_all(&snapshot).await;
+                if len > 0 {
+                    let _ = uart.write_all(&status_buf[..len]).await;
+                }
             }
             Err(e) => {
                 info!("UART Packet Error: {}", e);

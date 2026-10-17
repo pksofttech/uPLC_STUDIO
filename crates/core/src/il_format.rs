@@ -1532,6 +1532,306 @@ impl IlParser {
         out
     }
 
+    /// Generate IEC 61131-3 IL Code with live inline Accumulator (ACC) & Process Image annotations
+    pub fn generate_il_code_online(prog: &LadderProgram, selected_rung: Option<usize>) -> String {
+        let mut out = String::new();
+        if let Some(sel) = selected_rung {
+            if let Some(rung) = prog.rungs.get(sel) {
+                out.push_str(&format!(
+                    "(* Network {:02}: {} [Rung Energized={}] *)\n",
+                    sel + 1,
+                    rung.comment,
+                    u8::from(rung.is_energized)
+                ));
+                Self::export_il_rung_online(&mut out, rung);
+            } else {
+                out.push_str("(* No active network selected *)\n");
+            }
+        } else {
+            for (idx, rung) in prog.rungs.iter().enumerate() {
+                out.push_str(&format!(
+                    "(* Network {:02}: {} [Rung Energized={}] *)\n",
+                    idx + 1,
+                    rung.comment,
+                    u8::from(rung.is_energized)
+                ));
+                Self::export_il_rung_online(&mut out, rung);
+                out.push_str("\n");
+            }
+        }
+        out
+    }
+
+    fn export_il_rung_online(out: &mut String, rung: &Rung) {
+        if rung.elements.is_empty() {
+            return;
+        }
+
+        let mut first = true;
+        for el in &rung.elements {
+            let cond_b = u8::from(el.is_done);
+            let acc_b = u8::from(el.is_energized);
+            match el.element_type {
+                TypeTag::Contact => {
+                    let (cmd_first, cmd_next) = match el.contact_mode {
+                        ContactMode::NormallyOpen => ("LD  ", "AND "),
+                        ContactMode::NormallyClosed => ("LDN ", "ANDN"),
+                        ContactMode::PositiveTransition => ("LDP ", "ANDP"),
+                        ContactMode::NegativeTransition => ("LDF ", "ANDF"),
+                    };
+                    let cmd = if first { cmd_first } else { cmd_next };
+                    let instr = format!("    {} {}", cmd, el.name);
+                    out.push_str(&format!(
+                        "{:<36} (* Bit={} -> ACC={} *)\n",
+                        instr, cond_b, acc_b
+                    ));
+                    first = false;
+                }
+                TypeTag::Coil => {
+                    let cmd = match el.coil_mode {
+                        CoilMode::Normal => "ST  ",
+                        CoilMode::Negated => "STN ",
+                        CoilMode::SetLatch => "S   ",
+                        CoilMode::ResetUnlatch => "R   ",
+                        CoilMode::PositiveTransition => "STP ",
+                        CoilMode::NegativeTransition => "STF ",
+                    };
+                    let instr = format!("    {} {}", cmd, el.name);
+                    out.push_str(&format!(
+                        "{:<36} (* Out={} |  ACC={} *)\n",
+                        instr, cond_b, acc_b
+                    ));
+                    first = false;
+                }
+                TypeTag::Branch => {
+                    if first {
+                        if let Some(first_path) = el.branch_paths.first() {
+                            let mut path_first = true;
+                            for sub in first_path {
+                                let (cmd_f, cmd_n) = match sub.contact_mode {
+                                    ContactMode::NormallyOpen => ("LD  ", "AND "),
+                                    ContactMode::NormallyClosed => ("LDN ", "ANDN"),
+                                    ContactMode::PositiveTransition => ("LDP ", "ANDP"),
+                                    ContactMode::NegativeTransition => ("LDF ", "ANDF"),
+                                };
+                                let cmd = if path_first { cmd_f } else { cmd_n };
+                                let instr = format!("    {} {}", cmd, sub.name);
+                                out.push_str(&format!(
+                                    "{:<36} (* Bit={} -> ACC={} *)\n",
+                                    instr,
+                                    u8::from(sub.is_done),
+                                    u8::from(sub.is_energized)
+                                ));
+                                path_first = false;
+                            }
+                        }
+                        for path in el.branch_paths.iter().skip(1) {
+                            if path.len() == 1 {
+                                let sub = &path[0];
+                                let cmd = match sub.contact_mode {
+                                    ContactMode::NormallyOpen => "OR  ",
+                                    ContactMode::NormallyClosed => "ORN ",
+                                    ContactMode::PositiveTransition => "ORP ",
+                                    ContactMode::NegativeTransition => "ORF ",
+                                };
+                                let instr = format!("    {} {}", cmd, sub.name);
+                                out.push_str(&format!(
+                                    "{:<36} (* Bit={} -> ACC={} *)\n",
+                                    instr,
+                                    u8::from(sub.is_done),
+                                    acc_b
+                                ));
+                            } else if !path.is_empty() {
+                                let sub0 = &path[0];
+                                let cmd0 = match sub0.contact_mode {
+                                    ContactMode::NormallyOpen => "OR( ",
+                                    ContactMode::NormallyClosed => "ORN(",
+                                    ContactMode::PositiveTransition => "ORP(",
+                                    ContactMode::NegativeTransition => "ORF(",
+                                };
+                                let instr0 = format!("    {} {}", cmd0, sub0.name);
+                                out.push_str(&format!(
+                                    "{:<36} (* Bit={} -> SubACC={} *)\n",
+                                    instr0,
+                                    u8::from(sub0.is_done),
+                                    u8::from(sub0.is_energized)
+                                ));
+                                for sub in path.iter().skip(1) {
+                                    let cmd = match sub.contact_mode {
+                                        ContactMode::NormallyOpen => "AND ",
+                                        ContactMode::NormallyClosed => "ANDN",
+                                        ContactMode::PositiveTransition => "ANDP",
+                                        ContactMode::NegativeTransition => "ANDF",
+                                    };
+                                    let instr = format!("    {} {}", cmd, sub.name);
+                                    out.push_str(&format!(
+                                        "{:<36} (* Bit={} -> SubACC={} *)\n",
+                                        instr,
+                                        u8::from(sub.is_done),
+                                        u8::from(sub.is_energized)
+                                    ));
+                                }
+                                out.push_str(&format!(
+                                    "{:<36} (* Branch -> ACC={} *)\n",
+                                    "    )", acc_b
+                                ));
+                            }
+                        }
+                        first = false;
+                    } else {
+                        out.push_str("    AND(\n");
+                        if let Some(first_path) = el.branch_paths.first() {
+                            let mut path_first = true;
+                            for sub in first_path {
+                                let (cmd_f, cmd_n) = match sub.contact_mode {
+                                    ContactMode::NormallyOpen => ("LD  ", "AND "),
+                                    ContactMode::NormallyClosed => ("LDN ", "ANDN"),
+                                    ContactMode::PositiveTransition => ("LDP ", "ANDP"),
+                                    ContactMode::NegativeTransition => ("LDF ", "ANDF"),
+                                };
+                                let cmd = if path_first { cmd_f } else { cmd_n };
+                                let instr = format!("        {} {}", cmd, sub.name);
+                                out.push_str(&format!(
+                                    "{:<36} (* Bit={} -> SubACC={} *)\n",
+                                    instr,
+                                    u8::from(sub.is_done),
+                                    u8::from(sub.is_energized)
+                                ));
+                                path_first = false;
+                            }
+                        }
+                        for path in el.branch_paths.iter().skip(1) {
+                            if path.len() == 1 {
+                                let sub = &path[0];
+                                let cmd = match sub.contact_mode {
+                                    ContactMode::NormallyOpen => "OR  ",
+                                    ContactMode::NormallyClosed => "ORN ",
+                                    ContactMode::PositiveTransition => "ORP ",
+                                    ContactMode::NegativeTransition => "ORF ",
+                                };
+                                let instr = format!("        {} {}", cmd, sub.name);
+                                out.push_str(&format!(
+                                    "{:<36} (* Bit={} -> SubACC={} *)\n",
+                                    instr,
+                                    u8::from(sub.is_done),
+                                    u8::from(sub.is_energized)
+                                ));
+                            } else if !path.is_empty() {
+                                let sub0 = &path[0];
+                                let cmd0 = match sub0.contact_mode {
+                                    ContactMode::NormallyOpen => "OR( ",
+                                    ContactMode::NormallyClosed => "ORN(",
+                                    ContactMode::PositiveTransition => "ORP(",
+                                    ContactMode::NegativeTransition => "ORF(",
+                                };
+                                let instr0 = format!("        {} {}", cmd0, sub0.name);
+                                out.push_str(&format!(
+                                    "{:<36} (* Bit={} -> SubACC={} *)\n",
+                                    instr0,
+                                    u8::from(sub0.is_done),
+                                    u8::from(sub0.is_energized)
+                                ));
+                                for sub in path.iter().skip(1) {
+                                    let cmd = match sub.contact_mode {
+                                        ContactMode::NormallyOpen => "AND ",
+                                        ContactMode::NormallyClosed => "ANDN",
+                                        ContactMode::PositiveTransition => "ANDP",
+                                        ContactMode::NegativeTransition => "ANDF",
+                                    };
+                                    let instr = format!("        {} {}", cmd, sub.name);
+                                    out.push_str(&format!(
+                                        "{:<36} (* Bit={} -> SubACC={} *)\n",
+                                        instr,
+                                        u8::from(sub.is_done),
+                                        u8::from(sub.is_energized)
+                                    ));
+                                }
+                                out.push_str("        )\n");
+                            }
+                        }
+                        out.push_str(&format!(
+                            "{:<36} (* Branch -> ACC={} *)\n",
+                            "    )", acc_b
+                        ));
+                    }
+                }
+                TypeTag::Ton | TypeTag::Tof | TypeTag::Tp => {
+                    let instr = format!("    CAL  {}(IN := TRUE, PT := T#{}ms)", el.name, el.preset_value);
+                    out.push_str(&format!(
+                        "{:<36} (* ET={}ms/{}ms, Q={} -> ACC={} *)\n",
+                        instr, el.current_accum, el.preset_value, cond_b, acc_b
+                    ));
+                    first = false;
+                }
+                TypeTag::Ctu | TypeTag::Ctud => {
+                    let instr = format!("    CAL  {}(CU := TRUE, PV := {})", el.name, el.preset_value);
+                    out.push_str(&format!(
+                        "{:<36} (* CV={}/{}, Q={} -> ACC={} *)\n",
+                        instr, el.current_accum, el.preset_value, cond_b, acc_b
+                    ));
+                    first = false;
+                }
+                TypeTag::Ctd => {
+                    let instr = format!("    CAL  {}(CD := TRUE, PV := {})", el.name, el.preset_value);
+                    out.push_str(&format!(
+                        "{:<36} (* CV={}/{}, Q={} -> ACC={} *)\n",
+                        instr, el.current_accum, el.preset_value, cond_b, acc_b
+                    ));
+                    first = false;
+                }
+                TypeTag::Compare => {
+                    let op_iec = match el.compare_op.trim().to_uppercase().as_str() {
+                        "==" | "EQ" => "EQ",
+                        "!=" | "<>" | "NE" => "NE",
+                        ">" | "GT" => "GT",
+                        "<" | "LT" => "LT",
+                        ">=" | "GE" => "GE",
+                        "<=" | "LE" => "LE",
+                        _ => "EQ",
+                    };
+                    let instr = format!("    {}   {} {}", op_iec, el.name, el.preset_value);
+                    out.push_str(&format!(
+                        "{:<36} (* Word={}, Cond={} -> ACC={} *)\n",
+                        instr, el.current_accum, cond_b, acc_b
+                    ));
+                    first = false;
+                }
+                TypeTag::Move => {
+                    let instr = format!("    MOVE {} {}", el.name, el.preset_value);
+                    out.push_str(&format!(
+                        "{:<36} (* Word={} | ACC={} *)\n",
+                        instr, el.current_accum, acc_b
+                    ));
+                    first = false;
+                }
+                TypeTag::Math => {
+                    let op_name = match el.math_op.as_str() {
+                        "-" => "SUB",
+                        "*" => "MUL",
+                        "/" => "DIV",
+                        "%" => "MOD",
+                        _ => "ADD",
+                    };
+                    let instr = format!("    {}  {} {}", op_name, el.name, el.preset_value);
+                    out.push_str(&format!(
+                        "{:<36} (* Word={} | ACC={} *)\n",
+                        instr, el.current_accum, acc_b
+                    ));
+                    first = false;
+                }
+                _ => {
+                    Self::export_il_rung(out, &Rung {
+                        id: rung.id,
+                        comment: String::new(),
+                        elements: vec![el.clone()],
+                        is_energized: rung.is_energized,
+                    });
+                    first = false;
+                }
+            }
+        }
+    }
+
     /// Alias for backward compatibility
     pub fn generate_plclib_code(prog: &LadderProgram, selected_rung: Option<usize>) -> String {
         Self::generate_il_code(prog, selected_rung)

@@ -1335,3 +1335,53 @@ fn test_drop_to_new_rung() {
     assert!(doc.program.rungs[last_rung_idx].elements.iter().any(|e| e.id == moving_elem_id));
 }
 
+#[test]
+fn test_online_monitoring_snapshot_and_conduction() {
+    let mut doc = Document::default();
+    doc.program = LadderProgram::new_empty();
+    doc.program.rungs.clear();
+
+    // Rung 0: LD X0 -> ST Y0
+    let mut r0 = my_canvas_core::Rung::new(1);
+    r0.elements.push(LadderElement::new_contact(1, "X0", "%IX0.0", ContactMode::NormallyOpen));
+    r0.elements.push(LadderElement::new_coil(2, "Y0", "%QX0.0", CoilMode::Normal));
+    doc.program.rungs.push(r0);
+
+    // Initial state: not energized
+    assert!(!doc.program.rungs[0].is_energized);
+    assert!(!doc.program.rungs[0].elements[0].is_done);
+
+    // Create a live snapshot from PLC: X0 = 1, Y0 = 1, Running = true
+    let mut snapshot = my_canvas_core::PlcStatusSnapshot::default();
+    snapshot.running = true;
+    snapshot.scan_count = 555;
+    snapshot.bit_mem[0] = 1;      // X0 = 1
+    snapshot.bit_mem[0x20] = 1;   // Y0 = 1
+    snapshot.acc_bool = true;
+
+    // Apply snapshot to document
+    doc.apply_online_snapshot(&snapshot);
+
+    // Verify conduction states update immediately
+    assert!(doc.simulator.is_active());
+    assert!(doc.program.rungs[0].is_energized, "Rung 0 should be energized");
+    assert!(doc.program.rungs[0].elements[0].is_done, "Contact X0 should be closed (ON)");
+    assert!(doc.program.rungs[0].elements[0].is_energized);
+    assert!(doc.program.rungs[0].elements[1].is_done, "Coil Y0 should be ON");
+    assert!(doc.program.rungs[0].elements[1].is_energized);
+
+    // Verify Process Image values in simulator maps
+    assert_eq!(doc.simulator.inputs.get("X0"), Some(&true));
+    assert_eq!(doc.simulator.inputs.get("%IX0.0"), Some(&true));
+    assert_eq!(doc.simulator.outputs.get("Y0"), Some(&true));
+    assert_eq!(doc.simulator.outputs.get("%QX0.0"), Some(&true));
+    assert_eq!(doc.simulator.scan_count, 555);
+
+    // Now send snapshot with X0 = 0
+    snapshot.bit_mem[0] = 0;
+    doc.apply_online_snapshot(&snapshot);
+    assert!(!doc.program.rungs[0].is_energized, "Rung 0 should drop out");
+    assert!(!doc.program.rungs[0].elements[0].is_done, "Contact X0 should be OPEN");
+}
+
+

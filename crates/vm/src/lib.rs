@@ -26,6 +26,11 @@ pub const PACKET_SOF: u8 = 0xAA;
 pub const CMD_DOWNLOAD_PROGRAM: u8 = 0x01;
 pub const CMD_RUN_STOP: u8 = 0x02;
 pub const CMD_MONITOR_STATUS: u8 = 0x03;
+pub const CMD_STATUS_RESPONSE: u8 = 0x83;
+
+/// Online Monitoring Status Packet Lengths
+pub const STATUS_SNAPSHOT_PAYLOAD_LEN: usize = 1 + 4 + 1 + 4 + 256 + 64 + 64 + 64; // 458 bytes
+pub const STATUS_PACKET_LEN: usize = 5 + STATUS_SNAPSHOT_PAYLOAD_LEN; // 463 bytes
 
 /// 32-bit Fixed-Width VM Instruction (`4 Bytes`)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -65,6 +70,8 @@ pub struct MicroVm {
     pub prog_len: u16,
     pub running: bool,
     pub scan_count: u32,
+    pub acc_bool: bool,
+    pub acc_word: i32,
 
     /// Unified Bit Memory (`X`, `Y`, `M`, `T-bit`, `C-bit`)
     pub bit_mem: [u8; 256],
@@ -95,6 +102,8 @@ impl MicroVm {
             prog_len: 0,
             running: true,
             scan_count: 0,
+            acc_bool: false,
+            acc_word: 0,
             bit_mem: [0; 256],
             prev_bit_mem: [0; 256],
             word_mem: [0; 256],
@@ -110,6 +119,8 @@ impl MicroVm {
         self.word_mem = [0; 256];
         self.ctu_prev = [0; 32];
         self.edge_prev = [0; 256];
+        self.acc_bool = false;
+        self.acc_word = 0;
         self.scan_count = 0;
     }
 
@@ -284,6 +295,7 @@ impl MicroVm {
                             self.word_mem[addr] = next_cv;
                             self.bit_mem[addr] = 0;
                         }
+                        self.acc_word = self.word_mem[addr];
                     } else {
                         self.word_mem[addr] = 0;
                         self.bit_mem[addr] = 0;
@@ -304,6 +316,7 @@ impl MicroVm {
                         } else {
                             self.word_mem[addr] = next_cv;
                         }
+                        self.acc_word = self.word_mem[addr];
                     }
                     acc = self.bit_mem[addr] != 0;
                 }
@@ -313,6 +326,7 @@ impl MicroVm {
                     if acc && mc_active && self.word_mem[addr] == 0 && self.bit_mem[addr] == 0 {
                         self.bit_mem[addr] = 1;
                         self.word_mem[addr] = dt_ms as i32;
+                        self.acc_word = self.word_mem[addr];
                     } else if self.bit_mem[addr] != 0 {
                         let next_cv = self.word_mem[addr].saturating_add(dt_ms as i32);
                         if next_cv >= pt {
@@ -321,6 +335,7 @@ impl MicroVm {
                         } else {
                             self.word_mem[addr] = next_cv;
                         }
+                        self.acc_word = self.word_mem[addr];
                     } else if !acc {
                         self.word_mem[addr] = 0;
                     }
@@ -337,6 +352,7 @@ impl MicroVm {
                         }
                     }
                     self.ctu_prev[c_idx] = u8::from(acc && mc_active);
+                    self.acc_word = self.word_mem[addr];
                     acc = self.bit_mem[addr] != 0;
                 }
                 0x24 => {
@@ -350,46 +366,71 @@ impl MicroVm {
                         }
                     }
                     self.ctu_prev[c_idx] = u8::from(acc && mc_active);
+                    self.acc_word = self.word_mem[addr];
                     acc = self.bit_mem[addr] != 0;
                 }
 
                 // Comparisons
-                0x30 => acc = acc && (self.word_mem[addr] == ins.imm as i32), // EQ
-                0x31 => acc = acc && (self.word_mem[addr] != ins.imm as i32), // NE
-                0x32 => acc = acc && (self.word_mem[addr] > ins.imm as i32),  // GT
-                0x33 => acc = acc && (self.word_mem[addr] < ins.imm as i32),  // LT
-                0x34 => acc = acc && (self.word_mem[addr] >= ins.imm as i32), // GE
-                0x35 => acc = acc && (self.word_mem[addr] <= ins.imm as i32), // LE
+                0x30 => {
+                    self.acc_word = self.word_mem[addr];
+                    acc = acc && (self.word_mem[addr] == ins.imm as i32); // EQ
+                }
+                0x31 => {
+                    self.acc_word = self.word_mem[addr];
+                    acc = acc && (self.word_mem[addr] != ins.imm as i32); // NE
+                }
+                0x32 => {
+                    self.acc_word = self.word_mem[addr];
+                    acc = acc && (self.word_mem[addr] > ins.imm as i32);  // GT
+                }
+                0x33 => {
+                    self.acc_word = self.word_mem[addr];
+                    acc = acc && (self.word_mem[addr] < ins.imm as i32);  // LT
+                }
+                0x34 => {
+                    self.acc_word = self.word_mem[addr];
+                    acc = acc && (self.word_mem[addr] >= ins.imm as i32); // GE
+                }
+                0x35 => {
+                    self.acc_word = self.word_mem[addr];
+                    acc = acc && (self.word_mem[addr] <= ins.imm as i32); // LE
+                }
 
                 // Word Move & Math
                 0x40 => {
                     if acc && mc_active {
                         self.word_mem[addr] = ins.imm as i32;
+                        self.acc_word = self.word_mem[addr];
                     }
                 }
                 0x41 => {
                     if acc && mc_active {
                         self.word_mem[addr] = self.word_mem[addr].saturating_add(ins.imm as i32);
+                        self.acc_word = self.word_mem[addr];
                     }
                 }
                 0x42 => {
                     if acc && mc_active {
                         self.word_mem[addr] = self.word_mem[addr].saturating_sub(ins.imm as i32);
+                        self.acc_word = self.word_mem[addr];
                     }
                 }
                 0x43 => {
                     if acc && mc_active {
                         self.word_mem[addr] = self.word_mem[addr].saturating_mul(ins.imm as i32);
+                        self.acc_word = self.word_mem[addr];
                     }
                 }
                 0x44 => {
                     if acc && mc_active && ins.imm != 0 {
                         self.word_mem[addr] /= ins.imm as i32;
+                        self.acc_word = self.word_mem[addr];
                     }
                 }
                 0x45 => {
                     if acc && mc_active && ins.imm != 0 {
                         self.word_mem[addr] %= ins.imm as i32;
+                        self.acc_word = self.word_mem[addr];
                     }
                 }
 
@@ -408,8 +449,66 @@ impl MicroVm {
             pc += 1;
         }
 
+        self.acc_bool = acc;
         self.prev_bit_mem = self.bit_mem;
         self.scan_count = self.scan_count.wrapping_add(1);
+    }
+
+    /// Write complete Online Monitoring Status Packet Frame into `out` buffer:
+    /// `[0xAA] [0x83] [LEN_LO] [LEN_HI] [PAYLOAD (458 bytes)] [CRC8]`
+    /// Returns total bytes written (STATUS_PACKET_LEN = 463 bytes)
+    pub fn write_status_packet(&self, out: &mut [u8]) -> Result<usize, &'static str> {
+        if out.len() < STATUS_PACKET_LEN {
+            return Err("Buffer too small for status packet");
+        }
+        out[0] = PACKET_SOF;
+        out[1] = CMD_STATUS_RESPONSE; // 0x83
+        let payload_len = STATUS_SNAPSHOT_PAYLOAD_LEN as u16;
+        let [l0, l1] = payload_len.to_le_bytes();
+        out[2] = l0;
+        out[3] = l1;
+
+        let mut idx = 4;
+        out[idx] = if self.running { 1 } else { 0 };
+        idx += 1;
+
+        out[idx..idx + 4].copy_from_slice(&self.scan_count.to_le_bytes());
+        idx += 4;
+
+        out[idx] = if self.acc_bool { 1 } else { 0 };
+        idx += 1;
+
+        out[idx..idx + 4].copy_from_slice(&self.acc_word.to_le_bytes());
+        idx += 4;
+
+        out[idx..idx + 256].copy_from_slice(&self.bit_mem);
+        idx += 256;
+
+        // Timers T0..T15 current values (word_mem[0xC0..0xD0])
+        for i in 0..16 {
+            let cv = (self.word_mem[0xC0 + i].max(0)) as u32;
+            out[idx..idx + 4].copy_from_slice(&cv.to_le_bytes());
+            idx += 4;
+        }
+
+        // Counters C0..C15 current values (word_mem[0xE0..0xF0])
+        for i in 0..16 {
+            let cv = self.word_mem[0xE0 + i];
+            out[idx..idx + 4].copy_from_slice(&cv.to_le_bytes());
+            idx += 4;
+        }
+
+        // Data Registers D0..D15 / %MW0..%MW15 (word_mem[0..16])
+        for i in 0..16 {
+            let val = self.word_mem[i];
+            out[idx..idx + 4].copy_from_slice(&val.to_le_bytes());
+            idx += 4;
+        }
+
+        let crc = Self::compute_crc8(&out[1..idx]);
+        out[idx] = crc;
+        idx += 1;
+        Ok(idx)
     }
 
     /// Compute CRC-8 (polynomial 0x07) over `data`
@@ -599,6 +698,43 @@ mod tests {
         assert!(vm.running, "VM should return to RUN state");
         vm.step_scan(1);
         assert!(vm.get_digital_output(0), "Y0 should be ON again after resuming RUN");
+    }
+
+    #[test]
+    fn test_vm_status_snapshot_packet() {
+        let mut vm = MicroVm::new();
+        vm.running = true;
+        vm.scan_count = 1420;
+        vm.set_digital_input(0, true);  // X0
+        vm.bit_mem[0x20] = 1;          // Y0
+        vm.bit_mem[0x40] = 1;          // M0
+        vm.bit_mem[0xC0] = 1;          // T0 Done
+        vm.word_mem[0xC0] = 500;       // T0 CV = 500ms
+        vm.acc_bool = true;
+        vm.acc_word = 42;
+
+        let mut buf = [0u8; STATUS_PACKET_LEN];
+        let bytes_written = vm.write_status_packet(&mut buf).unwrap();
+        assert_eq!(bytes_written, STATUS_PACKET_LEN);
+        assert_eq!(buf[0], PACKET_SOF);
+        assert_eq!(buf[1], CMD_STATUS_RESPONSE); // 0x83
+        let len = u16::from_le_bytes([buf[2], buf[3]]) as usize;
+        assert_eq!(len, STATUS_SNAPSHOT_PAYLOAD_LEN);
+        assert_eq!(buf[4], 1); // running = true
+        let scan = u32::from_le_bytes([buf[5], buf[6], buf[7], buf[8]]);
+        assert_eq!(scan, 1420);
+        assert_eq!(buf[9], 1); // acc_bool = true
+        let acc_w = i32::from_le_bytes([buf[10], buf[11], buf[12], buf[13]]);
+        assert_eq!(acc_w, 42);
+        // Verify bit_mem
+        assert_eq!(buf[14], 1); // X0
+        assert_eq!(buf[14 + 0x20], 1); // Y0
+        assert_eq!(buf[14 + 0x40], 1); // M0
+        assert_eq!(buf[14 + 0xC0], 1); // T0 bit
+        // Verify CRC8 matches computed CRC8
+        let expected_crc = buf[STATUS_PACKET_LEN - 1];
+        let actual_crc = MicroVm::compute_crc8(&buf[1..STATUS_PACKET_LEN - 1]);
+        assert_eq!(expected_crc, actual_crc);
     }
 }
 

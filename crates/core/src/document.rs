@@ -5,6 +5,7 @@ use crate::ladder::{
 };
 use crate::il_format::IlParser;
 use crate::simulation::PlcSimulator;
+use crate::bytecode::PlcStatusSnapshot;
 
 const MAX_UNDO_HISTORY: usize = 64;
 
@@ -326,6 +327,40 @@ impl Document {
         self.simulator.set_input(name, val);
         if self.simulator.is_step() {
             self.simulator.step_scan(&mut self.program, 0);
+        }
+    }
+
+    /// Update process image from an Online Monitoring Status Snapshot and re-evaluate ladder conduction
+    pub fn apply_online_snapshot(&mut self, snapshot: &PlcStatusSnapshot) {
+        self.simulator.apply_online_snapshot(snapshot);
+        self.simulator.evaluate_conduction_only(&mut self.program);
+    }
+
+    /// Capture status snapshot from current document/simulator state
+    pub fn capture_status_snapshot(&self) -> PlcStatusSnapshot {
+        self.simulator.capture_status_snapshot()
+    }
+
+    /// Enable or disable Online Monitoring mode
+    pub fn set_online_mode(&mut self, enabled: bool) {
+        self.simulator.online_mode = enabled;
+        if enabled {
+            self.simulator.evaluate_conduction_only(&mut self.program);
+        } else if self.simulator.is_stopped() {
+            // Clear energized states if not simulating
+            for rung in &mut self.program.rungs {
+                rung.is_energized = false;
+                for elem in &mut rung.elements {
+                    elem.is_energized = false;
+                    elem.is_done = false;
+                    for path in &mut elem.branch_paths {
+                        for sub in path {
+                            sub.is_energized = false;
+                            sub.is_done = false;
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -927,6 +962,10 @@ impl Document {
 
     pub fn generate_il_code(&self) -> String {
         IlParser::generate_il_code(&self.program, self.selected_rung_idx)
+    }
+
+    pub fn generate_il_code_online(&self) -> String {
+        IlParser::generate_il_code_online(&self.program, self.selected_rung_idx)
     }
 
     pub fn generate_plclib_code(&self) -> String {

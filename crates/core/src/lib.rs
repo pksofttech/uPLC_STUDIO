@@ -8,7 +8,7 @@ pub mod simulation;
 
 pub use bytecode::{
     BytecodeCompiler, BytecodeInstruction, BytecodeProgram, MemoryMapEntry, MemoryRegion,
-    PlcSerialCommand, VmOpcode, PACKET_SOF,
+    PlcSerialCommand, PlcStatusSnapshot, VmOpcode, PACKET_SOF,
 };
 pub use document::Document;
 pub use ladder::{

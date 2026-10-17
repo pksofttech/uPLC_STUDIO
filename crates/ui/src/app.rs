@@ -1,7 +1,13 @@
 use std::path::PathBuf;
-use std::time::Instant;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    mpsc::{self, Receiver},
+    Arc,
+};
+use std::thread;
+use std::time::{Duration, Instant};
 use egui::{CentralPanel, Panel, RichText, Ui, Window};
-use my_canvas_core::{Document, IOPortMapping, InsertPosition, SchematicStyle, SimState};
+use my_canvas_core::{Document, IOPortMapping, InsertPosition, PlcStatusSnapshot, SchematicStyle, SimState};
 use serde::{Deserialize, Serialize};
 use crate::canvas::CanvasViewport;
 use crate::panels::{element_dialog::ElementConfigModal, left_panel, menu_bar, right_panel, status_bar, toolbar};
@@ -19,6 +25,7 @@ pub struct AppSettings {
     pub baud_rate: String,
     pub cycle_time_ms: u32,
     pub hardware: String,
+    pub online_target_hw: bool,
     pub window_width: Option<f32>,
     pub window_height: Option<f32>,
     pub window_maximized: bool,
@@ -36,6 +43,7 @@ impl Default for AppSettings {
             baud_rate: "115200".to_string(),
             cycle_time_ms: 10,
             hardware: "IEC 61131-3 Standard PLC".to_string(),
+            online_target_hw: true,
             window_width: Some(1280.0),
             window_height: Some(720.0),
             window_maximized: false,
@@ -120,6 +128,12 @@ pub struct CanvasApp {
     pub window_state_dirty: bool,
     pub last_window_change: Option<Instant>,
     pub frame_counter: u64,
+    pub online_mode: bool,
+    pub online_target_hw: bool,
+    pub online_status_text: String,
+    pub latest_snapshot: Option<PlcStatusSnapshot>,
+    pub online_worker_stop: Arc<AtomicBool>,
+    pub online_worker_rx: Option<Receiver<PlcStatusSnapshot>>,
 }
 
 impl Default for CanvasApp {
@@ -167,6 +181,12 @@ impl Default for CanvasApp {
             window_state_dirty: false,
             last_window_change: None,
             frame_counter: 0,
+            online_mode: false,
+            online_target_hw: settings.online_target_hw,
+            online_status_text: "Offline".to_string(),
+            latest_snapshot: None,
+            online_worker_stop: Arc::new(AtomicBool::new(false)),
+            online_worker_rx: None,
         }
     }
 }
@@ -225,9 +245,18 @@ impl CanvasApp {
     }
 
     pub fn transmit_bytecode_to_plc(&mut self, cmd: my_canvas_core::PlcSerialCommand) {
-        use std::io::Write;
+        use std::io::{Read, Write};
         let bc = self.doc.compile_to_bytecode();
         let packet = bc.to_serial_packet(cmd);
+
+        // If Hardware Online Monitoring is currently polling the serial port, pause it during transmission
+        let resume_online_hw = self.online_mode && self.online_target_hw;
+        if resume_online_hw {
+            self.online_worker_stop.store(true, Ordering::Relaxed);
+            self.online_worker_rx = None;
+            thread::sleep(Duration::from_millis(60));
+        }
+
         let raw_port = self.com_port.split_whitespace().next().unwrap_or("/dev/ttyACM0");
         let mut port_path = if raw_port.starts_with("tty") {
             format!("/dev/{}", raw_port)
@@ -253,7 +282,7 @@ impl CanvasApp {
         // Configure raw mode via stty on Linux if device exists
         if std::path::Path::new(&port_path).exists() {
             let _ = std::process::Command::new("stty")
-                .args(["-F", &port_path, &self.baud_rate, "raw", "-echo", "-hupcl"])
+                .args(["-F", &port_path, &self.baud_rate, "raw", "-echo", "-hupcl", "min", "0", "time", "1"])
                 .output();
         }
 
@@ -261,6 +290,11 @@ impl CanvasApp {
             Ok(mut file) => match file.write_all(&packet) {
                 Ok(_) => {
                     let _ = file.flush();
+                    // Briefly drain any 3-byte ACK ([0xAA, 0x81/0x82, 0x00]) so RX buffer stays clean
+                    thread::sleep(Duration::from_millis(15));
+                    let mut ack_drain = [0u8; 32];
+                    let _ = file.read(&mut ack_drain);
+
                     self.update_plc_is_error = false;
                     match cmd {
                         my_canvas_core::PlcSerialCommand::DownloadProgram => {
@@ -317,6 +351,11 @@ impl CanvasApp {
                 );
             }
         }
+
+        if resume_online_hw {
+            self.online_mode = false;
+            self.start_online_monitoring();
+        }
     }
 
     pub fn current_settings(&self) -> AppSettings {
@@ -328,11 +367,156 @@ impl CanvasApp {
             baud_rate: self.baud_rate.clone(),
             cycle_time_ms: self.doc.simulator.cycle_time_ms,
             hardware: self.doc.program.hardware.clone(),
+            online_target_hw: self.online_target_hw,
             window_width: self.window_width,
             window_height: self.window_height,
             window_maximized: self.window_maximized,
             window_pos_x: self.window_pos_x,
             window_pos_y: self.window_pos_y,
+        }
+    }
+
+    pub fn start_online_monitoring(&mut self) {
+        if self.online_mode {
+            return;
+        }
+        self.online_mode = true;
+        self.doc.set_online_mode(true);
+
+        if self.online_target_hw {
+            self.online_status_text = "Connecting to PLC...".to_string();
+            let stop_flag = Arc::new(AtomicBool::new(false));
+            self.online_worker_stop = stop_flag.clone();
+
+            let raw_port = self.com_port.split_whitespace().next().unwrap_or("/dev/ttyACM1");
+            let mut port_path = if raw_port.starts_with("tty") {
+                format!("/dev/{}", raw_port)
+            } else {
+                raw_port.to_string()
+            };
+
+            // Auto-detect uPLC port if current does not exist or is a debugprobe
+            let is_debugprobe = port_path
+                .strip_prefix("/dev/")
+                .and_then(|n| std::fs::read_to_string(format!("/sys/class/tty/{}/device/../product", n)).ok())
+                .map(|p| p.contains("Debugprobe"))
+                .unwrap_or(false);
+            if (!std::path::Path::new(&port_path).exists() || is_debugprobe)
+                && Self::detect_uplc_usb_port().is_some()
+            {
+                if let Some(detected) = Self::detect_uplc_usb_port() {
+                    port_path = detected.clone();
+                    self.com_port = detected;
+                }
+            }
+
+            let baud = self.baud_rate.clone();
+            let (tx, rx) = mpsc::channel();
+            self.online_worker_rx = Some(rx);
+
+            thread::spawn(move || {
+                use std::io::{Read, Write};
+                // Pre-constructed MonitorStatus request packet: [0xAA, 0x03, 0x00, 0x00, 0xBD]
+                let req = [0xAAu8, 0x03, 0x00, 0x00, 0xBD];
+                let expected_hdr = [0xAAu8, 0x83, 0xCA, 0x01];
+                let mut chunk = [0u8; 512];
+                let mut rx_accum: Vec<u8> = Vec::with_capacity(1024);
+
+                while !stop_flag.load(Ordering::Relaxed) {
+                    if !std::path::Path::new(&port_path).exists() {
+                        thread::sleep(Duration::from_millis(200));
+                        continue;
+                    }
+
+                    // Configure stty raw mode with timeout
+                    let _ = std::process::Command::new("stty")
+                        .args(["-F", &port_path, &baud, "raw", "-echo", "-hupcl", "min", "0", "time", "1"])
+                        .output();
+
+                    match std::fs::OpenOptions::new().read(true).write(true).open(&port_path) {
+                        Ok(mut file) => {
+                            // Drain any stale bytes on initial open
+                            let _ = file.read(&mut chunk);
+                            rx_accum.clear();
+
+                            while !stop_flag.load(Ordering::Relaxed) {
+                                if file.write_all(&req).is_ok() && file.flush().is_ok() {
+                                    let start = Instant::now();
+                                    while start.elapsed().as_millis() < 220 {
+                                        match file.read(&mut chunk) {
+                                            Ok(0) => thread::sleep(Duration::from_millis(4)),
+                                            Ok(n) => {
+                                                rx_accum.extend_from_slice(&chunk[..n]);
+                                                // Search for [0xAA, 0x83, 0xCA, 0x01] header
+                                                if let Some(pos) = rx_accum
+                                                    .windows(4)
+                                                    .position(|w| w == expected_hdr)
+                                                {
+                                                    if pos > 0 {
+                                                        rx_accum.drain(..pos);
+                                                    }
+                                                    if rx_accum.len() >= 463 {
+                                                        let frame: Vec<u8> =
+                                                            rx_accum.drain(..463).collect();
+                                                        if let Ok(snap) =
+                                                            PlcStatusSnapshot::parse_from_packet(
+                                                                &frame,
+                                                            )
+                                                        {
+                                                            if tx.send(snap).is_err() {
+                                                                return; // UI receiver dropped
+                                                            }
+                                                        }
+                                                        break;
+                                                    }
+                                                } else if rx_accum.len() > 1024 {
+                                                    rx_accum.clear();
+                                                }
+                                            }
+                                            Err(_) => break,
+                                        }
+                                    }
+                                }
+                                thread::sleep(Duration::from_millis(50));
+                            }
+                        }
+                        Err(_) => {
+                            thread::sleep(Duration::from_millis(200));
+                        }
+                    }
+                }
+            });
+        } else {
+            // Local Simulator mode
+            if self.doc.simulator.state == SimState::Stopped {
+                self.doc.simulator.state = SimState::Running;
+            }
+            self.online_status_text = "Online (Sim)".to_string();
+        }
+    }
+
+    pub fn stop_online_monitoring(&mut self) {
+        self.online_mode = false;
+        self.online_worker_stop.store(true, Ordering::Relaxed);
+        self.online_worker_rx = None;
+        self.doc.set_online_mode(false);
+        self.online_status_text = "Offline".to_string();
+    }
+
+    pub fn toggle_online_mode(&mut self) {
+        if self.online_mode {
+            self.stop_online_monitoring();
+        } else {
+            self.start_online_monitoring();
+        }
+    }
+
+    pub fn set_online_target_hw(&mut self, is_hw: bool) {
+        self.online_target_hw = is_hw;
+        self.save_settings();
+        if self.online_mode {
+            self.stop_online_monitoring();
+            self.start_online_monitoring();
         }
     }
 
@@ -471,8 +655,8 @@ impl eframe::App for CanvasApp {
             }
         }
 
-        // Periodic simulation scan when Running
-        if self.doc.simulator.state == SimState::Running {
+        // Periodic simulation scan when Running (paused when Hardware Online Monitoring is active)
+        if self.doc.simulator.state == SimState::Running && !(self.online_mode && self.online_target_hw) {
             let now = Instant::now();
             let elapsed = now.duration_since(self.last_sim_tick);
             let cycle_ms = self.doc.simulator.cycle_time_ms.max(5) as u128;
@@ -480,6 +664,37 @@ impl eframe::App for CanvasApp {
                 let dt = elapsed.as_millis().min(100) as u32;
                 self.doc.step_simulation(dt);
                 self.last_sim_tick = now;
+            }
+            ui.ctx().request_repaint();
+        }
+
+        // Online Monitoring Telemetry Polling (RP2040 Hardware or Virtual Simulator)
+        if self.online_mode {
+            if self.online_target_hw {
+                let mut latest = None;
+                if let Some(ref rx) = self.online_worker_rx {
+                    while let Ok(snap) = rx.try_recv() {
+                        latest = Some(snap);
+                    }
+                }
+                if let Some(snap) = latest {
+                    self.plc_remote_running = snap.running;
+                    self.online_status_text = format!(
+                        "Online (HW) | Scan #{} | {}",
+                        snap.scan_count,
+                        if snap.running { "RUN" } else { "STOP" }
+                    );
+                    self.doc.apply_online_snapshot(&snap);
+                    self.latest_snapshot = Some(snap);
+                }
+            } else {
+                let snap = self.doc.capture_status_snapshot();
+                self.online_status_text = format!(
+                    "Online (Sim) | Scan #{} | {}",
+                    snap.scan_count,
+                    if snap.running { "RUN" } else { "STOP" }
+                );
+                self.latest_snapshot = Some(snap);
             }
             ui.ctx().request_repaint();
         }
@@ -563,6 +778,9 @@ impl eframe::App for CanvasApp {
                 if ui.input(|i| i.key_pressed(egui::Key::F6)) {
                     self.doc.single_step_simulation(self.doc.simulator.cycle_time_ms);
                 }
+                if ui.input(|i| i.key_pressed(egui::Key::F7) || (i.modifiers.command && i.key_pressed(egui::Key::M))) {
+                    self.toggle_online_mode();
+                }
             }
         }
 
@@ -636,6 +854,26 @@ impl eframe::App for CanvasApp {
                                 .strong(),
                         );
                         ui.weak("(Live generated Instruction List for active rung / network)");
+                        if self.online_mode || self.doc.simulator.is_active() {
+                            let acc_b = self
+                                .latest_snapshot
+                                .as_ref()
+                                .map_or(self.doc.simulator.acc_bool, |s| s.acc_bool);
+                            let acc_w = self
+                                .latest_snapshot
+                                .as_ref()
+                                .map_or(self.doc.simulator.acc_word, |s| s.acc_word);
+                            ui.label(
+                                RichText::new(format!(
+                                    "⚡ LIVE ACC: Bit={} | Word={}",
+                                    if acc_b { "1" } else { "0" },
+                                    acc_w
+                                ))
+                                .monospace()
+                                .size(11.5)
+                                .color(if acc_b { palette.accent_ok } else { palette.accent_heading }),
+                            );
+                        }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.small_button("[x] Hide").clicked() {
                                 self.show_il_code = false;
@@ -643,7 +881,11 @@ impl eframe::App for CanvasApp {
                             }
                         });
                     });
-                    let il_code = self.doc.generate_il_code();
+                    let il_code = if self.online_mode || self.doc.simulator.is_active() {
+                        self.doc.generate_il_code_online()
+                    } else {
+                        self.doc.generate_il_code()
+                    };
                     let dynamic_rows = ((ui.available_height() / 16.5).floor() as usize).max(3);
                     egui::ScrollArea::vertical()
                         .id_salt("il_code_scroll")
@@ -686,6 +928,67 @@ impl eframe::App for CanvasApp {
                             .unwrap_or("");
                         self.elem_modal.open_for(&el, self.doc.selected_rung_idx, r_comment);
                     }
+                }
+
+                // Floating Live Online Monitoring Telemetry HUD
+                if self.online_mode {
+                    let max_rect = ui.max_rect();
+                    let hud_w = 264.0;
+                    let hud_h = 56.0;
+                    let hud_pos = egui::pos2(max_rect.max.x - hud_w - 18.0, max_rect.min.y + 14.0);
+                    let hud_rect = egui::Rect::from_min_size(hud_pos, egui::vec2(hud_w, hud_h));
+
+                    let painter = ui.painter();
+                    let is_hw = self.online_target_hw;
+                    let glow_color = if is_hw { palette.accent_ok } else { palette.accent_heading };
+                    painter.rect_filled(hud_rect, egui::CornerRadius::same(8), palette.banner_bg.gamma_multiply(0.95));
+                    painter.rect_stroke(
+                        hud_rect,
+                        egui::CornerRadius::same(8),
+                        egui::Stroke::new(1.5, glow_color),
+                        egui::StrokeKind::Inside,
+                    );
+
+                    let snap = self.latest_snapshot.as_ref();
+                    let scan_txt = snap.map_or(0, |s| s.scan_count);
+                    let is_run = snap.map_or(false, |s| s.running);
+                    let acc_b = snap.map_or(false, |s| s.acc_bool);
+                    let acc_w = snap.map_or(0, |s| s.acc_word);
+
+                    let target_str = if is_hw { "RP2040 MCU" } else { "Simulator" };
+                    let run_str = if is_run { "● RUN" } else { "⏹ STOP" };
+                    let run_color = if is_run { palette.accent_ok } else { palette.accent_danger };
+
+                    painter.text(
+                        egui::pos2(hud_rect.min.x + 10.0, hud_rect.min.y + 16.0),
+                        egui::Align2::LEFT_CENTER,
+                        format!("🟢 ONLINE: {}", target_str),
+                        egui::FontId::proportional(12.5),
+                        palette.text_primary,
+                    );
+                    painter.text(
+                        egui::pos2(hud_rect.max.x - 12.0, hud_rect.min.y + 16.0),
+                        egui::Align2::RIGHT_CENTER,
+                        run_str,
+                        egui::FontId::monospace(11.5),
+                        run_color,
+                    );
+
+                    painter.text(
+                        egui::pos2(hud_rect.min.x + 10.0, hud_rect.min.y + 38.0),
+                        egui::Align2::LEFT_CENTER,
+                        format!("Scan: #{}", scan_txt),
+                        egui::FontId::monospace(11.0),
+                        palette.rung_text_dim,
+                    );
+
+                    painter.text(
+                        egui::pos2(hud_rect.max.x - 12.0, hud_rect.min.y + 38.0),
+                        egui::Align2::RIGHT_CENTER,
+                        format!("ACC: Bit={} | Word={}", if acc_b { "1" } else { "0" }, acc_w),
+                        egui::FontId::monospace(11.0),
+                        if acc_b { palette.accent_ok } else { palette.accent_heading },
+                    );
                 }
             });
 
@@ -1513,6 +1816,7 @@ mod tests {
                     baud_rate: "57600".to_string(),
                     cycle_time_ms: 20,
                     hardware: "Arduino NANO".to_string(),
+                    online_target_hw: true,
                     window_width: Some(1600.0),
                     window_height: Some(900.0),
                     window_maximized: true,
