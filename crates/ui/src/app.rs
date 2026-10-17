@@ -101,6 +101,10 @@ pub struct CanvasApp {
     pub show_about: bool,
     pub show_code_export: bool,
     pub show_io_config: bool,
+    pub show_update_plc: bool,
+    pub update_plc_tab: u8,
+    pub update_plc_status: String,
+    pub update_plc_is_error: bool,
     pub com_port: String,
     pub baud_rate: String,
     pub last_sim_tick: Instant,
@@ -143,6 +147,10 @@ impl Default for CanvasApp {
             show_about: false,
             show_code_export: false,
             show_io_config: false,
+            show_update_plc: false,
+            update_plc_tab: 0,
+            update_plc_status: String::new(),
+            update_plc_is_error: false,
             com_port: settings.com_port,
             baud_rate: settings.baud_rate,
             last_sim_tick: Instant::now(),
@@ -162,6 +170,81 @@ impl Default for CanvasApp {
 }
 
 impl CanvasApp {
+    pub fn available_serial_ports() -> Vec<String> {
+        let mut ports = Vec::new();
+        if let Ok(entries) = std::fs::read_dir("/dev") {
+            for entry in entries.flatten() {
+                if let Some(name) = entry.file_name().to_str() {
+                    if name.starts_with("ttyACM") || name.starts_with("ttyUSB") {
+                        ports.push(format!("/dev/{}", name));
+                    }
+                }
+            }
+        }
+        ports.sort();
+        if ports.is_empty() {
+            ports.push("/dev/ttyACM0".to_string());
+            ports.push("/dev/ttyUSB0".to_string());
+            ports.push("COM3".to_string());
+        }
+        ports
+    }
+
+    pub fn transmit_bytecode_to_plc(&mut self, cmd: my_canvas_core::PlcSerialCommand) {
+        use std::io::Write;
+        let bc = self.doc.compile_to_bytecode();
+        let packet = bc.to_serial_packet(cmd);
+        let raw_port = self.com_port.split_whitespace().next().unwrap_or("/dev/ttyACM0");
+        let port_path = if raw_port.starts_with("tty") {
+            format!("/dev/{}", raw_port)
+        } else {
+            raw_port.to_string()
+        };
+
+        // Attempt to configure baud rate via stty on Linux if device exists
+        if std::path::Path::new(&port_path).exists() {
+            let _ = std::process::Command::new("stty")
+                .args(["-F", &port_path, &self.baud_rate, "raw", "-echo"])
+                .output();
+        }
+
+        match std::fs::OpenOptions::new().write(true).open(&port_path) {
+            Ok(mut file) => match file.write_all(&packet) {
+                Ok(_) => {
+                    let _ = file.flush();
+                    self.update_plc_is_error = false;
+                    self.update_plc_status = format!(
+                        "✔ Sent {} Bytes ({} instructions, CRC8=0x{:02X}) to {} @ {} baud",
+                        packet.len(),
+                        bc.instructions.len(),
+                        packet.last().copied().unwrap_or(0),
+                        port_path,
+                        self.baud_rate
+                    );
+                }
+                Err(e) => {
+                    self.update_plc_is_error = true;
+                    self.update_plc_status = format!(
+                        "✖ Failed writing to {}: {} (Packet ready: {} Bytes)",
+                        port_path,
+                        e,
+                        packet.len()
+                    );
+                }
+            },
+            Err(e) => {
+                self.update_plc_is_error = true;
+                self.update_plc_status = format!(
+                    "⚠ Serial port '{}' not connected ({}) — Bytecode compiled ({} instructions, {} Bytes packet ready)",
+                    port_path,
+                    e,
+                    bc.instructions.len(),
+                    packet.len()
+                );
+            }
+        }
+    }
+
     pub fn current_settings(&self) -> AppSettings {
         AppSettings {
             theme: self.theme,
@@ -330,7 +413,8 @@ impl eframe::App for CanvasApp {
         let any_modal_open = self.elem_modal.is_open
             || self.show_about
             || self.show_io_config
-            || self.show_code_export;
+            || self.show_code_export
+            || self.show_update_plc;
 
         // Global Keyboard Shortcuts (Ctrl+N / Ctrl+Z / Ctrl+Y work anytime; Arrow/Enter/Del/F5 when not typing & modal closed)
         if !any_modal_open {
@@ -827,6 +911,10 @@ impl eframe::App for CanvasApp {
                                 let _ = std::fs::write(path, &code);
                             }
                         }
+                        if ui.button("⚡ Compile Bytecode / Update to PLC...").clicked() {
+                            close_code_export = true;
+                            self.show_update_plc = true;
+                        }
                         if ui.button("Close").clicked() {
                             close_code_export = true;
                         }
@@ -834,6 +922,263 @@ impl eframe::App for CanvasApp {
                 });
             if !open_code_export || close_code_export {
                 self.show_code_export = false;
+            }
+        }
+
+        // --- Update to PLC (IL -> 32-bit Micro-VM Bytecode & Serial Upload) Dialog ---
+        if self.show_update_plc {
+            if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.show_update_plc = false;
+            }
+            let mut open_update_plc = self.show_update_plc;
+            let mut close_update_plc = false;
+            let mut settings_changed = false;
+            let mut trigger_cmd: Option<my_canvas_core::PlcSerialCommand> = None;
+
+            let bc = self.doc.compile_to_bytecode();
+            let packet = bc.to_serial_packet(my_canvas_core::PlcSerialCommand::DownloadProgram);
+            let crc8 = packet.last().copied().unwrap_or(0);
+
+            Window::new("⚡ Update to PLC (IL → Micro-VM Bytecode)")
+                .order(egui::Order::Foreground)
+                .open(&mut open_update_plc)
+                .min_size([680.0, 480.0])
+                .default_size([720.0, 520.0])
+                .collapsible(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .show(ui.ctx(), |ui| {
+                    // 1. Connection & Hardware Header Bar
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new("Serial Port:")
+                                .color(palette.accent_heading)
+                                .strong(),
+                        );
+                        if ui
+                            .add(egui::TextEdit::singleline(&mut self.com_port).desired_width(135.0))
+                            .changed()
+                        {
+                            settings_changed = true;
+                        }
+                        egui::ComboBox::from_id_salt("update_plc_port_combo")
+                            .width(120.0)
+                            .selected_text("Detect Port")
+                            .show_ui(ui, |ui| {
+                                for p in Self::available_serial_ports() {
+                                    if ui
+                                        .selectable_value(&mut self.com_port, p.clone(), &p)
+                                        .changed()
+                                    {
+                                        settings_changed = true;
+                                    }
+                                }
+                            });
+
+                        ui.label(
+                            RichText::new("Baud:")
+                                .color(palette.accent_heading)
+                                .strong(),
+                        );
+                        egui::ComboBox::from_id_salt("update_plc_baud_combo")
+                            .width(82.0)
+                            .selected_text(&self.baud_rate)
+                            .show_ui(ui, |ui| {
+                                for b in ["9600", "19200", "38400", "57600", "115200"] {
+                                    if ui
+                                        .selectable_value(&mut self.baud_rate, b.to_string(), b)
+                                        .changed()
+                                    {
+                                        settings_changed = true;
+                                    }
+                                }
+                            });
+
+                        ui.separator();
+                        ui.label(
+                            RichText::new(format!(
+                                "{} Inst ({} B) | Frame: {} B | CRC8: 0x{:02X}",
+                                bc.instructions.len(),
+                                bc.payload_size_bytes(),
+                                packet.len(),
+                                crc8
+                            ))
+                            .monospace()
+                            .size(11.5)
+                            .color(palette.accent_ok),
+                        );
+                    });
+
+                    ui.separator();
+
+                    // 2. View Mode Tabs
+                    ui.horizontal(|ui| {
+                        if ui
+                            .selectable_label(
+                                self.update_plc_tab == 0,
+                                "1. 32-Bit Bytecode & Packet Frame",
+                            )
+                            .clicked()
+                        {
+                            self.update_plc_tab = 0;
+                        }
+                        if ui
+                            .selectable_label(
+                                self.update_plc_tab == 1,
+                                "2. Unified Memory Mapping (0x00..0xFF)",
+                            )
+                            .clicked()
+                        {
+                            self.update_plc_tab = 1;
+                        }
+                    });
+                    ui.separator();
+
+                    // 3. Tab Content
+                    match self.update_plc_tab {
+                        0 => {
+                            let disasm = bc.to_disassembly_text();
+                            egui::ScrollArea::both()
+                                .id_salt("bytecode_disasm_scroll")
+                                .max_height(310.0)
+                                .show(ui, |ui| {
+                                    let mut text = disasm;
+                                    ui.add(
+                                        egui::TextEdit::multiline(&mut text)
+                                            .code_editor()
+                                            .desired_width(f32::INFINITY),
+                                    );
+                                });
+                        }
+                        _ => {
+                            ui.label(
+                                RichText::new(
+                                    "Unified Memory Space: X[0x00..0x1F] | Y[0x20..0x3F] | M[0x40..0xBF] | T[0xC0..0xDF] | C[0xE0..0xFF]",
+                                )
+                                .monospace()
+                                .size(11.5)
+                                .color(palette.accent_heading),
+                            );
+                            ui.add_space(4.0);
+                            egui::ScrollArea::vertical()
+                                .id_salt("unified_mem_map_scroll")
+                                .max_height(285.0)
+                                .show(ui, |ui| {
+                                    egui::Grid::new("unified_mem_map_grid")
+                                        .striped(true)
+                                        .num_columns(6)
+                                        .spacing([14.0, 6.0])
+                                        .show(ui, |ui| {
+                                            ui.strong("Unified Addr");
+                                            ui.strong("Canonical");
+                                            ui.strong("IEC 61131-3");
+                                            ui.strong("Symbol");
+                                            ui.strong("MCU Pin");
+                                            ui.strong("VM Memory Region");
+                                            ui.end_row();
+
+                                            for entry in &bc.memory_map {
+                                                ui.monospace(format!("0x{:02X} ({:3})", entry.addr, entry.addr));
+                                                ui.monospace(&entry.canonical_name);
+                                                ui.monospace(&entry.iec_address);
+                                                ui.label(&entry.symbol);
+                                                ui.monospace(if entry.hw_pin.is_empty() {
+                                                    "-"
+                                                } else {
+                                                    &entry.hw_pin
+                                                });
+                                                ui.weak(entry.region.space_label());
+                                                ui.end_row();
+                                            }
+                                        });
+                                });
+                        }
+                    }
+
+                    // 4. Status Banner
+                    if !self.update_plc_status.is_empty() {
+                        ui.separator();
+                        let status_color = if self.update_plc_is_error {
+                            palette.accent_warn
+                        } else {
+                            palette.accent_ok
+                        };
+                        ui.label(
+                            RichText::new(&self.update_plc_status)
+                                .monospace()
+                                .size(11.5)
+                                .color(status_color),
+                        );
+                    }
+
+                    ui.separator();
+
+                    // 5. Action Buttons
+                    ui.horizontal(|ui| {
+                        let upload_btn = egui::Button::new(
+                            RichText::new("⚡ Update to PLC (Send via Serial)")
+                                .strong()
+                                .color(palette.accent_ok),
+                        );
+                        if ui
+                            .add(upload_btn)
+                            .on_hover_text("Transmit Packet Frame (SOF 0xAA + CMD 0x01 + LEN + Bytecode + CRC8) via USB Serial Port")
+                            .clicked()
+                        {
+                            trigger_cmd = Some(my_canvas_core::PlcSerialCommand::DownloadProgram);
+                        }
+
+                        if ui
+                            .button("▶ Send RUN (0x02)")
+                            .on_hover_text("Send CMD 0x02 to start PLC scan execution on MCU")
+                            .clicked()
+                        {
+                            trigger_cmd = Some(my_canvas_core::PlcSerialCommand::RunStopControl);
+                        }
+
+                        if ui.button("Copy Packet Hex").clicked() {
+                            ui.ctx().copy_text(
+                                bc.to_packet_hex_string(my_canvas_core::PlcSerialCommand::DownloadProgram),
+                            );
+                            self.update_plc_is_error = false;
+                            self.update_plc_status = format!(
+                                "✔ Copied {} Bytes Serial Packet Hex to clipboard",
+                                packet.len()
+                            );
+                        }
+
+                        if ui.button("Save Bytecode (.bin)...").clicked() {
+                            if let Some(path) = rfd::FileDialog::new()
+                                .add_filter("Micro-VM Bytecode Binary (*.bin)", &["bin"])
+                                .save_file()
+                            {
+                                let raw = bc.to_raw_bytes();
+                                if std::fs::write(&path, &raw).is_ok() {
+                                    self.update_plc_is_error = false;
+                                    self.update_plc_status = format!(
+                                        "✔ Saved {} Bytes raw bytecode to {}",
+                                        raw.len(),
+                                        path.display()
+                                    );
+                                }
+                            }
+                        }
+
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Close").clicked() {
+                                close_update_plc = true;
+                            }
+                        });
+                    });
+                });
+
+            if let Some(cmd) = trigger_cmd {
+                self.transmit_bytecode_to_plc(cmd);
+            }
+            if settings_changed {
+                self.save_settings();
+            }
+            if !open_update_plc || close_update_plc {
+                self.show_update_plc = false;
             }
         }
     }

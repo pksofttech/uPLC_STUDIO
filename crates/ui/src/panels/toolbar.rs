@@ -374,7 +374,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 Some(VectorIcon::ExportCode),
                 "Code",
                 palette.accent_ok,
-                false,
+                app.show_code_export,
                 true,
                 false,
                 62.0,
@@ -383,7 +383,25 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
             .on_hover_text("Preview & Export IEC 61131-3 IL Code")
             .clicked()
             {
-                app.show_code_export = true;
+                app.show_code_export = !app.show_code_export;
+            }
+
+            // Update to PLC (Compile IL -> Bytecode & Upload to MCU VM)
+            if modern_tool_button(
+                ui,
+                Some(VectorIcon::SerialComm),
+                "Update PLC",
+                palette.accent_warn,
+                app.show_update_plc,
+                true,
+                false,
+                92.0,
+                palette,
+            )
+            .on_hover_text("Compile IL to 32-bit Micro-VM Bytecode & Update to PLC via Serial/UART")
+            .clicked()
+            {
+                app.show_update_plc = !app.show_update_plc;
             }
 
             // Settings, Theme & Hardware I/O Config

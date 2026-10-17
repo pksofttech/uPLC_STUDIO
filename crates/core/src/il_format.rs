@@ -929,6 +929,40 @@ impl IlParser {
                     ..Default::default()
                 })
             }
+            "TON" | "TOF" | "TP" => {
+                let name = parts.get(1).unwrap_or(&"T0").trim_matches(|c| c == ',' || c == ';');
+                let preset_raw = parts.get(2).unwrap_or(&"1000").trim_matches(';');
+                let preset_clean = preset_raw
+                    .trim_start_matches(|c: char| c == 'K' || c == 'k' || c == '#')
+                    .trim_start_matches("T#")
+                    .trim_end_matches("ms")
+                    .trim_end_matches('s');
+                let preset = preset_clean
+                    .parse::<i32>()
+                    .unwrap_or_else(|_| fb_presets.get(name).map(|(_, p)| *p).unwrap_or(1000));
+                let mut el = LadderElement::new_ton(id, name, name, preset);
+                el.element_type = match op {
+                    "TOF" => TypeTag::Tof,
+                    "TP" => TypeTag::Tp,
+                    _ => TypeTag::Ton,
+                };
+                Some(el)
+            }
+            "CTU" | "CTD" | "CTUD" => {
+                let name = parts.get(1).unwrap_or(&"C0").trim_matches(|c| c == ',' || c == ';');
+                let pv_raw = parts.get(2).unwrap_or(&"10").trim_matches(';');
+                let pv_clean = pv_raw.trim_start_matches(|c: char| c == 'K' || c == 'k' || c == '#');
+                let pv = pv_clean
+                    .parse::<i32>()
+                    .unwrap_or_else(|_| fb_presets.get(name).map(|(_, p)| *p).unwrap_or(10));
+                let mut el = LadderElement::new_ctu(id, name, name, pv);
+                el.element_type = match op {
+                    "CTD" => TypeTag::Ctd,
+                    "CTUD" => TypeTag::Ctud,
+                    _ => TypeTag::Ctu,
+                };
+                Some(el)
+            }
             "JMP" | "JMPC" | "JMPCN" => {
                 let name = parts.get(1).unwrap_or(&"LBL1").trim_matches(';');
                 Some(LadderElement {

@@ -940,4 +940,15 @@ impl Document {
     pub fn map_io_to_iec_var_table_with_options(&self, use_symbol_name: bool) -> String {
         self.program.map_io_to_iec_var_table_with_options(use_symbol_name)
     }
+
+    /// Compile the current LadderProgram into 32-bit Micro-VM Bytecode
+    pub fn compile_to_bytecode(&self) -> crate::bytecode::BytecodeProgram {
+        crate::bytecode::BytecodeCompiler::compile_program(&self.program)
+    }
+
+    /// Compile an IEC 61131-3 IL string into 32-bit Micro-VM Bytecode
+    pub fn compile_il_to_bytecode(il_text: &str) -> Result<crate::bytecode::BytecodeProgram, String> {
+        crate::bytecode::BytecodeCompiler::compile_il(il_text)
+    }
 }
+

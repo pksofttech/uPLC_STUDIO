@@ -1208,6 +1208,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "uplc-vm",
 ]
 
 [[package]]
@@ -2401,6 +2402,10 @@ dependencies = [
  "image",
  "my-canvas-ui",
 ]
+
+[[package]]
+name = "uplc-vm"
+version = "0.1.0"
 
 [[package]]
 name = "uuid"

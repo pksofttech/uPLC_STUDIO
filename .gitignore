@@ -1,4 +1,16 @@
-/target
+# Rust / Cargo build outputs (workspace & firmware subprojects)
+target/
+**/target/
+
+# Embedded firmware binary / flash outputs
+*.bin
+*.uf2
+*.elf
+*.hex
+*.map
+
+# Editor & OS temporary files
 **/*.rs.bk
 *.swp
+*~
 .DS_Store

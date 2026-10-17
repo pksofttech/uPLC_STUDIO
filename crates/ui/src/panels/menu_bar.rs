@@ -260,6 +260,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
             ui.label(RichText::new("Target IEC 61131-3 Hardware Platform:").weak().size(11.0));
             ui.separator();
             let targets = [
+                "RP2040 Micro-VM (Custom Firmware)",
                 "IEC 61131-3 Standard PLC",
                 "OpenPLC Runtime (Linux / Windows)",
                 "OpenPLC MicroPLC (IEC 61131-3)",
@@ -281,10 +282,19 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 ui.separator();
                 ui.label(RichText::new(format!("Current: {}", app.doc.program.hardware)).italics().size(11.0));
             }
+            ui.separator();
+            if ui.button("⚡ Update to PLC (Compile IL → Bytecode)...").clicked() {
+                app.show_update_plc = true;
+                ui.close();
+            }
         });
 
         // --- TOOLS MENU ---
         ui.menu_button("Tools", |ui| {
+            if ui.button("⚡ Update to PLC (Compile IL → Bytecode)...").clicked() {
+                app.show_update_plc = true;
+                ui.close();
+            }
             if ui.button("Preview / Export IEC 61131-3 IL Code").clicked() {
                 app.show_code_export = true;
                 ui.close();
