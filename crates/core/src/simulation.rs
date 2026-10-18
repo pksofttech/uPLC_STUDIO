@@ -266,7 +266,11 @@ impl PlcSimulator {
 
     #[inline]
     pub fn is_active(&self) -> bool {
-        self.online_mode || self.state != SimState::Stopped
+        if self.online_mode {
+            self.remote_running || self.state != SimState::Stopped
+        } else {
+            self.state != SimState::Stopped
+        }
     }
 
     #[inline]
@@ -1012,7 +1016,7 @@ impl PlcSimulator {
     pub fn apply_online_snapshot(&mut self, snapshot: &PlcStatusSnapshot) {
         self.scan_count = snapshot.scan_count as u64;
         self.remote_running = snapshot.running;
-        self.simulation_enabled = true;
+        self.simulation_enabled = snapshot.running;
         self.online_mode = true;
         self.acc_bool = snapshot.acc_bool;
         self.acc_word = snapshot.acc_word;

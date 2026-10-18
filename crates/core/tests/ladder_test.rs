@@ -1750,5 +1750,40 @@ fn test_analog_inputs_and_cpu_temperature_snapshot() {
     assert!((260..=280).contains(&temp_c01), "Temp should be around 27.0 °C, got {}", temp_c01);
 }
 
+#[test]
+fn test_online_mode_stop_clears_ladder_conduction() {
+    let mut doc = Document::default();
+    doc.program = LadderProgram::new_empty();
+    doc.program.rungs.clear();
 
+    // Rung 0: LD X0 -> ST Y0
+    let mut r0 = my_canvas_core::Rung::new(1);
+    r0.elements.push(LadderElement::new_contact(1, "X0", "%IX0.0", ContactMode::NormallyOpen));
+    r0.elements.push(LadderElement::new_coil(2, "Y0", "%QX0.0", CoilMode::Normal));
+    doc.program.rungs.push(r0);
 
+    // 1. Online Snapshot with RUN state: X0 = 1, Y0 = 1, running = true
+    let mut snap = my_canvas_core::PlcStatusSnapshot::default();
+    snap.running = true;
+    snap.bit_mem[0] = 1;
+    snap.bit_mem[0x20] = 1;
+
+    doc.set_online_mode(true);
+    doc.apply_online_snapshot(&snap);
+
+    assert!(doc.simulator.is_active(), "Simulator must be active while remote PLC is in RUN");
+    assert!(doc.simulator.remote_running);
+    assert!(doc.program.rungs[0].is_energized, "Rung should be energized when RUN");
+    assert!(doc.program.rungs[0].elements[0].is_energized);
+    assert!(doc.program.rungs[0].elements[1].is_energized);
+
+    // 2. Online Snapshot with STOP state (User pressed STOP button or PLC halted)
+    snap.running = false;
+    doc.apply_online_snapshot(&snap);
+
+    assert!(!doc.simulator.is_active(), "Simulator must NOT be active while remote PLC is in STOP");
+    assert!(!doc.simulator.remote_running);
+    assert!(!doc.program.rungs[0].is_energized, "Rung conduction must be de-energized on STOP");
+    assert!(!doc.program.rungs[0].elements[0].is_energized, "Contact conduction must be cleared on STOP");
+    assert!(!doc.program.rungs[0].elements[1].is_energized, "Coil conduction must be cleared on STOP");
+}

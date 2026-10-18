@@ -1372,7 +1372,7 @@ impl CanvasApp {
                 self.start_online_monitoring();
             }
             if self.plc_remote_running {
-                self.transmit_bytecode_to_plc(my_canvas_core::PlcSerialCommand::StopPlc);
+                self.stop_run_mode();
             } else {
                 self.transmit_bytecode_to_plc(my_canvas_core::PlcSerialCommand::RunStopControl);
             }
@@ -1396,6 +1396,9 @@ impl CanvasApp {
     /// Stop execution and safely turn off outputs for either local simulator or hardware PLC.
     pub fn stop_run_mode(&mut self) {
         if self.online_target_hw {
+            self.plc_remote_running = false;
+            self.doc.simulator.remote_running = false;
+            self.doc.clear_conduction();
             self.transmit_bytecode_to_plc(my_canvas_core::PlcSerialCommand::StopPlc);
         } else {
             self.doc.stop_simulation();
@@ -1405,8 +1408,10 @@ impl CanvasApp {
     /// Reset simulation/PLC execution.
     pub fn reset_run_mode(&mut self) {
         if self.online_target_hw {
-            self.transmit_bytecode_to_plc(my_canvas_core::PlcSerialCommand::StopPlc);
+            self.plc_remote_running = false;
+            self.doc.simulator.remote_running = false;
             self.doc.clear_conduction();
+            self.transmit_bytecode_to_plc(my_canvas_core::PlcSerialCommand::StopPlc);
         } else {
             self.doc.reset_simulation();
         }
@@ -2980,6 +2985,9 @@ impl eframe::App for CanvasApp {
                             )
                             .clicked()
                         {
+                            self.plc_remote_running = false;
+                            self.doc.simulator.remote_running = false;
+                            self.doc.clear_conduction();
                             trigger_cmd = Some(my_canvas_core::PlcSerialCommand::StopPlc);
                         }
 

@@ -361,7 +361,11 @@ impl Document {
     /// Update process image from an Online Monitoring Status Snapshot and re-evaluate ladder conduction
     pub fn apply_online_snapshot(&mut self, snapshot: &PlcStatusSnapshot) {
         self.simulator.apply_online_snapshot(snapshot);
-        self.simulator.evaluate_conduction_only(&mut self.program);
+        if snapshot.running {
+            self.simulator.evaluate_conduction_only(&mut self.program);
+        } else {
+            self.simulator.clear_conduction(&mut self.program);
+        }
     }
 
     /// Capture status snapshot from current document/simulator state (including Bytecode signature)
