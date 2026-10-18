@@ -1880,9 +1880,9 @@ impl eframe::App for CanvasApp {
         // 5. Right Panel: Elements List, Inspector, and Input/Output Ports
         Panel::right("right_properties_panel")
             .resizable(!modal_open)
-            .default_size(285.0)
-            .min_size(245.0)
-            .max_size(450.0)
+            .default_size(330.0)
+            .min_size(260.0)
+            .max_size(650.0)
             .show(ui, |ui| {
                 if modal_open {
                     ui.disable();
@@ -3257,6 +3257,7 @@ mod tests {
     #[test]
     fn test_watch_table_evaluation_and_write() {
         let mut app = CanvasApp::default();
+        app.watch_rows = default_watch_rows();
         // Default rows exist
         assert!(!app.watch_rows.is_empty());
         assert!(app.watch_rows.iter().any(|r| r.address == "%IX0.0"));

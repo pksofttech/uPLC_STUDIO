@@ -2418,119 +2418,128 @@ fn render_watch_table(
                 ui.set_width(ui.available_width());
                 let filter_lc = app.watch_filter_text.trim().to_lowercase();
 
-                egui::Grid::new("watch_table_grid")
-                    .striped(true)
-                    .num_columns(6)
-                    .spacing([4.0, 5.0])
+                egui::ScrollArea::horizontal()
+                    .id_salt("watch_grid_horizontal_scroll")
+                    .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        ui.label(RichText::new("ADDR").strong().small().color(palette.rung_text_dim));
-                        ui.label(RichText::new("SYMBOL").strong().small().color(palette.rung_text_dim));
-                        ui.label(RichText::new("FMT").strong().small().color(palette.rung_text_dim));
-                        ui.label(RichText::new("LIVE VALUE").strong().small().color(palette.rung_text_dim));
-                        ui.label(RichText::new("WRITE").strong().small().color(palette.rung_text_dim));
-                        ui.label(RichText::new("DEL").strong().small().color(palette.rung_text_dim));
-                        ui.end_row();
+                        egui::Grid::new("watch_table_grid")
+                            .striped(true)
+                            .num_columns(6)
+                            .spacing([5.0, 5.0])
+                            .show(ui, |ui| {
+                                ui.label(RichText::new("ADDR").strong().small().color(palette.rung_text_dim));
+                                ui.label(RichText::new("SYMBOL").strong().small().color(palette.rung_text_dim));
+                                ui.label(RichText::new("FMT").strong().small().color(palette.rung_text_dim));
+                                ui.label(RichText::new("LIVE VALUE").strong().small().color(palette.rung_text_dim));
+                                ui.label(RichText::new("WRITE").strong().small().color(palette.rung_text_dim));
+                                ui.label(RichText::new("DEL").strong().small().color(palette.rung_text_dim));
+                                ui.end_row();
 
-                        for idx in 0..app.watch_rows.len() {
-                            let (matches_filter, addr, symbol, format, edit_buf) = {
-                                let row = &app.watch_rows[idx];
-                                let matches = filter_lc.is_empty()
-                                    || row.address.to_lowercase().contains(&filter_lc)
-                                    || row.symbol.to_lowercase().contains(&filter_lc);
-                                (matches, row.address.clone(), row.symbol.clone(), row.format, row.edit_buffer.clone())
-                            };
+                                for idx in 0..app.watch_rows.len() {
+                                    let (matches_filter, addr, symbol, format, edit_buf) = {
+                                        let row = &app.watch_rows[idx];
+                                        let matches = filter_lc.is_empty()
+                                            || row.address.to_lowercase().contains(&filter_lc)
+                                            || row.symbol.to_lowercase().contains(&filter_lc);
+                                        (matches, row.address.clone(), row.symbol.clone(), row.format, row.edit_buffer.clone())
+                                    };
 
-                            if !matches_filter {
-                                continue;
-                            }
-
-                            // Col 1: Address
-                            ui.label(
-                                RichText::new(&addr)
-                                    .monospace()
-                                    .strong()
-                                    .size(11.0)
-                                    .color(palette.accent_heading),
-                            );
-
-                            // Col 2: Symbol
-                            let sym_w = 65.0;
-                            let mut sym_edit = symbol;
-                            if ui.add_sized(
-                                egui::vec2(sym_w, 18.0),
-                                egui::TextEdit::singleline(&mut sym_edit).desired_width(sym_w),
-                            ).changed() {
-                                app.watch_rows[idx].symbol = sym_edit;
-                                app.save_settings();
-                            }
-
-                            // Col 3: Format selector
-                            let fmt_text = match format {
-                                WatchDisplayFormat::Auto => "Auto",
-                                WatchDisplayFormat::Dec => "Dec",
-                                WatchDisplayFormat::Hex => "Hex",
-                                WatchDisplayFormat::Bin => "Bin",
-                                WatchDisplayFormat::Bool => "Bool",
-                            };
-                            ui.menu_button(RichText::new(fmt_text).small(), |ui| {
-                                for &(f, label) in &[
-                                    (WatchDisplayFormat::Auto, "Auto"),
-                                    (WatchDisplayFormat::Dec, "Dec"),
-                                    (WatchDisplayFormat::Hex, "Hex (0x)"),
-                                    (WatchDisplayFormat::Bin, "Bin (0b)"),
-                                    (WatchDisplayFormat::Bool, "Bool (ON/OFF)"),
-                                ] {
-                                    if ui.selectable_label(format == f, label).clicked() {
-                                        app.watch_rows[idx].format = f;
-                                        app.save_settings();
-                                        ui.close();
+                                    if !matches_filter {
+                                        continue;
                                     }
+
+                                    // Col 1: Address
+                                    ui.label(
+                                        RichText::new(&addr)
+                                            .monospace()
+                                            .strong()
+                                            .size(11.0)
+                                            .color(palette.accent_heading),
+                                    );
+
+                                    // Col 2: Symbol (Increased width to 125px with full tooltip)
+                                    let sym_w = 125.0;
+                                    let mut sym_edit = symbol.clone();
+                                    let sym_res = ui.add_sized(
+                                        egui::vec2(sym_w, 18.0),
+                                        egui::TextEdit::singleline(&mut sym_edit).desired_width(sym_w),
+                                    );
+                                    if sym_res.changed() {
+                                        app.watch_rows[idx].symbol = sym_edit.clone();
+                                        app.save_settings();
+                                    }
+                                    if !symbol.is_empty() {
+                                        sym_res.on_hover_text(&symbol);
+                                    }
+
+                                    // Col 3: Format selector
+                                    let fmt_text = match format {
+                                        WatchDisplayFormat::Auto => "Auto",
+                                        WatchDisplayFormat::Dec => "Dec",
+                                        WatchDisplayFormat::Hex => "Hex",
+                                        WatchDisplayFormat::Bin => "Bin",
+                                        WatchDisplayFormat::Bool => "Bool",
+                                    };
+                                    ui.menu_button(RichText::new(fmt_text).small(), |ui| {
+                                        for &(f, label) in &[
+                                            (WatchDisplayFormat::Auto, "Auto"),
+                                            (WatchDisplayFormat::Dec, "Dec"),
+                                            (WatchDisplayFormat::Hex, "Hex (0x)"),
+                                            (WatchDisplayFormat::Bin, "Bin (0b)"),
+                                            (WatchDisplayFormat::Bool, "Bool (ON/OFF)"),
+                                        ] {
+                                            if ui.selectable_label(format == f, label).clicked() {
+                                                app.watch_rows[idx].format = f;
+                                                app.save_settings();
+                                                ui.close();
+                                            }
+                                        }
+                                    });
+
+                                    // Col 4: Live Value
+                                    let (val_txt, is_bit, val_col) = app.evaluate_watch_value(&addr, format);
+                                    if is_bit && sim_active {
+                                        if ui
+                                            .small_button(RichText::new(&val_txt).strong().size(10.5).color(val_col))
+                                            .on_hover_text("Click to toggle in simulation")
+                                            .clicked()
+                                        {
+                                            app.doc.toggle_input(&addr);
+                                        }
+                                    } else {
+                                        ui.label(
+                                            RichText::new(&val_txt)
+                                                .monospace()
+                                                .strong()
+                                                .size(10.5)
+                                                .color(val_col),
+                                        );
+                                    }
+
+                                    // Col 5: Write / Modify field & button
+                                    ui.horizontal(|ui| {
+                                        let mut buf = edit_buf;
+                                        let edit_res = ui.add_sized(
+                                            egui::vec2(50.0, 18.0),
+                                            egui::TextEdit::singleline(&mut buf).desired_width(50.0),
+                                        );
+                                        if edit_res.changed() {
+                                            app.watch_rows[idx].edit_buffer = buf.clone();
+                                        }
+                                        let enter_pressed = edit_res.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                                        if ui.small_button(RichText::new("✍").color(palette.accent_ok)).clicked() || enter_pressed {
+                                            write_action = Some((idx, buf));
+                                        }
+                                    });
+
+                                    // Col 6: Delete button
+                                    if ui.small_button(RichText::new("✖").color(palette.rung_text_dim)).clicked() {
+                                        remove_idx = Some(idx);
+                                    }
+
+                                    ui.end_row();
                                 }
                             });
-
-                            // Col 4: Live Value
-                            let (val_txt, is_bit, val_col) = app.evaluate_watch_value(&addr, format);
-                            if is_bit && sim_active {
-                                if ui
-                                    .small_button(RichText::new(&val_txt).strong().size(10.5).color(val_col))
-                                    .on_hover_text("Click to toggle in simulation")
-                                    .clicked()
-                                {
-                                    app.doc.toggle_input(&addr);
-                                }
-                            } else {
-                                ui.label(
-                                    RichText::new(&val_txt)
-                                        .monospace()
-                                        .strong()
-                                        .size(10.5)
-                                        .color(val_col),
-                                );
-                            }
-
-                            // Col 5: Write / Modify field & button
-                            ui.horizontal(|ui| {
-                                let mut buf = edit_buf;
-                                let edit_res = ui.add_sized(
-                                    egui::vec2(50.0, 18.0),
-                                    egui::TextEdit::singleline(&mut buf).desired_width(50.0),
-                                );
-                                if edit_res.changed() {
-                                    app.watch_rows[idx].edit_buffer = buf.clone();
-                                }
-                                let enter_pressed = edit_res.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                                if ui.small_button(RichText::new("✍").color(palette.accent_ok)).clicked() || enter_pressed {
-                                    write_action = Some((idx, buf));
-                                }
-                            });
-
-                            // Col 6: Delete button
-                            if ui.small_button(RichText::new("✖").color(palette.rung_text_dim)).clicked() {
-                                remove_idx = Some(idx);
-                            }
-
-                            ui.end_row();
-                        }
                     });
             });
 
@@ -2548,10 +2557,10 @@ fn render_watch_table(
                             .desired_width(90.0),
                     );
                     ui.add_sized(
-                        egui::vec2(90.0, 20.0),
+                        egui::vec2(125.0, 20.0),
                         egui::TextEdit::singleline(&mut app.watch_new_symbol)
-                            .hint_text("Symbol (optional)")
-                            .desired_width(90.0),
+                            .hint_text("Symbol tag (optional)")
+                            .desired_width(125.0),
                     );
                     if ui.button(RichText::new("➕ Add").strong().color(palette.accent_ok)).clicked() {
                         let a = app.watch_new_addr.trim().to_string();
