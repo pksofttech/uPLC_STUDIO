@@ -163,6 +163,14 @@ impl Default for PlcSimulator {
             registers.insert(format!("V{:02}", i), 0);
             registers.insert(format!("%MW{}", i), 0);
         }
+        for i in 0..16 {
+            registers.insert(format!("AI{}", i), 0);
+            registers.insert(format!("AI{:02}", i), 0);
+            registers.insert(format!("%IW{}", i), 0);
+            registers.insert(format!("AO{}", i), 0);
+            registers.insert(format!("AO{:02}", i), 0);
+            registers.insert(format!("%QW{}", i), 0);
+        }
         for i in 0..32 {
             let val = if i == 0 { 100 } else { 0 }; // %SD0 watchdog preset 100ms
             registers.insert(format!("%SD{}", i), val);
@@ -1066,7 +1074,7 @@ impl PlcSimulator {
             self.counters.insert(format!("C{:02}", i), (count, done, false));
         }
 
-        // 6. Data Registers: D0..D15 / %MW0..%MW15
+        // 6. Data Registers & Analog Inputs: D0..D15 / %MW0..%MW15 and AI0..AI15 / %IW0..%IW15
         for i in 0..16 {
             let val = snapshot.data_reg[i];
             self.registers.insert(format!("D{}", i), val);
@@ -1074,7 +1082,35 @@ impl PlcSimulator {
             self.registers.insert(format!("V{}", i), val);
             self.registers.insert(format!("V{:02}", i), val);
             self.registers.insert(format!("%MW{}", i), val);
+            self.registers.insert(format!("AI{}", i), val);
+            self.registers.insert(format!("AI{:02}", i), val);
+            self.registers.insert(format!("%IW{}", i), val);
         }
+
+        // 6b. Special System Registers: %SD0..%SD6 from Snapshot telemetry
+        let scan_low = (snapshot.scan_count & 0xFFFF) as i32;
+        let scan_high = ((snapshot.scan_count >> 16) & 0xFFFF) as i32;
+        self.registers.insert("%SD0".to_string(), 100);
+        self.registers.insert("SD0".to_string(), 100);
+        self.registers.insert("D8000".to_string(), 100);
+        self.registers.insert("D128".to_string(), 100);
+        self.registers.insert("%SD4".to_string(), scan_low);
+        self.registers.insert("SD4".to_string(), scan_low);
+        self.registers.insert("D8004".to_string(), scan_low);
+        self.registers.insert("D132".to_string(), scan_low);
+        self.registers.insert("%SD5".to_string(), scan_high);
+        self.registers.insert("SD5".to_string(), scan_high);
+        self.registers.insert("D8005".to_string(), scan_high);
+        self.registers.insert("D133".to_string(), scan_high);
+
+        // %SD6: RP2040 CPU Junction Temperature in 0.1 °C units derived from AI3 (%IW3)
+        let raw3 = snapshot.data_reg[3];
+        let vbe_uv = (raw3 as u32 * 3_300_000) / 4096;
+        let temp_c01 = 270i32 - (((vbe_uv as i32) - 706_000) / 1721);
+        self.registers.insert("%SD6".to_string(), temp_c01);
+        self.registers.insert("SD6".to_string(), temp_c01);
+        self.registers.insert("D8006".to_string(), temp_c01);
+        self.registers.insert("D134".to_string(), temp_c01);
 
         // 7. Re-apply any local force overrides (in case snapshot packet was in flight before force command arrived)
         if !self.forced_bits.is_empty() {

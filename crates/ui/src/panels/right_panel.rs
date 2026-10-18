@@ -1,5 +1,5 @@
 use egui::{Color32, CornerRadius, RichText, Stroke, Ui, Vec2};
-use crate::app::CanvasApp;
+use crate::app::{CanvasApp, WatchDisplayFormat};
 use crate::theme::ThemePalette;
 use my_canvas_core::{CoilMode, ContactMode, TypeTag};
 
@@ -45,7 +45,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 };
                 let t0 = ui.selectable_label(
                     is_tab0,
-                    RichText::new(prop_label).size(11.5).strong().color(tab0_col),
+                    RichText::new(prop_label).size(11.0).strong().color(tab0_col),
                 );
                 if t0.clicked() {
                     app.right_panel_tab = 0;
@@ -60,8 +60,8 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 };
                 let t1 = ui.selectable_label(
                     is_tab1,
-                    RichText::new(format!("📋 IEC / Symbol ({})", tags_count))
-                        .size(11.5)
+                    RichText::new(format!("📋 IEC ({})", tags_count))
+                        .size(11.0)
                         .strong()
                         .color(tab1_col),
                 );
@@ -80,12 +80,47 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 let t2 = ui.selectable_label(
                     is_tab2,
                     RichText::new(format!("⚡ I/O ({}/{})", in_count, out_count))
-                        .size(11.5)
+                        .size(11.0)
                         .strong()
                         .color(tab2_col),
                 );
                 if t2.clicked() {
                     app.right_panel_tab = 2;
+                }
+
+                let is_tab3 = app.right_panel_tab == 3;
+                let tab3_col = if is_tab3 {
+                    Color32::WHITE
+                } else {
+                    palette.rung_text_dim
+                };
+                let t3 = ui.selectable_label(
+                    is_tab3,
+                    RichText::new("📟 Special")
+                        .size(11.0)
+                        .strong()
+                        .color(tab3_col),
+                ).on_hover_text("Special System Markers (%SM / M8000) & Special Registers (%SD / D8000) references");
+                if t3.clicked() {
+                    app.right_panel_tab = 3;
+                }
+
+                let watch_count = app.watch_rows.len();
+                let is_tab4 = app.right_panel_tab == 4;
+                let tab4_col = if is_tab4 {
+                    Color32::WHITE
+                } else {
+                    palette.rung_text_dim
+                };
+                let t4 = ui.selectable_label(
+                    is_tab4,
+                    RichText::new(format!("📊 Watch ({})", watch_count))
+                        .size(11.0)
+                        .strong()
+                        .color(tab4_col),
+                ).on_hover_text("Real-time Data Watch Table for monitoring and modifying PLC variables");
+                if t4.clicked() {
+                    app.right_panel_tab = 4;
                 }
             });
         });
@@ -99,7 +134,9 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
     match app.right_panel_tab {
         0 => render_element_inspector(ui, app, palette, sim_active),
         1 => render_elements_explorer(ui, app, palette, sim_active),
-        2 => render_io_ports(ui, app, palette),
+        2 => render_io_ports(ui, app, palette, sim_active),
+        3 => render_special_registers(ui, app, palette, sim_active),
+        4 => render_watch_table(ui, app, palette, sim_active),
         _ => render_element_inspector(ui, app, palette, sim_active),
     }
 }
@@ -1082,7 +1119,7 @@ fn render_elements_explorer(
 // =============================================================================
 // TAB 2: I/O PORTS & HARDWARE MONITOR
 // =============================================================================
-fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette) {
+fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette, sim_active: bool) {
     let mut toggle_port_var: Option<String> = None;
     let mut add_input_port = false;
     let mut add_output_port = false;
@@ -1382,6 +1419,127 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette) {
                     });
             });
 
+            ui.add_space(4.0);
+
+            // Analog Inputs Group (%IW0..%IW3 / ADC0..ADC2 + Internal Temp)
+            ui.group(|ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("Analog Inputs (%IW / ADC)")
+                            .strong()
+                            .color(palette.accent_heading),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            RichText::new("12-bit (0..4095) / 0..3.3V")
+                                .size(10.0)
+                                .color(palette.rung_text_dim),
+                        );
+                    });
+                });
+                ui.separator();
+
+                const ANALOG_CHANNELS: &[(&str, &str, &str)] = &[
+                    ("%IW0", "AI0", "GP26 (ADC0)"),
+                    ("%IW1", "AI1", "GP27 (ADC1)"),
+                    ("%IW2", "AI2", "GP28 (ADC2)"),
+                    ("%IW3", "AI3", "RP2040 Temp Sensor"),
+                ];
+
+                egui::Grid::new("analog_inputs_grid")
+                    .striped(true)
+                    .num_columns(4)
+                    .spacing([6.0, 6.0])
+                    .show(ui, |ui| {
+                        ui.label(RichText::new("CHAN").strong().small().color(palette.rung_text_dim));
+                        ui.label(RichText::new("RAW").strong().small().color(palette.rung_text_dim));
+                        ui.label(RichText::new("VOLTS / TEMP").strong().small().color(palette.rung_text_dim));
+                        ui.label(RichText::new("LEVEL").strong().small().color(palette.rung_text_dim));
+                        ui.end_row();
+
+                        for (idx, &(iec_addr, canon_name, hw_desc)) in ANALOG_CHANNELS.iter().enumerate() {
+                            let val = app
+                                .doc
+                                .simulator
+                                .registers
+                                .get(iec_addr)
+                                .copied()
+                                .or_else(|| app.doc.simulator.registers.get(canon_name).copied())
+                                .unwrap_or(0);
+
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    RichText::new(iec_addr)
+                                        .monospace()
+                                        .strong()
+                                        .size(11.0)
+                                        .color(palette.accent_heading),
+                                );
+                            })
+                            .response
+                            .on_hover_text(format!("{} [{}] — {}", canon_name, iec_addr, hw_desc));
+
+                            // In simulation mode (not hardware), allow adjusting slider
+                            let sim_allow_drag = sim_active && !app.online_target_hw;
+                            if sim_allow_drag {
+                                let mut edit_raw = val.clamp(0, 4095);
+                                if ui.add(egui::DragValue::new(&mut edit_raw).range(0..=4095).speed(5.0)).changed() {
+                                    app.doc.simulator.registers.insert(iec_addr.to_string(), edit_raw);
+                                    app.doc.simulator.registers.insert(canon_name.to_string(), edit_raw);
+                                    app.doc.simulator.registers.insert(format!("AI{:02}", idx), edit_raw);
+                                }
+                            } else {
+                                ui.label(
+                                    RichText::new(format!("{}", val))
+                                        .monospace()
+                                        .size(11.0)
+                                        .color(palette.text_primary),
+                                );
+                            }
+
+                            // Voltage / Temperature display
+                            let volt = (val.clamp(0, 4095) as f32 * 3.3) / 4095.0;
+                            if idx == 3 {
+                                let temp_c01 = app
+                                    .doc
+                                    .simulator
+                                    .registers
+                                    .get("%SD6")
+                                    .copied()
+                                    .unwrap_or_else(|| {
+                                        let vbe_uv = (val.clamp(0, 4095) as u32 * 3_300_000) / 4096;
+                                        270i32 - (((vbe_uv as i32) - 706_000) / 1721)
+                                    });
+                                ui.label(
+                                    RichText::new(format!("{:.2}V | {:.1}°C", volt, (temp_c01 as f32) / 10.0))
+                                        .monospace()
+                                        .size(10.5)
+                                        .color(palette.accent_ok),
+                                );
+                            } else {
+                                ui.label(
+                                    RichText::new(format!("{:.2} V", volt))
+                                        .monospace()
+                                        .size(10.5)
+                                        .color(palette.accent_ok),
+                                );
+                            }
+
+                            // Level Bar
+                            let frac = (val.clamp(0, 4095) as f32 / 4095.0).clamp(0.0, 1.0);
+                            let bar_w = (ui.available_width() - 8.0).max(60.0);
+                            ui.add_sized(
+                                egui::vec2(bar_w, 14.0),
+                                egui::ProgressBar::new(frac)
+                                    .text(format!("{:.0}%", frac * 100.0)),
+                            );
+
+                            ui.end_row();
+                        }
+                    });
+            });
+
             ui.add_space(6.0);
 
             // Live Process Image (%MX, %MW, T, C, ACC)
@@ -1642,5 +1800,833 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette) {
     }
     if let Some(var) = toggle_port_var {
         app.doc.toggle_input(&var);
+    }
+}
+
+// =============================================================================
+// TAB 3: SPECIAL REGISTERS & SYSTEM MARKERS REFERENCES (%SM / %SD)
+// =============================================================================
+#[derive(Clone, Copy)]
+struct SpecialRegisterDef {
+    iec: &'static str,
+    legacy: &'static str,
+    name: &'static str,
+    category_id: u8, // 1: Flags, 2: Clocks, 3: Diagnostics, 4: Registers, 5: Latch
+    desc: &'static str,
+    is_bit: bool,
+    default_hint: &'static str,
+}
+
+const SPECIAL_REGISTERS: &[SpecialRegisterDef] = &[
+    // Flags (%SM0..%SM2)
+    SpecialRegisterDef {
+        iec: "%SM0",
+        legacy: "M8000",
+        name: "Always ON",
+        category_id: 1,
+        desc: "Continuously energized contact (PLC RUN status monitor / power rail)",
+        is_bit: true,
+        default_hint: "TRUE (1)",
+    },
+    SpecialRegisterDef {
+        iec: "%SM1",
+        legacy: "M8001",
+        name: "Always OFF",
+        category_id: 1,
+        desc: "Continuously de-energized contact (Inverted RUN / disconnect rung)",
+        is_bit: true,
+        default_hint: "FALSE (0)",
+    },
+    SpecialRegisterDef {
+        iec: "%SM2",
+        legacy: "M8002",
+        name: "First Scan Pulse",
+        category_id: 1,
+        desc: "Initial pulse: ON for exactly 1 scan cycle on STOP->RUN transition",
+        is_bit: true,
+        default_hint: "Pulse (Scan #1)",
+    },
+    // Clock Pulses (%SM10..%SM13)
+    SpecialRegisterDef {
+        iec: "%SM10",
+        legacy: "M8011",
+        name: "10ms Clock Pulse",
+        category_id: 2,
+        desc: "10ms period oscillator (5ms ON / 5ms OFF, 100 Hz square wave)",
+        is_bit: true,
+        default_hint: "100 Hz Clock",
+    },
+    SpecialRegisterDef {
+        iec: "%SM11",
+        legacy: "M8012",
+        name: "100ms Clock Pulse",
+        category_id: 2,
+        desc: "100ms period oscillator (50ms ON / 50ms OFF, 10 Hz square wave)",
+        is_bit: true,
+        default_hint: "10 Hz Clock",
+    },
+    SpecialRegisterDef {
+        iec: "%SM12",
+        legacy: "M8013",
+        name: "1s Clock Pulse",
+        category_id: 2,
+        desc: "1s period blinker (0.5s ON / 0.5s OFF, 1 Hz) for alarms & indicators",
+        is_bit: true,
+        default_hint: "1 Hz Blinker",
+    },
+    SpecialRegisterDef {
+        iec: "%SM13",
+        legacy: "M8014",
+        name: "1min Clock Pulse",
+        category_id: 2,
+        desc: "1 minute period clock (30s ON / 30s OFF) for logging & telemetry",
+        is_bit: true,
+        default_hint: "1 min Clock",
+    },
+    // Diagnostics (%SM20..%SM21)
+    SpecialRegisterDef {
+        iec: "%SM20",
+        legacy: "M8004",
+        name: "System Error",
+        category_id: 3,
+        desc: "Hardware or execution runtime error flag",
+        is_bit: true,
+        default_hint: "0 (OK)",
+    },
+    SpecialRegisterDef {
+        iec: "%SM21",
+        legacy: "M8020",
+        name: "Scan Overrun",
+        category_id: 3,
+        desc: "Scan cycle execution time exceeded Watchdog timeout preset",
+        is_bit: true,
+        default_hint: "0 (OK)",
+    },
+    // Special Registers (%SD0..%SD5)
+    SpecialRegisterDef {
+        iec: "%SD0",
+        legacy: "D8000",
+        name: "Watchdog Preset",
+        category_id: 4,
+        desc: "Max scan execution duration in ms before Watchdog trip (Default: 100 ms)",
+        is_bit: false,
+        default_hint: "100 ms",
+    },
+    SpecialRegisterDef {
+        iec: "%SD1",
+        legacy: "D8010",
+        name: "Current Scan Time",
+        category_id: 4,
+        desc: "Execution duration of the most recent PLC scan cycle in microseconds",
+        is_bit: false,
+        default_hint: "Dynamic (µs)",
+    },
+    SpecialRegisterDef {
+        iec: "%SD2",
+        legacy: "D8011",
+        name: "Min Scan Time",
+        category_id: 4,
+        desc: "Minimum recorded scan cycle execution time in microseconds",
+        is_bit: false,
+        default_hint: "Dynamic (µs)",
+    },
+    SpecialRegisterDef {
+        iec: "%SD3",
+        legacy: "D8012",
+        name: "Max Scan Time",
+        category_id: 4,
+        desc: "Peak recorded scan cycle execution time in microseconds",
+        is_bit: false,
+        default_hint: "Dynamic (µs)",
+    },
+    SpecialRegisterDef {
+        iec: "%SD4",
+        legacy: "D8004",
+        name: "Scan Counter (Low)",
+        category_id: 4,
+        desc: "Lower 16 bits of total PLC scan cycles executed since boot (D132)",
+        is_bit: false,
+        default_hint: "Low Word",
+    },
+    SpecialRegisterDef {
+        iec: "%SD5",
+        legacy: "D8005",
+        name: "Scan Counter (High)",
+        category_id: 4,
+        desc: "Upper 16 bits of total PLC scan cycles executed since boot (D133)",
+        is_bit: false,
+        default_hint: "High Word",
+    },
+    SpecialRegisterDef {
+        iec: "%SD6",
+        legacy: "D8006",
+        name: "CPU Temperature",
+        category_id: 3,
+        desc: "RP2040 on-chip junction temperature in 0.1 °C units (e.g. 265 = 26.5 °C)",
+        is_bit: false,
+        default_hint: "0.1 °C (D134)",
+    },
+    // Retentive Memory Ranges
+    SpecialRegisterDef {
+        iec: "%MX8.0..%MX11.7",
+        legacy: "M64..M95",
+        name: "Latch Bit Relays",
+        category_id: 5,
+        desc: "32 Retentive Bit Relays preserved in RP2040 Flash across power outages",
+        is_bit: true,
+        default_hint: "Flash Retentive",
+    },
+    SpecialRegisterDef {
+        iec: "%MW128..%MW159",
+        legacy: "D128..D159",
+        name: "Latch Word Registers",
+        category_id: 5,
+        desc: "32 Retentive Word Registers preserved in RP2040 Flash across power outages",
+        is_bit: false,
+        default_hint: "Flash Retentive",
+    },
+];
+
+fn render_special_registers(
+    ui: &mut Ui,
+    app: &mut CanvasApp,
+    palette: ThemePalette,
+    sim_active: bool,
+) {
+    let selected_meta = app.doc.selected_element_id.and_then(|id| {
+        app.doc.element_by_id(id).map(|el| (id, el.element_type, el.name.clone()))
+    });
+    let mut assign_address: Option<String> = None;
+
+    egui::ScrollArea::vertical()
+        .id_salt("special_registers_scroll")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.group(|ui| {
+                ui.set_width(ui.available_width());
+
+                // Header
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("Special Register References")
+                            .color(palette.accent_heading)
+                            .strong(),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if sim_active {
+                            ui.label(
+                                RichText::new("● LIVE")
+                                    .color(palette.accent_ok)
+                                    .size(10.0)
+                                    .strong(),
+                            );
+                        } else {
+                            ui.label(
+                                RichText::new("○ IDLE")
+                                    .color(palette.rung_text_dim)
+                                    .size(10.0),
+                            );
+                        }
+                    });
+                });
+
+                ui.label(
+                    RichText::new("RP2040 System Markers (%SM) & Special Registers (%SD)")
+                        .small()
+                        .color(palette.rung_text_dim),
+                );
+
+                ui.separator();
+
+                // Selected Element Target Banner
+                if let Some((sel_id, sel_type, sel_name)) = &selected_meta {
+                    let banner_frame = egui::Frame::new()
+                        .fill(palette.accent_heading.gamma_multiply(0.12))
+                        .stroke(Stroke::new(1.0, palette.accent_heading.gamma_multiply(0.5)))
+                        .corner_radius(CornerRadius::same(4))
+                        .inner_margin(egui::Margin::symmetric(6, 4));
+
+                    banner_frame.show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!("Target: #{} [{}]", sel_id, sel_type.display_name()))
+                                    .color(palette.accent_heading)
+                                    .small()
+                                    .strong(),
+                            );
+                            let cur_str = if sel_name.is_empty() { "-" } else { sel_name.as_str() };
+                            ui.label(
+                                RichText::new(format!("(\"{}\")", cur_str))
+                                    .color(palette.text_primary)
+                                    .small()
+                                    .monospace(),
+                            );
+                        });
+                        ui.label(
+                            RichText::new("Click \"Use\" on any register below to assign directly.")
+                                .small()
+                                .color(palette.rung_text_dim),
+                        );
+                    });
+                    ui.add_space(2.0);
+                }
+
+                // Category Filter Bar
+                ui.horizontal_wrapped(|ui| {
+                    for (cat_id, lbl) in [
+                        (0u8, "All"),
+                        (1u8, "Flags"),
+                        (2u8, "Clocks"),
+                        (3u8, "Diag"),
+                        (4u8, "Registers"),
+                        (5u8, "Latch"),
+                    ] {
+                        if ui
+                            .selectable_label(app.special_reg_filter_cat == cat_id, RichText::new(lbl).small())
+                            .clicked()
+                        {
+                            app.special_reg_filter_cat = cat_id;
+                        }
+                    }
+                });
+
+                // Search Bar
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut app.special_reg_filter_text)
+                            .hint_text("🔍 Filter %SM, M8000, %SD, Scan...")
+                            .desired_width(ui.available_width() - 28.0),
+                    );
+                    if !app.special_reg_filter_text.is_empty() {
+                        if ui.small_button("✖").on_hover_text("Clear filter").clicked() {
+                            app.special_reg_filter_text.clear();
+                        }
+                    }
+                });
+            });
+
+            ui.add_space(4.0);
+
+            // Filter items
+            let query = app.special_reg_filter_text.trim().to_uppercase();
+            let cat_filter = app.special_reg_filter_cat;
+
+            let filtered_items: Vec<&SpecialRegisterDef> = SPECIAL_REGISTERS
+                .iter()
+                .filter(|item| {
+                    if cat_filter != 0 && item.category_id != cat_filter {
+                        return false;
+                    }
+                    if !query.is_empty() {
+                        let match_iec = item.iec.to_uppercase().contains(&query);
+                        let match_legacy = item.legacy.to_uppercase().contains(&query);
+                        let match_name = item.name.to_uppercase().contains(&query);
+                        let match_desc = item.desc.to_uppercase().contains(&query);
+                        if !match_iec && !match_legacy && !match_name && !match_desc {
+                            return false;
+                        }
+                    }
+                    true
+                })
+                .collect();
+
+            if filtered_items.is_empty() {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(16.0);
+                    ui.label(RichText::new("No special registers match filter").color(palette.rung_text_dim));
+                    ui.add_space(16.0);
+                });
+            } else {
+                for item in filtered_items {
+                    egui::Frame::new()
+                        .fill(if palette.is_light() {
+                            Color32::from_rgb(245, 247, 250)
+                        } else {
+                            palette.card_bg
+                        })
+                        .stroke(Stroke::new(1.0, palette.card_border.gamma_multiply(0.7)))
+                        .corner_radius(CornerRadius::same(5))
+                        .inner_margin(egui::Margin::symmetric(6, 5))
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+
+                            // Row 1: Badges + Name + Live Value
+                            ui.horizontal(|ui| {
+                                // IEC address badge
+                                let iec_color = if item.is_bit {
+                                    palette.accent_ok
+                                } else {
+                                    palette.accent_heading
+                                };
+                                egui::Frame::new()
+                                    .fill(iec_color.gamma_multiply(0.15))
+                                    .stroke(Stroke::new(1.0, iec_color.gamma_multiply(0.6)))
+                                    .corner_radius(CornerRadius::same(3))
+                                    .inner_margin(egui::Margin::symmetric(4, 1))
+                                    .show(ui, |ui| {
+                                        ui.label(RichText::new(item.iec).monospace().small().strong().color(iec_color));
+                                    });
+
+                                // Legacy alias badge
+                                egui::Frame::new()
+                                    .fill(palette.pill_bg)
+                                    .stroke(Stroke::new(1.0, palette.card_border.gamma_multiply(0.5)))
+                                    .corner_radius(CornerRadius::same(3))
+                                    .inner_margin(egui::Margin::symmetric(4, 1))
+                                    .show(ui, |ui| {
+                                        ui.label(RichText::new(item.legacy).monospace().small().color(palette.rung_text_dim));
+                                    });
+
+                                ui.label(RichText::new(item.name).strong().small().color(palette.text_primary));
+
+                                // Live Value
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if sim_active {
+                                        if item.is_bit && !item.iec.contains("..") {
+                                            let is_on = app.doc.simulator.get_var_value(item.iec);
+                                            let (badge_txt, badge_col) = if is_on {
+                                                ("● ON", palette.accent_ok)
+                                            } else {
+                                                ("○ OFF", palette.rung_text_dim)
+                                            };
+                                            ui.label(RichText::new(badge_txt).small().strong().color(badge_col));
+                                        } else if !item.is_bit && !item.iec.contains("..") {
+                                            let reg_val = app.doc.simulator.registers.get(item.iec).copied()
+                                                .or_else(|| app.doc.simulator.registers.get(item.legacy).copied());
+                                            if let Some(v) = reg_val {
+                                                let formatted = match item.iec {
+                                                    "%SD0" => format!("{} ms", v),
+                                                    "%SD1" | "%SD2" | "%SD3" => format!("{} µs", v),
+                                                    "%SD4" | "%SD5" => format!("{}", v),
+                                                    "%SD6" => format!("{:.1} °C", (v as f32) / 10.0),
+                                                    _ => format!("{}", v),
+                                                };
+                                                ui.label(RichText::new(formatted).monospace().small().strong().color(palette.accent_heading));
+                                            } else {
+                                                ui.label(RichText::new(item.default_hint).small().color(palette.rung_text_dim));
+                                            }
+                                        } else {
+                                            ui.label(RichText::new(item.default_hint).small().color(palette.rung_text_dim));
+                                        }
+                                    } else {
+                                        ui.label(RichText::new(item.default_hint).small().color(palette.rung_text_dim));
+                                    }
+                                });
+                            });
+
+                            // Row 2: Description
+                            ui.label(RichText::new(item.desc).small().color(palette.rung_text_dim));
+
+                            // Row 3: Action Buttons
+                            ui.horizontal(|ui| {
+                                let primary_addr = if item.iec.contains("..") {
+                                    item.iec.split("..").next().unwrap_or(item.iec)
+                                } else {
+                                    item.iec
+                                };
+                                let primary_legacy = if item.legacy.contains("..") {
+                                    item.legacy.split("..").next().unwrap_or(item.legacy)
+                                } else {
+                                    item.legacy
+                                };
+
+                                if selected_meta.is_some() {
+                                    let btn_text = format!("↵ Use {}", primary_addr);
+                                    if ui
+                                        .button(RichText::new(btn_text).small().color(palette.accent_heading))
+                                        .on_hover_text(format!("Assign address '{}' to selected element", primary_addr))
+                                        .clicked()
+                                    {
+                                        assign_address = Some(primary_addr.to_string());
+                                    }
+                                }
+
+                                if ui
+                                    .small_button(format!("📋 {}", primary_addr))
+                                    .on_hover_text(format!("Copy IEC address '{}' to clipboard", primary_addr))
+                                    .clicked()
+                                {
+                                    ui.ctx().copy_text(primary_addr.to_string());
+                                }
+
+                                if ui
+                                    .small_button(format!("📋 {}", primary_legacy))
+                                    .on_hover_text(format!("Copy legacy address '{}' to clipboard", primary_legacy))
+                                    .clicked()
+                                {
+                                    ui.ctx().copy_text(primary_legacy.to_string());
+                                }
+                            });
+                        });
+
+                    ui.add_space(2.0);
+                }
+            }
+
+            ui.add_space(4.0);
+
+            // Memory Architecture Legend Card
+            egui::CollapsingHeader::new(
+                RichText::new("📖 Memory Architecture Legend")
+                    .small()
+                    .strong()
+                    .color(palette.accent_heading),
+            )
+            .id_salt("special_reg_legend_collapsing")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.group(|ui| {
+                    ui.set_width(ui.available_width());
+                    ui.label(
+                        RichText::new("RP2040 Memory Map Sections:")
+                            .small()
+                            .strong()
+                            .color(palette.text_primary),
+                    );
+                    egui::Grid::new("mem_legend_grid")
+                        .num_columns(2)
+                        .spacing([6.0, 3.0])
+                        .show(ui, |ui| {
+                            ui.label(RichText::new("0x00..0x1F:").small().monospace().color(palette.rung_text_dim));
+                            ui.label(RichText::new("Inputs X0..X31 (%IX0.0..%IX3.7)").small().color(palette.text_primary));
+                            ui.end_row();
+
+                            ui.label(RichText::new("0x20..0x3F:").small().monospace().color(palette.rung_text_dim));
+                            ui.label(RichText::new("Outputs Y0..Y31 (%QX0.0..%QX3.7)").small().color(palette.text_primary));
+                            ui.end_row();
+
+                            ui.label(RichText::new("0x40..0x7F:").small().monospace().color(palette.rung_text_dim));
+                            ui.label(RichText::new("User Relays M0..M63 (%MX0.0..%MX7.7)").small().color(palette.text_primary));
+                            ui.end_row();
+
+                            ui.label(RichText::new("0x80..0x9F:").small().monospace().color(palette.rung_text_dim));
+                            ui.label(RichText::new("Latch Relays M64..M95 (Flash Saved)").small().color(palette.accent_ok));
+                            ui.end_row();
+
+                            ui.label(RichText::new("0xA0..0xBF:").small().monospace().color(palette.rung_text_dim));
+                            ui.label(RichText::new("Special Markers %SM0..%SM31 (M8000..)").small().color(palette.accent_heading));
+                            ui.end_row();
+
+                            ui.label(RichText::new("0xC0..0xDF:").small().monospace().color(palette.rung_text_dim));
+                            ui.label(RichText::new("Timers T0..T15 (%TX0..%TX15)").small().color(palette.text_primary));
+                            ui.end_row();
+
+                            ui.label(RichText::new("0xE0..0xFF:").small().monospace().color(palette.rung_text_dim));
+                            ui.label(RichText::new("Counters C0..C15 (%CX0..%CX15)").small().color(palette.text_primary));
+                            ui.end_row();
+                        });
+                    ui.add_space(2.0);
+                    ui.label(
+                        RichText::new("Word Memory: D0..D127 (User), D128..D159 (Latch), %SD0..%SD31 (0xA0..0xBF / D8000..D8031)")
+                            .small()
+                            .color(palette.rung_text_dim),
+                    );
+                });
+            });
+        });
+
+    // Apply any pending address assignment to selected element
+    if let Some(addr) = assign_address {
+        if let Some(elem) = app.doc.selected_element_mut() {
+            elem.name = addr;
+            app.doc.is_dirty = true;
+        }
+    }
+}
+
+// =============================================================================
+// TAB 4: REAL-TIME DATA WATCH TABLE & REGISTER MONITOR
+// =============================================================================
+fn render_watch_table(
+    ui: &mut Ui,
+    app: &mut CanvasApp,
+    palette: ThemePalette,
+    sim_active: bool,
+) {
+    let mut remove_idx: Option<usize> = None;
+    let mut write_action: Option<(usize, String)> = None;
+    let mut add_preset_kind: Option<u8> = None;
+    let mut clear_all_watch = false;
+
+    egui::ScrollArea::vertical()
+        .id_salt("watch_table_scroll")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            // Header
+            ui.group(|ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("Data Watch Table & Register Monitor")
+                            .color(palette.accent_heading)
+                            .strong(),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .small_button(RichText::new("✖ Clear").color(Color32::from_rgb(220, 80, 80)))
+                            .on_hover_text("Clear all watched rows")
+                            .clicked()
+                        {
+                            clear_all_watch = true;
+                        }
+
+                        ui.menu_button("➕ Presets", |ui| {
+                            if ui.button("➕ All Digital Inputs (%IX)").clicked() {
+                                add_preset_kind = Some(1);
+                                ui.close();
+                            }
+                            if ui.button("➕ All Digital Outputs (%QX)").clicked() {
+                                add_preset_kind = Some(2);
+                                ui.close();
+                            }
+                            if ui.button("➕ All Analog Inputs (%IW)").clicked() {
+                                add_preset_kind = Some(3);
+                                ui.close();
+                            }
+                            if ui.button("➕ Flash Retentive Variables (M64..M71, D128..D135)").clicked() {
+                                add_preset_kind = Some(4);
+                                ui.close();
+                            }
+                            if ui.button("➕ Diagnostic Registers (%SD0..%SD6)").clicked() {
+                                add_preset_kind = Some(5);
+                                ui.close();
+                            }
+                        });
+                    });
+                });
+
+                ui.separator();
+
+                // Search & Filter
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("🔍").small());
+                    ui.add(
+                        egui::TextEdit::singleline(&mut app.watch_filter_text)
+                            .hint_text("Filter address or symbol...")
+                            .desired_width(ui.available_width() - 30.0),
+                    );
+                    if !app.watch_filter_text.is_empty() && ui.small_button("✖").clicked() {
+                        app.watch_filter_text.clear();
+                    }
+                });
+            });
+
+            ui.add_space(4.0);
+
+            // Table of watched rows
+            ui.group(|ui| {
+                ui.set_width(ui.available_width());
+                let filter_lc = app.watch_filter_text.trim().to_lowercase();
+
+                egui::Grid::new("watch_table_grid")
+                    .striped(true)
+                    .num_columns(6)
+                    .spacing([4.0, 5.0])
+                    .show(ui, |ui| {
+                        ui.label(RichText::new("ADDR").strong().small().color(palette.rung_text_dim));
+                        ui.label(RichText::new("SYMBOL").strong().small().color(palette.rung_text_dim));
+                        ui.label(RichText::new("FMT").strong().small().color(palette.rung_text_dim));
+                        ui.label(RichText::new("LIVE VALUE").strong().small().color(palette.rung_text_dim));
+                        ui.label(RichText::new("WRITE").strong().small().color(palette.rung_text_dim));
+                        ui.label(RichText::new("DEL").strong().small().color(palette.rung_text_dim));
+                        ui.end_row();
+
+                        for idx in 0..app.watch_rows.len() {
+                            let (matches_filter, addr, symbol, format, edit_buf) = {
+                                let row = &app.watch_rows[idx];
+                                let matches = filter_lc.is_empty()
+                                    || row.address.to_lowercase().contains(&filter_lc)
+                                    || row.symbol.to_lowercase().contains(&filter_lc);
+                                (matches, row.address.clone(), row.symbol.clone(), row.format, row.edit_buffer.clone())
+                            };
+
+                            if !matches_filter {
+                                continue;
+                            }
+
+                            // Col 1: Address
+                            ui.label(
+                                RichText::new(&addr)
+                                    .monospace()
+                                    .strong()
+                                    .size(11.0)
+                                    .color(palette.accent_heading),
+                            );
+
+                            // Col 2: Symbol
+                            let sym_w = 65.0;
+                            let mut sym_edit = symbol;
+                            if ui.add_sized(
+                                egui::vec2(sym_w, 18.0),
+                                egui::TextEdit::singleline(&mut sym_edit).desired_width(sym_w),
+                            ).changed() {
+                                app.watch_rows[idx].symbol = sym_edit;
+                                app.save_settings();
+                            }
+
+                            // Col 3: Format selector
+                            let fmt_text = match format {
+                                WatchDisplayFormat::Auto => "Auto",
+                                WatchDisplayFormat::Dec => "Dec",
+                                WatchDisplayFormat::Hex => "Hex",
+                                WatchDisplayFormat::Bin => "Bin",
+                                WatchDisplayFormat::Bool => "Bool",
+                            };
+                            ui.menu_button(RichText::new(fmt_text).small(), |ui| {
+                                for &(f, label) in &[
+                                    (WatchDisplayFormat::Auto, "Auto"),
+                                    (WatchDisplayFormat::Dec, "Dec"),
+                                    (WatchDisplayFormat::Hex, "Hex (0x)"),
+                                    (WatchDisplayFormat::Bin, "Bin (0b)"),
+                                    (WatchDisplayFormat::Bool, "Bool (ON/OFF)"),
+                                ] {
+                                    if ui.selectable_label(format == f, label).clicked() {
+                                        app.watch_rows[idx].format = f;
+                                        app.save_settings();
+                                        ui.close();
+                                    }
+                                }
+                            });
+
+                            // Col 4: Live Value
+                            let (val_txt, is_bit, val_col) = app.evaluate_watch_value(&addr, format);
+                            if is_bit && sim_active {
+                                if ui
+                                    .small_button(RichText::new(&val_txt).strong().size(10.5).color(val_col))
+                                    .on_hover_text("Click to toggle in simulation")
+                                    .clicked()
+                                {
+                                    app.doc.toggle_input(&addr);
+                                }
+                            } else {
+                                ui.label(
+                                    RichText::new(&val_txt)
+                                        .monospace()
+                                        .strong()
+                                        .size(10.5)
+                                        .color(val_col),
+                                );
+                            }
+
+                            // Col 5: Write / Modify field & button
+                            ui.horizontal(|ui| {
+                                let mut buf = edit_buf;
+                                let edit_res = ui.add_sized(
+                                    egui::vec2(50.0, 18.0),
+                                    egui::TextEdit::singleline(&mut buf).desired_width(50.0),
+                                );
+                                if edit_res.changed() {
+                                    app.watch_rows[idx].edit_buffer = buf.clone();
+                                }
+                                let enter_pressed = edit_res.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                                if ui.small_button(RichText::new("✍").color(palette.accent_ok)).clicked() || enter_pressed {
+                                    write_action = Some((idx, buf));
+                                }
+                            });
+
+                            // Col 6: Delete button
+                            if ui.small_button(RichText::new("✖").color(palette.rung_text_dim)).clicked() {
+                                remove_idx = Some(idx);
+                            }
+
+                            ui.end_row();
+                        }
+                    });
+            });
+
+            ui.add_space(4.0);
+
+            // Add new variable footer card
+            ui.group(|ui| {
+                ui.set_width(ui.available_width());
+                ui.label(RichText::new("Add Variable to Watch").strong().small().color(palette.accent_heading));
+                ui.horizontal(|ui| {
+                    ui.add_sized(
+                        egui::vec2(90.0, 20.0),
+                        egui::TextEdit::singleline(&mut app.watch_new_addr)
+                            .hint_text("Address (%MW0, %IW0, D10)")
+                            .desired_width(90.0),
+                    );
+                    ui.add_sized(
+                        egui::vec2(90.0, 20.0),
+                        egui::TextEdit::singleline(&mut app.watch_new_symbol)
+                            .hint_text("Symbol (optional)")
+                            .desired_width(90.0),
+                    );
+                    if ui.button(RichText::new("➕ Add").strong().color(palette.accent_ok)).clicked() {
+                        let a = app.watch_new_addr.trim().to_string();
+                        let s = app.watch_new_symbol.trim().to_string();
+                        if !a.is_empty() {
+                            app.add_watch_row(&a, &s, WatchDisplayFormat::Auto);
+                            app.watch_new_addr.clear();
+                            app.watch_new_symbol.clear();
+                        }
+                    }
+                });
+
+                // Quick add chips
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("Quick Add:").small().color(palette.rung_text_dim));
+                    for &chip in &["%IX0.0", "%QX0.0", "%IW0", "%IW1", "%IW2", "%IW3", "%MW0", "%MW1", "%SD1", "%SD6"] {
+                        if ui.small_button(RichText::new(chip).monospace().size(10.0)).clicked() {
+                            app.add_watch_row(chip, "", WatchDisplayFormat::Auto);
+                        }
+                    }
+                });
+            });
+        });
+
+    if let Some(idx) = remove_idx {
+        if idx < app.watch_rows.len() {
+            app.watch_rows.remove(idx);
+            app.save_settings();
+        }
+    }
+    if let Some((idx, val_str)) = write_action {
+        let _ = app.write_watch_row(idx, &val_str);
+    }
+    if clear_all_watch {
+        app.watch_rows.clear();
+        app.save_settings();
+    }
+    if let Some(kind) = add_preset_kind {
+        match kind {
+            1 => {
+                for i in 0..4 {
+                    app.add_watch_row(&format!("%IX0.{}", i), &format!("INPUT_X{}", i), WatchDisplayFormat::Bool);
+                }
+            }
+            2 => {
+                for i in 0..6 {
+                    app.add_watch_row(&format!("%QX0.{}", i), &format!("OUTPUT_Y{}", i), WatchDisplayFormat::Bool);
+                }
+            }
+            3 => {
+                app.add_watch_row("%IW0", "ADC0_GP26", WatchDisplayFormat::Dec);
+                app.add_watch_row("%IW1", "ADC1_GP27", WatchDisplayFormat::Dec);
+                app.add_watch_row("%IW2", "ADC2_GP28", WatchDisplayFormat::Dec);
+                app.add_watch_row("%IW3", "ADC_TEMP_SENSOR", WatchDisplayFormat::Dec);
+            }
+            4 => {
+                for i in 64..72 {
+                    let byte = i / 8;
+                    let bit = i % 8;
+                    app.add_watch_row(&format!("%MX{}.{}", byte, bit), &format!("LATCH_M{}", i), WatchDisplayFormat::Bool);
+                }
+                for i in 128..136 {
+                    app.add_watch_row(&format!("%MW{}", i), &format!("LATCH_D{}", i), WatchDisplayFormat::Dec);
+                }
+            }
+            5 => {
+                app.add_watch_row("%SD0", "WATCHDOG_PRESET", WatchDisplayFormat::Dec);
+                app.add_watch_row("%SD1", "CURRENT_SCAN_TIME_US", WatchDisplayFormat::Dec);
+                app.add_watch_row("%SD2", "MIN_SCAN_TIME_US", WatchDisplayFormat::Dec);
+                app.add_watch_row("%SD3", "MAX_SCAN_TIME_US", WatchDisplayFormat::Dec);
+                app.add_watch_row("%SD4", "SCAN_COUNT_LOW", WatchDisplayFormat::Dec);
+                app.add_watch_row("%SD5", "SCAN_COUNT_HIGH", WatchDisplayFormat::Dec);
+                app.add_watch_row("%SD6", "CPU_TEMP_C01", WatchDisplayFormat::Auto);
+            }
+            _ => {}
+        }
     }
 }

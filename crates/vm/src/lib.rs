@@ -37,6 +37,10 @@ pub const CMD_FORCE_IO: u8 = 0x06;
 pub const CMD_FORCE_IO_RESPONSE: u8 = 0x86;
 pub const CMD_WRITE_VALUE: u8 = 0x07;
 pub const CMD_WRITE_VALUE_RESPONSE: u8 = 0x87;
+pub const CMD_PERSIST_SAVE: u8 = 0x08;
+pub const CMD_PERSIST_SAVE_RESPONSE: u8 = 0x88;
+pub const CMD_PERSIST_CLEAR: u8 = 0x09;
+pub const CMD_PERSIST_CLEAR_RESPONSE: u8 = 0x89;
 
 /// Online Monitoring Status Packet Lengths (includes 2B prog_len + 2B prog_crc16 signature)
 pub const STATUS_SNAPSHOT_PAYLOAD_LEN: usize = 1 + 4 + 1 + 4 + 256 + 64 + 64 + 64 + 2 + 2; // 462 bytes
@@ -859,6 +863,8 @@ impl MicroVm {
                     Err("Invalid CMD_WRITE_VALUE payload")
                 }
             }
+            CMD_PERSIST_SAVE => Ok(CMD_PERSIST_SAVE),
+            CMD_PERSIST_CLEAR => Ok(CMD_PERSIST_CLEAR),
             _ => Err("Unknown command code"),
         }
     }

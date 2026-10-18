@@ -108,7 +108,67 @@ impl IlParser {
         }
 
         out.push_str("END_VAR");
+
+        // Declare Retentive / Persistent Variables (M64..M95, D128..D159)
+        let mut persistent_vars = HashSet::new();
+        let mut persistent_block = String::new();
+        for rung in &prog.rungs {
+            for el in &rung.elements {
+                if let Some((decl, comment)) = Self::check_persistent_address(&el.name) {
+                    if persistent_vars.insert(el.name.clone()) {
+                        persistent_block.push_str(&format!("    {} : {}\n", decl, comment));
+                    }
+                }
+                if let Some((decl, comment)) = Self::check_persistent_address(&el.target_reg) {
+                    if persistent_vars.insert(el.target_reg.clone()) {
+                        persistent_block.push_str(&format!("    {} : {}\n", decl, comment));
+                    }
+                }
+            }
+        }
+        if !persistent_block.is_empty() {
+            out.push_str("\n\nVAR RETAIN PERSISTENT\n");
+            out.push_str("    (* --- Retentive / Persistent Memory (RP2040 Flash) --- *)\n");
+            out.push_str(&persistent_block);
+            out.push_str("END_VAR");
+        }
+
         out
+    }
+
+    fn check_persistent_address(name: &str) -> Option<(String, &'static str)> {
+        let s = name.trim().to_uppercase();
+        if s.starts_with("%MX") {
+            if let Some((b_str, bit_str)) = s[3..].split_once('.') {
+                if let (Ok(byte), Ok(bit)) = (b_str.parse::<usize>(), bit_str.parse::<usize>()) {
+                    let idx = byte * 8 + bit;
+                    if (64..=95).contains(&idx) {
+                        return Some((format!("M{} AT %MX{}.{}", idx, byte, bit), "BOOL := FALSE; (* Retentive Bit Relay M64..M95 *)"));
+                    }
+                }
+            }
+        } else if s.starts_with('M') && s.len() > 1 && s[1..].chars().all(|c| c.is_ascii_digit()) {
+            if let Ok(idx) = s[1..].parse::<usize>() {
+                if (64..=95).contains(&idx) {
+                    let byte = idx / 8;
+                    let bit = idx % 8;
+                    return Some((format!("M{} AT %MX{}.{}", idx, byte, bit), "BOOL := FALSE; (* Retentive Bit Relay M64..M95 *)"));
+                }
+            }
+        } else if s.starts_with("%MW") {
+            if let Ok(idx) = s[3..].parse::<usize>() {
+                if (128..=159).contains(&idx) {
+                    return Some((format!("D{} AT %MW{}", idx, idx), "INT := 0; (* Retentive Word Register D128..D159 *)"));
+                }
+            }
+        } else if s.starts_with('D') && s.len() > 1 && s[1..].chars().all(|c| c.is_ascii_digit()) {
+            if let Ok(idx) = s[1..].parse::<usize>() {
+                if (128..=159).contains(&idx) {
+                    return Some((format!("D{} AT %MW{}", idx, idx), "INT := 0; (* Retentive Word Register D128..D159 *)"));
+                }
+            }
+        }
+        None
     }
 
     pub fn collect_fb_declarations(
@@ -177,7 +237,11 @@ impl IlParser {
                     }
                 }
                 TypeTag::Move | TypeTag::Math | TypeTag::Compare => {
-                    if declared.insert(el.name.clone()) && !el.name.starts_with('X') && !el.name.starts_with('Y') {
+                    if declared.insert(el.name.clone())
+                        && !el.name.starts_with('X')
+                        && !el.name.starts_with('Y')
+                        && Self::check_persistent_address(&el.name).is_none()
+                    {
                         out.push_str(&format!("    {} : INT := 0; (* Internal Register *)\n", el.name));
                     }
                 }

@@ -1688,5 +1688,67 @@ fn test_special_system_markers_and_registers() {
     assert_eq!(doc.simulator.registers.get("%SD4").copied(), Some(2));   // Scan count = 2
 }
 
+#[test]
+fn test_iec_var_retain_persistent_export() {
+    // Ladder with non-retain M0, retain bit M64, and retain word D128
+    let il = "LD M0\nST M64\nLD %MW128\n";
+    let prog = IlParser::parse(il).expect("Parse IL failed");
+    let table = prog.map_io_to_iec_var_table();
+
+    // Verify regular VAR block exists
+    assert!(table.contains("VAR\n"), "Table must contain regular VAR");
+
+    // Verify VAR RETAIN PERSISTENT block exists and contains M64 and D128
+    assert!(table.contains("VAR RETAIN PERSISTENT\n"), "Table must contain VAR RETAIN PERSISTENT");
+    assert!(table.contains("M64 AT %MX8.0 : BOOL := FALSE;"), "Table must declare M64 with %MX8.0");
+    assert!(table.contains("D128 AT %MW128 : INT := 0;"), "Table must declare D128 with %MW128");
+}
+
+#[test]
+fn test_analog_inputs_and_cpu_temperature_snapshot() {
+    let mut sim = my_canvas_core::PlcSimulator::new();
+
+    // Default contains AI0..AI15 / %IW0..%IW15
+    assert_eq!(*sim.registers.get("%IW0").unwrap(), 0);
+    assert_eq!(*sim.registers.get("AI0").unwrap(), 0);
+
+    // Create a mock PlcStatusSnapshot with analog values
+    // data_reg[0]: 1000 (AI0 / %IW0)
+    // data_reg[1]: 2048 (AI1 / %IW1)
+    // data_reg[2]: 3500 (AI2 / %IW2)
+    // data_reg[3]: 876  (AI3 / %IW3 -> on-chip temp approx 27.0 °C)
+    let mut snap = my_canvas_core::PlcStatusSnapshot {
+        running: true,
+        scan_count: 500,
+        acc_bool: false,
+        acc_word: 0,
+        bit_mem: [0u8; 256],
+        timer_cv: [0u32; 16],
+        counter_cv: [0i32; 16],
+        data_reg: [0i32; 16],
+        prog_len: 10,
+        prog_crc: 0x1234,
+    };
+    snap.data_reg[0] = 1000;
+    snap.data_reg[1] = 2048;
+    snap.data_reg[2] = 3500;
+    snap.data_reg[3] = 876;
+
+    sim.apply_online_snapshot(&snap);
+
+    assert_eq!(*sim.registers.get("%IW0").unwrap(), 1000);
+    assert_eq!(*sim.registers.get("AI0").unwrap(), 1000);
+    assert_eq!(*sim.registers.get("%IW1").unwrap(), 2048);
+    assert_eq!(*sim.registers.get("AI1").unwrap(), 2048);
+    assert_eq!(*sim.registers.get("%IW2").unwrap(), 3500);
+    assert_eq!(*sim.registers.get("AI2").unwrap(), 3500);
+    assert_eq!(*sim.registers.get("%IW3").unwrap(), 876);
+    assert_eq!(*sim.registers.get("AI3").unwrap(), 876);
+
+    // Verify %SD6 CPU temperature calculation (around 270 = 27.0 °C)
+    let temp_c01 = *sim.registers.get("%SD6").unwrap();
+    assert!((260..=280).contains(&temp_c01), "Temp should be around 27.0 °C, got {}", temp_c01);
+}
+
 
 

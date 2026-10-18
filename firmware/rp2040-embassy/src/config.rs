@@ -24,6 +24,7 @@
 //! Y6 = -
 //! Y7 = -
 
+use embassy_rp::adc::{Adc, Blocking, Channel};
 use embassy_rp::gpio::{AnyPin, Input, Level, Output, Pull};
 
 // =============================================================================
@@ -37,10 +38,14 @@ pub const SCAN_CYCLE_MS: u32 = 10;
 // 2. Flash Memory Storage Layout (RP2040 2MB SPI Flash)
 // =============================================================================
 
-/// Flash offset reserved for saving PLC Bytecode (last 8KB of 2MB RP2040 Flash)
+/// Flash offset reserved for saving PLC Bytecode (Sector 510, 0x1FE000..0x1FEFFF)
 pub const FLASH_PLC_OFFSET: u32 = 0x1FE000;
 pub const FLASH_SIZE_BYTES: usize = 2 * 1024 * 1024;
 pub const FLASH_MAGIC: u32 = 0x5550_4C43; // "UPLC" in ASCII
+
+/// Flash offset reserved for saving IEC 61131-3 PERSISTENT / Retentive Variables (Sector 511, 0x1FF000..0x1FFFFF)
+pub const FLASH_PERSISTENT_OFFSET: u32 = 0x1FF000;
+pub const FLASH_PERSISTENT_MAGIC: u32 = 0x5045_5253; // "PERS" in ASCII
 
 // =============================================================================
 // 3. Serial & Modbus RTU Communication Configuration
@@ -93,6 +98,15 @@ pub struct HardwareIo {
     pub inputs: [Option<Input<'static>>; 8],
     pub outputs: [Option<Output<'static>>; 8],
     pub status_led: Output<'static>,
+}
+
+/// Bundled Hardware ADC resources passed to the PLC scan task
+pub struct HardwareAdc {
+    pub adc: Adc<'static, Blocking>,
+    pub ch_ai0: Channel<'static>,
+    pub ch_ai1: Channel<'static>,
+    pub ch_ai2: Channel<'static>,
+    pub ch_ai3: Channel<'static>,
 }
 
 /// Macro to instantiate and configure hardware inputs and outputs directly from RP2040 Peripherals `p`.
@@ -168,6 +182,25 @@ macro_rules! configure_hardware_io {
     };
 }
 
+/// Macro to instantiate and configure hardware ADC and analog channels directly from RP2040 Peripherals `p`.
+///
+/// - AI0 (%IW0): GP26 (Pin 31 / ADC0)
+/// - AI1 (%IW1): GP27 (Pin 32 / ADC1)
+/// - AI2 (%IW2): GP28 (Pin 34 / ADC2)
+/// - AI3 (%IW3): Internal RP2040 Temperature Sensor (ADC_TEMP_SENSOR)
+#[macro_export]
+macro_rules! configure_hardware_adc {
+    ($p:expr) => {
+        $crate::config::HardwareAdc {
+            adc: embassy_rp::adc::Adc::new_blocking($p.ADC, embassy_rp::adc::Config::default()),
+            ch_ai0: embassy_rp::adc::Channel::new_pin($p.PIN_26, embassy_rp::gpio::Pull::None),
+            ch_ai1: embassy_rp::adc::Channel::new_pin($p.PIN_27, embassy_rp::gpio::Pull::None),
+            ch_ai2: embassy_rp::adc::Channel::new_pin($p.PIN_28, embassy_rp::gpio::Pull::None),
+            ch_ai3: embassy_rp::adc::Channel::new_temp_sensor($p.ADC_TEMP_SENSOR),
+        }
+    };
+}
+
 /// Dynamic function-based configuration using erased `AnyPin` tokens
 #[allow(dead_code)]
 pub fn configure_hardware_io_degraded(
@@ -227,8 +260,20 @@ pub const SD_CURRENT_SCAN_TIME_US: u8 = 0xA1; // %SD1  (D129 / D8010): Current s
 pub const SD_MIN_SCAN_TIME_US: u8 = 0xA2; // %SD2  (D130 / D8011): Minimum scan execution time recorded (μs)
 pub const SD_MAX_SCAN_TIME_US: u8 = 0xA3; // %SD3  (D131 / D8012): Maximum scan execution time recorded (μs)
 pub const SD_SCAN_COUNT_LOW: u8 = 0xA4; // %SD4  (D132): Scan counter lower 32-bit word
-#[allow(dead_code)]
 pub const SD_SCAN_COUNT_HIGH: u8 = 0xA5; // %SD5  (D133): Scan counter upper 32-bit word
+pub const SD_CPU_TEMP_C01: u8 = 0xA6; // %SD6  (D134 / D8006): On-chip CPU Temperature in 0.1 °C units (e.g. 275 = 27.5 °C)
 
 /// Watchdog timeout limit in milliseconds. Scans exceeding this trip the SM_SCAN_OVERRUN flag.
 pub const DEFAULT_WATCHDOG_TIMEOUT_MS: u32 = 100;
+
+// =============================================================================
+// 9. Hardware Analog Inputs Configuration (ADC0..ADC2 & On-Chip Temp Sensor)
+// =============================================================================
+
+/// Enable/disable automatic sampling of Analog Inputs in Firmware scan loop
+pub const ENABLE_ANALOG_INPUTS: bool = true;
+
+/// Analog input raw 12-bit maximum (0..4095)
+pub const ADC_MAX_RAW: u16 = 4095;
+/// Reference voltage in millivolts (3300 mV = 3.3V)
+pub const ADC_VREF_MV: u32 = 3300;

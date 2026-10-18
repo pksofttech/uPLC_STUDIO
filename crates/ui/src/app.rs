@@ -14,6 +14,71 @@ use crate::panels::{element_dialog::ElementConfigModal, left_panel, menu_bar, ri
 use crate::theme::{self, AppTheme};
 use crate::tools::ActiveTool;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WatchDisplayFormat {
+    Auto,
+    Dec,
+    Hex,
+    Bin,
+    Bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WatchRow {
+    pub address: String,
+    pub symbol: String,
+    pub format: WatchDisplayFormat,
+    #[serde(skip)]
+    pub edit_buffer: String,
+}
+
+pub fn default_watch_rows() -> Vec<WatchRow> {
+    vec![
+        WatchRow {
+            address: "%IX0.0".to_string(),
+            symbol: "START_PB".to_string(),
+            format: WatchDisplayFormat::Bool,
+            edit_buffer: String::new(),
+        },
+        WatchRow {
+            address: "%QX0.0".to_string(),
+            symbol: "RUN_LED".to_string(),
+            format: WatchDisplayFormat::Bool,
+            edit_buffer: String::new(),
+        },
+        WatchRow {
+            address: "%IW0".to_string(),
+            symbol: "ADC0_GP26".to_string(),
+            format: WatchDisplayFormat::Dec,
+            edit_buffer: String::new(),
+        },
+        WatchRow {
+            address: "%IW3".to_string(),
+            symbol: "ADC_TEMP".to_string(),
+            format: WatchDisplayFormat::Dec,
+            edit_buffer: String::new(),
+        },
+        WatchRow {
+            address: "%MW0".to_string(),
+            symbol: "VAR_0".to_string(),
+            format: WatchDisplayFormat::Dec,
+            edit_buffer: String::new(),
+        },
+        WatchRow {
+            address: "%SD1".to_string(),
+            symbol: "SCAN_TIME_US".to_string(),
+            format: WatchDisplayFormat::Dec,
+            edit_buffer: String::new(),
+        },
+        WatchRow {
+            address: "%SD6".to_string(),
+            symbol: "CPU_TEMP".to_string(),
+            format: WatchDisplayFormat::Dec,
+            edit_buffer: String::new(),
+        },
+    ]
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
@@ -32,6 +97,7 @@ pub struct AppSettings {
     pub window_pos_x: Option<f32>,
     pub window_pos_y: Option<f32>,
     pub last_folder: Option<PathBuf>,
+    pub watch_rows: Vec<WatchRow>,
 }
 
 impl Default for AppSettings {
@@ -51,6 +117,7 @@ impl Default for AppSettings {
             window_pos_x: None,
             window_pos_y: None,
             last_folder: None,
+            watch_rows: default_watch_rows(),
         }
     }
 }
@@ -114,6 +181,12 @@ pub struct CanvasApp {
     pub elem_filter_text: String,
     pub elem_filter_cat: u8,
     pub component_filter: String,
+    pub special_reg_filter_text: String,
+    pub special_reg_filter_cat: u8,
+    pub watch_rows: Vec<WatchRow>,
+    pub watch_filter_text: String,
+    pub watch_new_addr: String,
+    pub watch_new_symbol: String,
     pub right_panel_tab: u8,
     pub show_il_code: bool,
     pub show_about: bool,
@@ -173,6 +246,16 @@ impl Default for CanvasApp {
             elem_filter_text: String::new(),
             elem_filter_cat: 0,
             component_filter: String::new(),
+            special_reg_filter_text: String::new(),
+            special_reg_filter_cat: 0,
+            watch_rows: if settings.watch_rows.is_empty() {
+                default_watch_rows()
+            } else {
+                settings.watch_rows
+            },
+            watch_filter_text: String::new(),
+            watch_new_addr: String::new(),
+            watch_new_symbol: String::new(),
             right_panel_tab: 0,
             show_il_code: settings.show_il_code,
             show_about: false,
@@ -598,6 +681,155 @@ impl CanvasApp {
             window_pos_x: self.window_pos_x,
             window_pos_y: self.window_pos_y,
             last_folder: self.last_folder.clone(),
+            watch_rows: self.watch_rows.clone(),
+        }
+    }
+
+    /// Evaluates live value and display styling for any address in the Watch Table
+    pub fn evaluate_watch_value(
+        &self,
+        addr_str: &str,
+        format: WatchDisplayFormat,
+    ) -> (String, bool, egui::Color32) {
+        let palette = self.theme.palette();
+        let upper = addr_str.trim().to_ascii_uppercase();
+
+        // 1. Bit Addresses (%IX, %QX, %MX, %SM, X, Y, M, etc.)
+        let is_bit_addr = upper.starts_with("%IX")
+            || upper.starts_with("%QX")
+            || upper.starts_with("%MX")
+            || upper.starts_with("%SM")
+            || ((upper.starts_with('X') || upper.starts_with('Y') || upper.starts_with('M') || upper.starts_with('I') || upper.starts_with('Q') || upper.starts_with('R'))
+                && upper.len() > 1
+                && upper[1..].chars().all(|c| c.is_ascii_digit()));
+
+        if is_bit_addr {
+            let is_on = self.doc.simulator.get_var_value(&upper);
+            let color = if is_on { palette.accent_ok } else { palette.rung_text_dim };
+            let text = match format {
+                WatchDisplayFormat::Bool | WatchDisplayFormat::Auto => {
+                    if is_on { "● ON (1)".to_string() } else { "○ OFF (0)".to_string() }
+                }
+                WatchDisplayFormat::Dec => if is_on { "1".to_string() } else { "0".to_string() },
+                WatchDisplayFormat::Hex => if is_on { "0x01".to_string() } else { "0x00".to_string() },
+                WatchDisplayFormat::Bin => if is_on { "0b1".to_string() } else { "0b0".to_string() },
+            };
+            return (text, true, color);
+        }
+
+        // 2. Timers (T0..T31)
+        if upper.starts_with('T') && upper.len() > 1 && upper[1..].chars().all(|c| c.is_ascii_digit()) {
+            if let Some(&(cv, done)) = self.doc.simulator.timers.get(&upper) {
+                let color = if done { palette.accent_ok } else { palette.accent_heading };
+                let text = format!("{} ms (Q={})", cv, if done { 1 } else { 0 });
+                return (text, false, color);
+            }
+        }
+
+        // 3. Counters (C0..C31)
+        if upper.starts_with('C') && upper.len() > 1 && upper[1..].chars().all(|c| c.is_ascii_digit()) {
+            if let Some(&(cv, done, _)) = self.doc.simulator.counters.get(&upper) {
+                let color = if done { palette.accent_ok } else { palette.accent_heading };
+                let text = format!("{} (Q={})", cv, if done { 1 } else { 0 });
+                return (text, false, color);
+            }
+        }
+
+        // 4. Word Registers (%MW, D, %IW, AI, %QW, AO, %SD, SD)
+        let reg_val = self.doc.simulator.registers.get(&upper).copied();
+        if let Some(v) = reg_val {
+            let color = palette.accent_heading;
+            let text = match format {
+                WatchDisplayFormat::Auto => {
+                    if upper == "%SD6" || upper == "SD6" || upper == "D134" || upper == "D8006" {
+                        format!("{:.1} °C ({})", (v as f32) / 10.0, v)
+                    } else if upper == "%SD1" || upper == "%SD2" || upper == "%SD3" {
+                        format!("{} µs", v)
+                    } else if upper.starts_with("%IW") || upper.starts_with("AI") || upper.starts_with("ADC") {
+                        let volt = (v.clamp(0, 4095) as f32 * 3.3) / 4095.0;
+                        format!("{} ({:.2}V)", v, volt)
+                    } else {
+                        format!("{}", v)
+                    }
+                }
+                WatchDisplayFormat::Dec => format!("{}", v),
+                WatchDisplayFormat::Hex => format!("0x{:04X}", (v as u32) & 0xFFFF),
+                WatchDisplayFormat::Bin => format!("0b{:016b}", (v as u32) & 0xFFFF),
+                WatchDisplayFormat::Bool => {
+                    if v != 0 { "● TRUE (1)".to_string() } else { "○ FALSE (0)".to_string() }
+                }
+            };
+            return (text, false, color);
+        }
+
+        ("-".to_string(), false, palette.rung_text_dim)
+    }
+
+    /// Write or force a value to a watched row by index
+    pub fn write_watch_row(&mut self, row_idx: usize, val_str: &str) -> Result<(), &'static str> {
+        if row_idx >= self.watch_rows.len() {
+            return Err("Index out of bounds");
+        }
+        let addr = self.watch_rows[row_idx].address.trim().to_ascii_uppercase();
+        let val_clean = val_str.trim();
+        if val_clean.is_empty() {
+            return Err("Empty value");
+        }
+
+        let is_bool_val = match val_clean.to_ascii_lowercase().as_str() {
+            "true" | "1" | "on" | "high" => Some(true),
+            "false" | "0" | "off" | "low" => Some(false),
+            _ => None,
+        };
+
+        if let Some((vm_addr, _name, region)) = my_canvas_core::BytecodeCompiler::parse_direct_address(&addr, false) {
+            match region {
+                my_canvas_core::MemoryRegion::DigitalInputX
+                | my_canvas_core::MemoryRegion::DigitalOutputY
+                | my_canvas_core::MemoryRegion::InternalRelayM => {
+                    let b_val = is_bool_val.unwrap_or_else(|| {
+                        val_clean.parse::<i32>().map(|n| n != 0).unwrap_or(false)
+                    });
+                    self.doc.simulator.set_var_value(&addr, b_val);
+                    self.force_bit(vm_addr, b_val);
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
+
+        let num_val = if let Some(hex) = val_clean.strip_prefix("0x").or_else(|| val_clean.strip_prefix("0X")) {
+            i32::from_str_radix(hex, 16).map_err(|_| "Invalid Hex number")?
+        } else if let Some(bin) = val_clean.strip_prefix("0b").or_else(|| val_clean.strip_prefix("0B")) {
+            i32::from_str_radix(bin, 2).map_err(|_| "Invalid Binary number")?
+        } else {
+            val_clean.parse::<i32>().map_err(|_| "Invalid Decimal number")?
+        };
+
+        if let Some((vm_addr, _name, _)) = my_canvas_core::BytecodeCompiler::parse_direct_address(&addr, true) {
+            self.write_word_register(vm_addr, num_val);
+            self.doc.simulator.registers.insert(addr, num_val);
+            Ok(())
+        } else {
+            self.doc.simulator.registers.insert(addr, num_val);
+            Ok(())
+        }
+    }
+
+    /// Add a new row to the watch table
+    pub fn add_watch_row(&mut self, addr: &str, symbol: &str, format: WatchDisplayFormat) {
+        let clean_addr = addr.trim().to_ascii_uppercase();
+        if clean_addr.is_empty() {
+            return;
+        }
+        if !self.watch_rows.iter().any(|r| r.address.eq_ignore_ascii_case(&clean_addr)) {
+            self.watch_rows.push(WatchRow {
+                address: clean_addr,
+                symbol: symbol.trim().to_string(),
+                format,
+                edit_buffer: String::new(),
+            });
+            self.save_settings();
         }
     }
 
@@ -2811,6 +3043,7 @@ mod tests {
                     window_pos_x: Some(100.0),
                     window_pos_y: Some(50.0),
                     last_folder: Some(PathBuf::from("/tmp/projects")),
+                    watch_rows: default_watch_rows(),
                 };
                 let json = serde_json::to_string_pretty(&settings).unwrap();
                 let loaded: AppSettings = serde_json::from_str(&json).unwrap();
@@ -3001,6 +3234,61 @@ mod tests {
         app.stop_online_monitoring();
         assert!(app.last_telemetry_rx.is_none());
         assert!(!app.is_hw_online_connected());
+    }
+
+    #[test]
+    fn test_special_registers_tab_state() {
+        let mut app = CanvasApp::default();
+        assert_eq!(app.right_panel_tab, 0);
+
+        // Switch to Special Register tab (Tab 3)
+        app.right_panel_tab = 3;
+        assert_eq!(app.right_panel_tab, 3);
+        assert_eq!(app.special_reg_filter_cat, 0);
+        assert!(app.special_reg_filter_text.is_empty());
+
+        // Test filtering
+        app.special_reg_filter_cat = 2; // Clocks
+        app.special_reg_filter_text = "1s".to_string();
+        assert_eq!(app.special_reg_filter_cat, 2);
+        assert_eq!(app.special_reg_filter_text, "1s");
+    }
+
+    #[test]
+    fn test_watch_table_evaluation_and_write() {
+        let mut app = CanvasApp::default();
+        // Default rows exist
+        assert!(!app.watch_rows.is_empty());
+        assert!(app.watch_rows.iter().any(|r| r.address == "%IX0.0"));
+        assert!(app.watch_rows.iter().any(|r| r.address == "%IW0"));
+
+        // Add a custom watched register
+        app.add_watch_row("%MW10", "TANK_LEVEL", WatchDisplayFormat::Dec);
+        let idx = app.watch_rows.iter().position(|r| r.address == "%MW10").unwrap();
+
+        // Write value via Watch Table
+        app.write_watch_row(idx, "3500").unwrap();
+        let (val_str, is_bit, _) = app.evaluate_watch_value("%MW10", WatchDisplayFormat::Dec);
+        assert!(!is_bit);
+        assert_eq!(val_str, "3500");
+
+        // Test Hex and Bin formats
+        let (hex_str, _, _) = app.evaluate_watch_value("%MW10", WatchDisplayFormat::Hex);
+        assert_eq!(hex_str, "0x0DAC");
+
+        // Write bit via Watch Table
+        let ix_idx = app.watch_rows.iter().position(|r| r.address == "%IX0.0").unwrap();
+        app.write_watch_row(ix_idx, "1").unwrap();
+        let (ix_str, is_bit_ix, _) = app.evaluate_watch_value("%IX0.0", WatchDisplayFormat::Bool);
+        assert!(is_bit_ix);
+        assert_eq!(ix_str, "● ON (1)");
+
+        // Test Analog AI0 (%IW0)
+        let iw_idx = app.watch_rows.iter().position(|r| r.address == "%IW0").unwrap();
+        app.write_watch_row(iw_idx, "2048").unwrap();
+        let (iw_str, _, _) = app.evaluate_watch_value("%IW0", WatchDisplayFormat::Auto);
+        assert!(iw_str.contains("2048"));
+        assert!(iw_str.contains("1.65V"));
     }
 }
 
