@@ -191,6 +191,10 @@ pub enum VmOpcode {
     Mod = 0x45,
     Jmpc = 0x50,
     Lbl = 0x51,
+    MbMaster = 0x60,
+    MbParam1 = 0x61,
+    MbParam2 = 0x62,
+    MbStatus = 0x63,
     End = 0xFF,
 }
 
@@ -244,6 +248,10 @@ impl VmOpcode {
             0x45 => Some(Self::Mod),
             0x50 => Some(Self::Jmpc),
             0x51 => Some(Self::Lbl),
+            0x60 => Some(Self::MbMaster),
+            0x61 => Some(Self::MbParam1),
+            0x62 => Some(Self::MbParam2),
+            0x63 => Some(Self::MbStatus),
             0xFF => Some(Self::End),
             _ => None,
         }
@@ -298,6 +306,10 @@ impl VmOpcode {
             Self::Mod => "MOD",
             Self::Jmpc => "JMPC",
             Self::Lbl => "LBL",
+            Self::MbMaster => "MB_MASTER",
+            Self::MbParam1 => "MB_PARAM1",
+            Self::MbParam2 => "MB_PARAM2",
+            Self::MbStatus => "MB_STATUS",
             Self::End => "END",
         }
     }
@@ -351,6 +363,10 @@ impl VmOpcode {
             Self::Mod => "if (acc) word_mem[addr] %= imm",
             Self::Jmpc => "if (acc) pc = imm",
             Self::Lbl => "Jump Target Label",
+            Self::MbMaster => "Modbus RTU Master Function Block (IEC 61131-3)",
+            Self::MbParam1 => "Modbus Master Buffer & Register Address",
+            Self::MbParam2 => "Modbus Master Mode Flags & Register Count",
+            Self::MbStatus => "Query Modbus Function Block Status (DONE/BUSY/ERR/STATUS)",
             Self::End => "End of Scan Cycle (Return)",
         }
     }
@@ -579,6 +595,14 @@ impl BytecodeProgram {
                 | VmOpcode::Mod => format!("{} {} {}", op.mnemonic(), canonical, imm),
                 VmOpcode::Jmpc => format!("JMPC {}", imm),
                 VmOpcode::Lbl => format!("LBL {}", addr),
+                VmOpcode::MbMaster => {
+                    let slave = imm & 0xFF;
+                    let func = (imm >> 8) & 0xFF;
+                    format!("MB_MASTER MB{}, Slave={}, Func={}", addr, slave, func)
+                }
+                VmOpcode::MbParam1 => format!("MB_PARAM1 Buf={}, Addr={}", canonical, imm),
+                VmOpcode::MbParam2 => format!("MB_PARAM2 Flags={}, Count={}", addr, imm),
+                VmOpcode::MbStatus => format!("MB_STATUS MB{}, Flag={}", addr, imm),
                 _ => format!("{} {}", op.mnemonic(), canonical),
             };
 
@@ -1533,6 +1557,62 @@ impl BytecodeCompiler {
                     symbol: el.symbol.clone(),
                     il_source: format!("JMPC {}", el.name),
                 });
+                *first = false;
+            }
+            TypeTag::MbMaster => {
+                let inst_id = el
+                    .name
+                    .trim_start_matches(|c: char| !c.is_ascii_digit())
+                    .parse::<u8>()
+                    .unwrap_or(0)
+                    .min(7);
+                let slave_id = if el.mb_slave_id > 0 { el.mb_slave_id } else { 1 };
+                let func = if el.mb_function > 0 { el.mb_function } else { 3 };
+                let reg_addr = el.preset_value.clamp(0, 65535) as u16;
+                let count = (el.preset_value1.max(1)).clamp(1, 125) as u16;
+
+                let (buf_addr, _, _, _, _) =
+                    Self::resolve_address(&el.target_reg, true, io_mappings);
+
+                let imm0 = (slave_id as u16) | ((func as u16) << 8);
+                let pc0 = instructions.len() as u16;
+                instructions.push(BytecodeInstruction {
+                    pc: pc0,
+                    op: VmOpcode::MbMaster,
+                    addr: inst_id,
+                    imm: imm0,
+                    region: MemoryRegion::None,
+                    operand_name: format!("MB{}", inst_id),
+                    symbol: el.symbol.clone(),
+                    il_source: format!("MB_MASTER MB{}, Slave={}, Func={}", inst_id, slave_id, func),
+                });
+
+                let pc1 = instructions.len() as u16;
+                instructions.push(BytecodeInstruction {
+                    pc: pc1,
+                    op: VmOpcode::MbParam1,
+                    addr: buf_addr,
+                    imm: reg_addr,
+                    region: MemoryRegion::DataRegisterD,
+                    operand_name: el.target_reg.clone(),
+                    symbol: String::new(),
+                    il_source: format!("MB_PARAM1 Buf={}, Addr={}", el.target_reg, reg_addr),
+                });
+
+                let is_write = matches!(func, 0x05 | 0x06 | 0x0F | 0x10);
+                let flags: u8 = if is_write { 1 } else { 0 };
+                let pc2 = instructions.len() as u16;
+                instructions.push(BytecodeInstruction {
+                    pc: pc2,
+                    op: VmOpcode::MbParam2,
+                    addr: flags,
+                    imm: count,
+                    region: MemoryRegion::None,
+                    operand_name: String::new(),
+                    symbol: String::new(),
+                    il_source: format!("MB_PARAM2 Count={}", count),
+                });
+
                 *first = false;
             }
             _ => {}

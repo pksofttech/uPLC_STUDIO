@@ -6,7 +6,7 @@ use std::sync::{
 };
 use std::thread;
 use std::time::{Duration, Instant};
-use egui::{CentralPanel, Panel, RichText, Ui, Window};
+use egui::{CentralPanel, Color32, Panel, RichText, Ui, Window};
 use my_canvas_core::{Document, IOPortMapping, InsertPosition, PlcStatusSnapshot, SchematicStyle, SimState};
 use serde::{Deserialize, Serialize};
 use crate::canvas::CanvasViewport;
@@ -31,6 +31,7 @@ pub struct AppSettings {
     pub window_maximized: bool,
     pub window_pos_x: Option<f32>,
     pub window_pos_y: Option<f32>,
+    pub last_folder: Option<PathBuf>,
 }
 
 impl Default for AppSettings {
@@ -49,6 +50,7 @@ impl Default for AppSettings {
             window_maximized: false,
             window_pos_x: None,
             window_pos_y: None,
+            last_folder: None,
         }
     }
 }
@@ -94,6 +96,14 @@ impl AppSettings {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PendingAction {
+    NewProgram,
+    OpenProgram,
+    LoadExample(String),
+    ExitApp,
+}
+
 pub struct CanvasApp {
     pub doc: Document,
     pub active_tool: ActiveTool,
@@ -134,6 +144,10 @@ pub struct CanvasApp {
     pub latest_snapshot: Option<PlcStatusSnapshot>,
     pub online_worker_stop: Arc<AtomicBool>,
     pub online_worker_rx: Option<Receiver<PlcStatusSnapshot>>,
+    pub last_folder: Option<PathBuf>,
+    pub pending_action: Option<PendingAction>,
+    pub allow_exit: bool,
+    pub current_window_title: String,
 }
 
 impl Default for CanvasApp {
@@ -187,6 +201,10 @@ impl Default for CanvasApp {
             latest_snapshot: None,
             online_worker_stop: Arc::new(AtomicBool::new(false)),
             online_worker_rx: None,
+            last_folder: settings.last_folder,
+            pending_action: None,
+            allow_exit: false,
+            current_window_title: String::new(),
         }
     }
 }
@@ -503,6 +521,333 @@ impl CanvasApp {
             window_maximized: self.window_maximized,
             window_pos_x: self.window_pos_x,
             window_pos_y: self.window_pos_y,
+            last_folder: self.last_folder.clone(),
+        }
+    }
+
+    /// Return the directory where file dialogs should open:
+    /// Priority: 1. `last_folder` (if exists), 2. `example` folder, 3. current working directory.
+    pub fn dialog_directory(&self) -> PathBuf {
+        if let Some(ref folder) = self.last_folder {
+            if folder.exists() && folder.is_dir() {
+                return folder.clone();
+            }
+        }
+        let example_dir = std::path::Path::new("example");
+        if example_dir.exists() {
+            return example_dir.to_path_buf();
+        }
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    }
+
+    /// Record the parent directory of a selected file as `last_folder` and persist it.
+    pub fn set_last_folder_from_path(&mut self, file_path: &std::path::Path) {
+        if let Some(parent) = file_path.parent() {
+            if parent.exists() {
+                self.last_folder = Some(parent.to_path_buf());
+                self.save_settings();
+            }
+        }
+    }
+
+    /// Open file dialog for `.il`, `.json`, or `.ld` programs starting from `last_folder`.
+    pub fn open_program_dialog(&mut self) {
+        let dialog = rfd::FileDialog::new()
+            .set_directory(self.dialog_directory())
+            .add_filter("IEC 61131-3 IL & Projects (*.il, *.json, *.ld)", &["il", "json", "ld"]);
+        if let Some(path) = dialog.pick_file() {
+            self.set_last_folder_from_path(&path);
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                    if let Ok(doc) = serde_json::from_str(&content) {
+                        self.doc = doc;
+                    }
+                } else {
+                    let _ = self.doc.load_from_il_str(&content);
+                }
+                self.doc.file_path = Some(path.display().to_string());
+                self.doc.is_dirty = false;
+            }
+        }
+    }
+
+    /// Save current ladder program to `.il` file, defaulting to `last_folder`. Returns true if saved.
+    pub fn save_program_dialog(&mut self) -> bool {
+        let mut dialog = rfd::FileDialog::new()
+            .set_directory(self.dialog_directory())
+            .add_filter("IEC 61131-3 Instruction List (*.il)", &["il"]);
+        if let Some(ref current_path) = self.doc.file_path {
+            let path = std::path::Path::new(current_path);
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name.ends_with(".il") {
+                    dialog = dialog.set_file_name(name);
+                } else if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    dialog = dialog.set_file_name(format!("{}.il", stem));
+                }
+            }
+        }
+        if let Some(path) = dialog.save_file() {
+            self.set_last_folder_from_path(&path);
+            let il_text = self.doc.export_to_il_str();
+            if std::fs::write(&path, il_text).is_ok() {
+                self.doc.file_path = Some(path.display().to_string());
+                self.doc.is_dirty = false;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Save current project to `.json` file, defaulting to `last_folder`. Returns true if saved.
+    pub fn save_as_json_dialog(&mut self) -> bool {
+        let mut dialog = rfd::FileDialog::new()
+            .set_directory(self.dialog_directory())
+            .add_filter("uPLC JSON Project (*.json)", &["json"]);
+        if let Some(ref current_path) = self.doc.file_path {
+            let path = std::path::Path::new(current_path);
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                dialog = dialog.set_file_name(format!("{}.json", stem));
+            }
+        }
+        if let Some(path) = dialog.save_file() {
+            self.set_last_folder_from_path(&path);
+            if let Ok(json) = serde_json::to_string_pretty(&self.doc) {
+                if std::fs::write(&path, json).is_ok() {
+                    self.doc.file_path = Some(path.display().to_string());
+                    self.doc.is_dirty = false;
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Quick-save directly to existing file_path if known; otherwise open Save dialog. Returns true if saved.
+    pub fn save_or_save_as(&mut self) -> bool {
+        if let Some(ref current_path) = self.doc.file_path {
+            let path = std::path::Path::new(current_path);
+            if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                if let Ok(json) = serde_json::to_string_pretty(&self.doc) {
+                    if std::fs::write(path, json).is_ok() {
+                        self.doc.is_dirty = false;
+                        return true;
+                    }
+                }
+            } else {
+                let il_text = self.doc.export_to_il_str();
+                if std::fs::write(path, il_text).is_ok() {
+                    self.doc.is_dirty = false;
+                    return true;
+                }
+            }
+        }
+        self.save_program_dialog()
+    }
+
+    /// Import IEC 61131-3 IL code into active document, defaulting to `last_folder`.
+    pub fn import_il_dialog(&mut self) {
+        let dialog = rfd::FileDialog::new()
+            .set_directory(self.dialog_directory())
+            .add_filter("IEC 61131-3 Instruction List (*.il, *.ld)", &["il", "ld"]);
+        if let Some(path) = dialog.pick_file() {
+            self.set_last_folder_from_path(&path);
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                let _ = self.doc.load_from_il_str(&content);
+                self.doc.file_path = Some(path.display().to_string());
+                self.doc.is_dirty = false;
+            }
+        }
+    }
+
+    /// Export IEC 61131-3 IL code, defaulting to `last_folder`.
+    pub fn export_il_dialog(&mut self) {
+        let mut dialog = rfd::FileDialog::new()
+            .set_directory(self.dialog_directory())
+            .add_filter("IEC 61131-3 Instruction List (*.il)", &["il"]);
+        if let Some(ref current_path) = self.doc.file_path {
+            let path = std::path::Path::new(current_path);
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                dialog = dialog.set_file_name(name);
+            }
+        }
+        if let Some(path) = dialog.save_file() {
+            self.set_last_folder_from_path(&path);
+            let il_text = self.doc.export_to_il_str();
+            let _ = std::fs::write(&path, il_text);
+        }
+    }
+
+    /// Request creating a new program. Prompts if unsaved changes exist.
+    pub fn request_new_program(&mut self) {
+        if self.doc.is_dirty {
+            self.pending_action = Some(PendingAction::NewProgram);
+        } else {
+            self.new_program();
+        }
+    }
+
+    /// Request opening another program. Prompts if unsaved changes exist.
+    pub fn request_open_program(&mut self) {
+        if self.doc.is_dirty {
+            self.pending_action = Some(PendingAction::OpenProgram);
+        } else {
+            self.open_program_dialog();
+        }
+    }
+
+    /// Request loading an example program. Prompts if unsaved changes exist.
+    pub fn request_load_example(&mut self, path_str: String) {
+        if self.doc.is_dirty {
+            self.pending_action = Some(PendingAction::LoadExample(path_str));
+        } else {
+            self.load_example_file(&path_str);
+        }
+    }
+
+    /// Request exiting the application. Prompts if unsaved changes exist.
+    pub fn request_exit(&mut self, ctx: &egui::Context) {
+        if self.doc.is_dirty && !self.allow_exit {
+            self.pending_action = Some(PendingAction::ExitApp);
+        } else {
+            self.allow_exit = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    }
+
+    /// Load example file directly into document.
+    pub fn load_example_file(&mut self, path_str: &str) {
+        let content = std::fs::read_to_string(path_str)
+            .or_else(|_| {
+                if let Ok(exe) = std::env::current_exe() {
+                    if let Some(parent) = exe.parent() {
+                        if let Ok(c) = std::fs::read_to_string(parent.join(path_str)) {
+                            return Ok(c);
+                        }
+                        if let Ok(c) = std::fs::read_to_string(parent.join("../..").join(path_str)) {
+                            return Ok(c);
+                        }
+                    }
+                }
+                Err(std::io::Error::new(std::io::ErrorKind::NotFound, "not found"))
+            });
+        if let Ok(c) = content {
+            let _ = self.doc.load_from_il_str(&c);
+            self.doc.file_path = Some(path_str.to_string());
+            self.doc.is_dirty = false;
+            self.set_last_folder_from_path(std::path::Path::new(path_str));
+        }
+    }
+
+    /// Execute the pending action after user chose to save or discard unsaved changes.
+    pub fn execute_pending_action(&mut self, ctx: &egui::Context) {
+        if let Some(action) = self.pending_action.take() {
+            match action {
+                PendingAction::NewProgram => {
+                    self.new_program();
+                }
+                PendingAction::OpenProgram => {
+                    self.open_program_dialog();
+                }
+                PendingAction::LoadExample(path_str) => {
+                    self.load_example_file(&path_str);
+                }
+                PendingAction::ExitApp => {
+                    self.allow_exit = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+        }
+    }
+
+    /// Render Unsaved Changes modal dialog with Save, Don't Save, and Cancel options.
+    pub fn render_unsaved_changes_modal(&mut self, ctx: &egui::Context) {
+        let palette = self.theme.palette();
+        let file_name = self.doc.file_path.as_deref().map(|p| {
+            std::path::Path::new(p)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(p)
+        }).unwrap_or("Untitled Program (โปรแกรมยังไม่ได้บันทึก)");
+
+        let action_desc = match self.pending_action.as_ref() {
+            Some(PendingAction::NewProgram) => "creating a new program / ก่อนสร้างโปรแกรมใหม่",
+            Some(PendingAction::OpenProgram) => "opening another program / ก่อนเปิดโปรแกรมใหม่",
+            Some(PendingAction::LoadExample(_)) => "loading example / ก่อนโหลดตัวอย่าง",
+            Some(PendingAction::ExitApp) => "closing application / ก่อนออกจากโปรแกรม",
+            None => "",
+        };
+
+        let mut do_save = false;
+        let mut do_discard = false;
+        let mut do_cancel = false;
+
+        egui::Window::new("⚠ Unsaved Changes / บันทึกการเปลี่ยนแปลง")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .fixed_size([460.0, 160.0])
+            .show(ctx, |ui| {
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("⚠").size(28.0).color(palette.accent_warn));
+                    ui.add_space(8.0);
+                    ui.vertical(|ui| {
+                        ui.label(
+                            RichText::new(format!("Do you want to save changes to \"{}\"?", file_name))
+                                .strong()
+                                .size(14.0)
+                                .color(palette.text_primary),
+                        );
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new(format!("มีข้อมูลที่มีการเปลี่ยนแปลง ต้องการบันทึกก่อน {} หรือไม่?", action_desc))
+                                .size(11.5)
+                                .color(palette.symbol_subtext),
+                        );
+                    });
+                });
+
+                ui.add_space(16.0);
+                ui.separator();
+                ui.add_space(10.0);
+
+                ui.horizontal(|ui| {
+                    // Right aligned buttons: Cancel, Don't Save, Save
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Cancel (ยกเลิก)").clicked()
+                            || ui.input(|i| i.key_pressed(egui::Key::Escape))
+                        {
+                            do_cancel = true;
+                        }
+
+                        let discard_btn = egui::Button::new(
+                            RichText::new("Don't Save (ไม่บันทึก)").color(palette.accent_danger)
+                        );
+                        if ui.add(discard_btn).clicked() {
+                            do_discard = true;
+                        }
+
+                        let save_btn = egui::Button::new(
+                            RichText::new("💾 Save (บันทึก)").color(Color32::WHITE)
+                        ).fill(palette.accent_ok);
+                        if ui.add(save_btn).clicked()
+                            || ui.input(|i| i.key_pressed(egui::Key::Enter))
+                        {
+                            do_save = true;
+                        }
+                    });
+                });
+            });
+
+        if do_save {
+            if self.save_or_save_as() {
+                self.execute_pending_action(ctx);
+            }
+        } else if do_discard {
+            self.doc.is_dirty = false;
+            self.execute_pending_action(ctx);
+        } else if do_cancel {
+            self.pending_action = None;
         }
     }
 
@@ -731,6 +1076,32 @@ impl eframe::App for CanvasApp {
         self.ensure_fonts_and_theme(ui.ctx());
         let palette = self.theme.palette();
 
+        // Intercept window close request when unsaved changes exist
+        if ui.input(|i| i.viewport().close_requested()) {
+            if self.doc.is_dirty && !self.allow_exit {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.pending_action = Some(PendingAction::ExitApp);
+            } else {
+                self.allow_exit = true;
+            }
+        }
+
+        // Dynamic Window Title with Dirty Marker (*)
+        let file_title = if let Some(ref p) = self.doc.file_path {
+            std::path::Path::new(p)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(p)
+        } else {
+            "Untitled"
+        };
+        let dirty_suffix = if self.doc.is_dirty { "*" } else { "" };
+        let full_title = format!("uPLC Studio - {}{}", file_title, dirty_suffix);
+        if self.current_window_title != full_title {
+            self.current_window_title = full_title.clone();
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Title(full_title));
+        }
+
         // Window size, position, and maximized state tracking
         self.frame_counter = self.frame_counter.saturating_add(1);
         if self.frame_counter > 5 {
@@ -886,12 +1257,19 @@ impl eframe::App for CanvasApp {
             || self.show_about
             || self.show_io_config
             || self.show_code_export
-            || self.show_update_plc;
+            || self.show_update_plc
+            || self.pending_action.is_some();
 
         // Global Keyboard Shortcuts (Ctrl+N / Ctrl+Z / Ctrl+Y work anytime; Arrow/Enter/Del/F5 when not typing & modal closed)
         if !any_modal_open {
             let new_shortcut = ui.input(|i| {
                 i.modifiers.command && !i.modifiers.shift && i.key_pressed(egui::Key::N)
+            });
+            let open_shortcut = ui.input(|i| {
+                i.modifiers.command && !i.modifiers.shift && i.key_pressed(egui::Key::O)
+            });
+            let save_shortcut = ui.input(|i| {
+                i.modifiers.command && !i.modifiers.shift && i.key_pressed(egui::Key::S)
             });
             let undo_shortcut = ui.input(|i| {
                 i.modifiers.command && !i.modifiers.shift && i.key_pressed(egui::Key::Z)
@@ -901,7 +1279,11 @@ impl eframe::App for CanvasApp {
                     || (i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::Z))
             });
             if new_shortcut {
-                self.new_program();
+                self.request_new_program();
+            } else if open_shortcut {
+                self.request_open_program();
+            } else if save_shortcut {
+                self.save_or_save_as();
             } else if undo_shortcut {
                 self.doc.undo();
             } else if redo_shortcut {
@@ -1557,10 +1939,17 @@ impl eframe::App for CanvasApp {
                             ui.ctx().copy_text(code.clone());
                         }
                         if ui.button("Save .il File...").clicked() {
-                            if let Some(path) = rfd::FileDialog::new()
-                                .add_filter("IEC 61131-3 Instruction List (*.il)", &["il"])
-                                .save_file()
-                            {
+                            let mut dialog = rfd::FileDialog::new()
+                                .set_directory(self.dialog_directory())
+                                .add_filter("IEC 61131-3 Instruction List (*.il)", &["il"]);
+                            if let Some(ref current_path) = self.doc.file_path {
+                                let path = std::path::Path::new(current_path);
+                                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                                    dialog = dialog.set_file_name(format!("{}.il", stem));
+                                }
+                            }
+                            if let Some(path) = dialog.save_file() {
+                                self.set_last_folder_from_path(&path);
                                 let _ = std::fs::write(path, &code);
                             }
                         }
@@ -1842,10 +2231,17 @@ impl eframe::App for CanvasApp {
                                 .on_hover_text("Export raw 32-bit bytecode binary file (.bin)")
                                 .clicked()
                             {
-                                if let Some(path) = rfd::FileDialog::new()
-                                    .add_filter("Micro-VM Bytecode Binary (*.bin)", &["bin"])
-                                    .save_file()
-                                {
+                                let mut dialog = rfd::FileDialog::new()
+                                    .set_directory(self.dialog_directory())
+                                    .add_filter("Micro-VM Bytecode Binary (*.bin)", &["bin"]);
+                                if let Some(ref current_path) = self.doc.file_path {
+                                    let path = std::path::Path::new(current_path);
+                                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                                        dialog = dialog.set_file_name(format!("{}.bin", stem));
+                                    }
+                                }
+                                if let Some(path) = dialog.save_file() {
+                                    self.set_last_folder_from_path(&path);
                                     let raw = bc.to_raw_bytes();
                                     if std::fs::write(&path, &raw).is_ok() {
                                         self.update_plc_is_error = false;
@@ -2087,6 +2483,10 @@ impl eframe::App for CanvasApp {
                 self.show_update_plc = false;
             }
         }
+
+        if self.pending_action.is_some() {
+            self.render_unsaved_changes_modal(ui.ctx());
+        }
     }
 
     fn on_exit(&mut self) {
@@ -2119,6 +2519,7 @@ mod tests {
                     window_maximized: true,
                     window_pos_x: Some(100.0),
                     window_pos_y: Some(50.0),
+                    last_folder: Some(PathBuf::from("/tmp/projects")),
                 };
                 let json = serde_json::to_string_pretty(&settings).unwrap();
                 let loaded: AppSettings = serde_json::from_str(&json).unwrap();
@@ -2134,6 +2535,7 @@ mod tests {
                 assert!(loaded.window_maximized);
                 assert_eq!(loaded.window_pos_x, Some(100.0));
                 assert_eq!(loaded.window_pos_y, Some(50.0));
+                assert_eq!(loaded.last_folder, Some(PathBuf::from("/tmp/projects")));
             }
         }
     }
@@ -2155,6 +2557,7 @@ mod tests {
         assert!(!loaded.window_maximized);
         assert_eq!(loaded.window_pos_x, None);
         assert_eq!(loaded.window_pos_y, None);
+        assert_eq!(loaded.last_folder, None);
     }
 
     #[test]
@@ -2200,6 +2603,38 @@ mod tests {
             });
         });
         output.textures_delta.clear();
+    }
+
+    #[test]
+    fn test_unsaved_changes_prompt_and_pending_action() {
+        let mut app = CanvasApp::default();
+        let ctx = egui::Context::default();
+
+        // 1. Not dirty: request_new_program executes immediately without pending action
+        app.doc.is_dirty = false;
+        app.request_new_program();
+        assert!(app.pending_action.is_none());
+
+        // 2. Dirty: request_new_program sets PendingAction::NewProgram
+        app.doc.is_dirty = true;
+        app.request_new_program();
+        assert_eq!(app.pending_action, Some(PendingAction::NewProgram));
+
+        // 3. User chooses Don't Save / Discard: execute_pending_action resets state
+        app.execute_pending_action(&ctx);
+        assert!(app.pending_action.is_none());
+        assert!(!app.doc.is_dirty);
+
+        // 4. Dirty: request_exit sets PendingAction::ExitApp
+        app.doc.is_dirty = true;
+        app.request_exit(&ctx);
+        assert_eq!(app.pending_action, Some(PendingAction::ExitApp));
+        assert!(!app.allow_exit);
+
+        // Discard / proceed exit
+        app.execute_pending_action(&ctx);
+        assert!(app.pending_action.is_none());
+        assert!(app.allow_exit);
     }
 }
 

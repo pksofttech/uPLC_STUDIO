@@ -34,6 +34,7 @@ pub enum TypeTag {
     Label,
     UartSend,
     UartRecv,
+    MbMaster,
     Wire,
     OpenCircuit,
     Branch,
@@ -79,6 +80,7 @@ impl TypeTag {
             TypeTag::FTrig => "F_TRIG (Falling Edge Detector)",
             TypeTag::UartSend => "UART Send",
             TypeTag::UartRecv => "UART Recv",
+            TypeTag::MbMaster => "MB_MASTER (Modbus RTU Master FB)",
             TypeTag::Wire => "Short Circuit",
             TypeTag::OpenCircuit => "Open Circuit",
             TypeTag::Branch => "Parallel Branch",
@@ -97,6 +99,7 @@ impl TypeTag {
                 | TypeTag::Math
                 | TypeTag::Jump
                 | TypeTag::Adc
+                | TypeTag::MbMaster
                 | TypeTag::ShiftRegisters
                 | TypeTag::ShiftVariable
                 | TypeTag::ShiftLeft
@@ -356,6 +359,12 @@ pub struct LadderElement {
     pub compare_op: String,       // "==", "!=", ">", "<", ">=", "<="
     pub math_op: String,          // "+", "-", "*", "/", "%"
     pub target_reg: String,       // e.g. "D0"
+
+    // Modbus Master Function Block parameters
+    #[serde(default = "default_mb_slave_id")]
+    pub mb_slave_id: u8,
+    #[serde(default = "default_mb_function")]
+    pub mb_function: u8,
     
     // Parallel branch sub-paths (each path is a sequence of elements in series)
     pub branch_paths: Vec<Vec<LadderElement>>,
@@ -367,6 +376,14 @@ pub struct LadderElement {
     pub current_accum: i32,
     #[serde(default)]
     pub is_done: bool,
+}
+
+fn default_mb_slave_id() -> u8 {
+    1
+}
+
+fn default_mb_function() -> u8 {
+    3
 }
 
 impl Default for LadderElement {
@@ -387,6 +404,8 @@ impl Default for LadderElement {
             compare_op: "==".to_string(),
             math_op: "+".to_string(),
             target_reg: "V00".to_string(),
+            mb_slave_id: 1,
+            mb_function: 3,
             branch_paths: Vec::new(),
             is_energized: false,
             current_accum: 0,

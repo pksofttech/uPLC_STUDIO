@@ -8,28 +8,11 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
         // --- FILE MENU ---
         ui.menu_button("File", |ui| {
             if ui.button("New Program (Ctrl+N)").clicked() {
-                app.new_program();
+                app.request_new_program();
                 ui.close();
             }
-            if ui.button("Open Program (.il, .json)...").clicked() {
-                let mut dialog = rfd::FileDialog::new()
-                    .add_filter("IEC 61131-3 IL & Projects (*.il, *.json, *.ld)", &["il", "json", "ld"]);
-                let example_dir = std::path::Path::new("example");
-                if example_dir.exists() {
-                    dialog = dialog.set_directory(example_dir);
-                }
-                if let Some(path) = dialog.pick_file() {
-                    if let Ok(content) = std::fs::read_to_string(&path) {
-                        if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                            if let Ok(doc) = serde_json::from_str(&content) {
-                                app.doc = doc;
-                            }
-                        } else {
-                            let _ = app.doc.load_from_il_str(&content);
-                        }
-                        app.doc.file_path = Some(path.display().to_string());
-                    }
-                }
+            if ui.button("Open Program (Ctrl+O)...").clicked() {
+                app.request_open_program();
                 ui.close();
             }
             ui.menu_button("Load Example (.il)", |ui| {
@@ -42,85 +25,41 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     ("06 - Register Math & Compare", "example/06_math_compare_analog.il"),
                     ("07 - All IEC Components (Comprehensive Test)", "example/07_all_iec_components.il"),
                     ("08 - RP2040 Demo LED Blink (GP25)", "example/08_rp2040_demo_led_blink.il"),
+                    ("09 - Modbus RTU Master (RS-485)", "example/09_modbus_rtu_master.il"),
+                    ("10 - RP2040 Automatic I/O Test", "example/10_auto_io_test.il"),
                 ];
                 for (label, path_str) in examples {
                     if ui.button(label).clicked() {
-                        let content = std::fs::read_to_string(path_str)
-                            .or_else(|_| {
-                                if let Ok(exe) = std::env::current_exe() {
-                                    if let Some(parent) = exe.parent() {
-                                        if let Ok(c) = std::fs::read_to_string(parent.join(path_str)) {
-                                            return Ok(c);
-                                        }
-                                        if let Ok(c) = std::fs::read_to_string(parent.join("../..").join(path_str)) {
-                                            return Ok(c);
-                                        }
-                                    }
-                                }
-                                Err(std::io::Error::new(std::io::ErrorKind::NotFound, "not found"))
-                            });
-                        if let Ok(c) = content {
-                            let _ = app.doc.load_from_il_str(&c);
-                            app.doc.file_path = Some(path_str.to_string());
-                        }
+                        app.request_load_example(path_str.to_string());
                         ui.close();
                     }
                 }
             });
             ui.separator();
-            if ui.button("Save Program (.il)...").clicked() {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("IEC 61131-3 Instruction List (*.il)", &["il"])
-                    .save_file()
-                {
-                    let il_text = app.doc.export_to_il_str();
-                    let _ = std::fs::write(path, il_text);
-                }
+            if ui.button("Save Program (Ctrl+S)...").clicked() {
+                app.save_program_dialog();
+                ui.close();
+            }
+            if ui.button("Save As (.json)...").clicked() {
+                app.save_as_json_dialog();
                 ui.close();
             }
             if ui.button("Export IEC 61131-3 IL (.il)...").clicked() {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("IEC 61131-3 Instruction List (*.il)", &["il"])
-                    .save_file()
-                {
-                    let il_text = app.doc.export_to_il_str();
-                    let _ = std::fs::write(path, il_text);
-                }
+                app.export_il_dialog();
                 ui.close();
             }
             if ui.button("Import IEC 61131-3 IL (.il)...").clicked() {
-                let mut dialog = rfd::FileDialog::new()
-                    .add_filter("IEC 61131-3 Instruction List (*.il, *.ld)", &["il", "ld"]);
-                let example_dir = std::path::Path::new("example");
-                if example_dir.exists() {
-                    dialog = dialog.set_directory(example_dir);
-                }
-                if let Some(path) = dialog.pick_file() {
-                    if let Ok(content) = std::fs::read_to_string(&path) {
-                        let _ = app.doc.load_from_il_str(&content);
-                        app.doc.file_path = Some(path.display().to_string());
-                    }
-                }
+                app.import_il_dialog();
                 ui.close();
             }
             if ui.button("📥 Upload Program from Connected PLC...").clicked() {
                 app.transmit_bytecode_to_plc(my_canvas_core::PlcSerialCommand::UploadProgram);
                 ui.close();
             }
-            if ui.button("Save As (.json)...").clicked() {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("uPLC JSON Project (*.json)", &["json"])
-                    .save_file()
-                {
-                    if let Ok(json) = serde_json::to_string_pretty(&app.doc) {
-                        let _ = std::fs::write(path, json);
-                    }
-                }
-                ui.close();
-            }
             ui.separator();
             if ui.button("Exit").clicked() {
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                app.request_exit(ui.ctx());
+                ui.close();
             }
         });
 

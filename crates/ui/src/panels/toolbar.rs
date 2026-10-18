@@ -71,7 +71,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     .on_hover_text("New Ladder Project (Ctrl+N)")
                     .clicked()
                     {
-                        app.new_program();
+                        app.request_new_program();
                     }
 
                     // Open File
@@ -90,24 +90,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     .on_hover_text("Open IEC 61131-3 IL (.il) or Project (.json)")
                     .clicked()
                     {
-                        let mut dialog = rfd::FileDialog::new()
-                            .add_filter("IEC 61131-3 IL & Projects (*.il, *.json, *.ld)", &["il", "json", "ld"]);
-                        let example_dir = std::path::Path::new("example");
-                        if example_dir.exists() {
-                            dialog = dialog.set_directory(example_dir);
-                        }
-                        if let Some(path) = dialog.pick_file() {
-                            if let Ok(content) = std::fs::read_to_string(&path) {
-                                if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                                    if let Ok(doc) = serde_json::from_str(&content) {
-                                        app.doc = doc;
-                                    }
-                                } else {
-                                    let _ = app.doc.load_from_il_str(&content);
-                                }
-                                app.doc.file_path = Some(path.display().to_string());
-                            }
-                        }
+                        app.request_open_program();
                     }
 
                     // Save File
@@ -126,13 +109,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     .on_hover_text("Save IEC 61131-3 IL (.il)")
                     .clicked()
                     {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("IEC 61131-3 Instruction List (*.il)", &["il"])
-                            .save_file()
-                        {
-                            let il_text = app.doc.export_to_il_str();
-                            let _ = std::fs::write(path, il_text);
-                        }
+                        app.save_program_dialog();
                     }
 
                     toolbar_divider(ui, palette);

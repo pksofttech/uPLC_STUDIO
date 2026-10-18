@@ -578,6 +578,7 @@ fn test_load_all_example_il_files() {
         "06_math_compare_analog",
         "07_all_iec_components",
         "08_rp2040_demo_led_blink",
+        "09_modbus_rtu_master",
     ];
 
     for base in files {
@@ -633,6 +634,162 @@ fn test_load_all_example_il_files() {
         assert_eq!(reloaded.rungs.len(), prog.rungs.len());
         assert_eq!(reloaded.io_mappings.len(), prog.io_mappings.len());
     }
+}
+
+#[test]
+fn test_modbus_rtu_master_full_lifecycle() {
+    use my_canvas_core::bytecode::BytecodeCompiler;
+    use uplc_vm::modbus::*;
+    use uplc_vm::MicroVm;
+
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let il_path = manifest_dir.parent().unwrap().parent().unwrap().join("example/09_modbus_rtu_master.il");
+    let il_content = std::fs::read_to_string(&il_path).expect("Failed to read 09_modbus_rtu_master.il");
+
+    // 1. Parse IL to LadderProgram
+    let prog = IlParser::parse(&il_content).expect("Failed to parse IL");
+    assert_eq!(prog.rungs.len(), 6);
+
+    // 2. Compile to Bytecode
+    let bc = BytecodeCompiler::compile_program(&prog);
+    assert!(!bc.instructions.is_empty());
+
+    for (i, ins) in bc.instructions.iter().enumerate() {
+        println!("{}: {:?} addr={} imm={} il={}", i, ins.op, ins.addr, ins.imm, ins.il_source);
+    }
+
+    // 3. Load into MicroVm
+    let raw_payload = bc.to_raw_bytes();
+    let mut vm = MicroVm::new();
+    vm.load_bytecode(&raw_payload).expect("Failed to load bytecode into VM");
+    assert!(vm.prog_len > 0);
+
+    // 4. Test Manual Trigger to Step 1
+    // Press MANUAL_TRIG (%IX0.1 -> X1)
+    vm.set_digital_input(1, true);
+    vm.step_scan(10);
+    vm.set_digital_input(1, false);
+
+    // Verify Step 1 is active (M_STEP1_TEMP = %MX0.0 -> bit_mem[0x40])
+    assert_eq!(vm.bit_mem[0x40], 1, "M_STEP1_TEMP should be active");
+
+    // 5. Scan: MB0 triggers request to Slave 1 (Temp Sensor)
+    vm.step_scan(10);
+    assert!(vm.mb_master[0].busy, "MB0 should be BUSY");
+    assert!(vm.mb_out_job.is_some(), "MB0 should dispatch a Modbus job");
+
+    let job1 = vm.mb_out_job.take().unwrap();
+    assert_eq!(job1.slave_id, 1);
+    assert_eq!(job1.function_code, MB_FC_READ_HOLDING_REGISTERS);
+    assert_eq!(job1.reg_addr, 1);
+    assert_eq!(job1.count, 1);
+    assert_eq!(job1.buffer_addr, 0x20 + 10); // D10
+
+    // Verify RTU Request Frame encoding
+    let mut tx_frame = [0u8; 16];
+    let tx_len = encode_rtu_request(&job1, &vm.word_mem, &vm.bit_mem, &mut tx_frame).unwrap();
+    assert_eq!(tx_len, 8);
+    assert_eq!(&tx_frame[..6], &[0x01, 0x03, 0x00, 0x01, 0x00, 0x01]);
+    let req_crc = compute_crc16(&tx_frame[..6]);
+    assert_eq!(u16::from_le_bytes([tx_frame[6], tx_frame[7]]), req_crc);
+
+    // Simulate Slave 1 Response: Temp = 285 (28.5 °C)
+    let mut resp1 = [0x01, 0x03, 0x02, 0x01, 0x1D, 0x00, 0x00];
+    let crc1 = compute_crc16(&resp1[..5]);
+    let [c1_lo, c1_hi] = crc1.to_le_bytes();
+    resp1[5] = c1_lo;
+    resp1[6] = c1_hi;
+
+    let dec_res = decode_rtu_response(&job1, &resp1, &mut vm.word_mem, &mut vm.bit_mem);
+    assert!(dec_res.is_ok());
+    assert_eq!(vm.word_mem[0x20 + 10], 285, "D10 should contain 285");
+
+    vm.mb_in_result = Some(ModbusJobResult {
+        job_id: job1.job_id,
+        instance_id: job1.instance_id,
+        success: true,
+        error_code: MB_ERR_OK,
+    });
+
+    // 6. Next scan: MB0 finishes (DONE), Step 1 resets, Step 2 sets (M_STEP2_METER)
+    vm.step_scan(10);
+    assert!(!vm.mb_master[0].busy);
+    assert_eq!(vm.bit_mem[0x40], 0, "M_STEP1_TEMP should be reset");
+    assert_eq!(vm.bit_mem[0x41], 1, "M_STEP2_METER should be active");
+
+    // 7. Scan: MB1 triggers request to Slave 2 (Power Meter)
+    vm.step_scan(10);
+    assert!(vm.mb_master[1].busy, "MB1 should be BUSY");
+    let job2 = vm.mb_out_job.take().unwrap();
+    assert_eq!(job2.slave_id, 2);
+    assert_eq!(job2.function_code, MB_FC_READ_HOLDING_REGISTERS);
+    assert_eq!(job2.reg_addr, 16);
+    assert_eq!(job2.count, 2);
+    assert_eq!(job2.buffer_addr, 0x20 + 20); // D20
+
+    // Simulate Slave 2 Response: Power = 3500 W, Voltage = 230 V
+    let mut resp2 = [0x02, 0x03, 0x04, 0x0D, 0xAC, 0x00, 0xE6, 0x00, 0x00]; // 3500, 230
+    let crc2 = compute_crc16(&resp2[..7]);
+    let [c2_lo, c2_hi] = crc2.to_le_bytes();
+    resp2[7] = c2_lo;
+    resp2[8] = c2_hi;
+
+    let dec_res2 = decode_rtu_response(&job2, &resp2, &mut vm.word_mem, &mut vm.bit_mem);
+    assert!(dec_res2.is_ok());
+    assert_eq!(vm.word_mem[0x20 + 20], 3500, "D20 should contain 3500");
+    assert_eq!(vm.word_mem[0x20 + 21], 230, "D21 should contain 230");
+
+    vm.mb_in_result = Some(ModbusJobResult {
+        job_id: job2.job_id,
+        instance_id: job2.instance_id,
+        success: true,
+        error_code: MB_ERR_OK,
+    });
+
+    // 8. Next scan: MB1 finishes, Step 3 activates (M_STEP3_VFD)
+    vm.step_scan(10);
+    assert_eq!(vm.bit_mem[0x41], 0, "M_STEP2_METER should be reset");
+    assert_eq!(vm.bit_mem[0x42], 1, "M_STEP3_VFD should be active");
+
+    // Preload D30 with 5000 (50.00 Hz)
+    vm.word_mem[0x20 + 30] = 5000;
+
+    // Scan: MB2 triggers Write to Slave 3 (Inverter)
+    vm.step_scan(10);
+    assert!(vm.mb_master[2].busy, "MB2 should be BUSY");
+    let job3 = vm.mb_out_job.take().unwrap();
+    assert_eq!(job3.slave_id, 3);
+    assert_eq!(job3.function_code, MB_FC_WRITE_SINGLE_REGISTER);
+    assert_eq!(job3.reg_addr, 8193);
+    assert_eq!(job3.buffer_addr, 0x20 + 30); // D30
+
+    // Verify Write Frame contains 5000 (0x1388)
+    let mut tx_frame3 = [0u8; 16];
+    let tx_len3 = encode_rtu_request(&job3, &vm.word_mem, &vm.bit_mem, &mut tx_frame3).unwrap();
+    assert_eq!(tx_len3, 8);
+    assert_eq!(&tx_frame3[..6], &[0x03, 0x06, 0x20, 0x01, 0x13, 0x88]);
+
+    // Simulate Slave 3 echo response
+    let dec_res3 = decode_rtu_response(&job3, &tx_frame3, &mut vm.word_mem, &mut vm.bit_mem);
+    assert!(dec_res3.is_ok());
+
+    vm.mb_in_result = Some(ModbusJobResult {
+        job_id: job3.job_id,
+        instance_id: job3.instance_id,
+        success: true,
+        error_code: MB_ERR_OK,
+    });
+
+    // 9. Next scan: MB2 completes, sequence resets cleanly
+    vm.step_scan(10);
+    assert_eq!(vm.bit_mem[0x42], 0, "M_STEP3_VFD should be reset");
+    assert!(!vm.mb_master[2].busy);
+
+    // Final checks: Verify values persisted in memory
+    assert_eq!(vm.word_mem[0x20 + 10], 285);
+    assert_eq!(vm.word_mem[0x20 + 20], 3500);
+    assert_eq!(vm.word_mem[0x20 + 21], 230);
+    assert_eq!(vm.word_mem[0x20 + 30], 5000);
 }
 
 #[test]

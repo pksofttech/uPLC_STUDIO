@@ -23,6 +23,9 @@ pub const MAX_INSTRUCTIONS: usize = 512;
 pub const MAX_STACK_DEPTH: usize = 16;
 pub const PACKET_SOF: u8 = 0xAA;
 
+pub mod modbus;
+pub use modbus::*;
+
 pub const CMD_DOWNLOAD_PROGRAM: u8 = 0x01;
 pub const CMD_RUN_STOP: u8 = 0x02;
 pub const CMD_MONITOR_STATUS: u8 = 0x03;
@@ -87,6 +90,14 @@ pub struct MicroVm {
     pub ctu_prev: [u8; 32],
     /// Previous rung input state for `STP` / `STF` / `R_TRIG` / `F_TRIG`
     pub edge_prev: [u8; 256],
+    /// IEC 61131-3 MB_MASTER Function Block instances
+    pub mb_master: [ModbusMasterState; MAX_MB_MASTER_INSTANCES],
+    /// Outgoing Modbus Job dispatched to background RTU task
+    pub mb_out_job: Option<ModbusMasterJob>,
+    /// Incoming completion result from background RTU task
+    pub mb_in_result: Option<ModbusJobResult>,
+    /// Incremental Job ID tracker
+    pub next_job_id: u8,
 }
 
 impl Default for MicroVm {
@@ -114,16 +125,30 @@ impl MicroVm {
             word_mem: [0; 256],
             ctu_prev: [0; 32],
             edge_prev: [0; 256],
+            mb_master: [ModbusMasterState {
+                prev_req: false,
+                busy: false,
+                done: false,
+                error: false,
+                status: 0,
+                job_id: 0,
+            }; MAX_MB_MASTER_INSTANCES],
+            mb_out_job: None,
+            mb_in_result: None,
+            next_job_id: 0,
         }
     }
 
-    /// Reset all outputs, internal relays, timers, and counters (Safe Shutdown)
+    /// Reset all outputs, internal relays, timers, counters, and communication jobs (Safe Shutdown)
     pub fn reset_memory(&mut self) {
         self.bit_mem = [0; 256];
         self.prev_bit_mem = [0; 256];
         self.word_mem = [0; 256];
         self.ctu_prev = [0; 32];
         self.edge_prev = [0; 256];
+        self.mb_master = [ModbusMasterState::default(); MAX_MB_MASTER_INSTANCES];
+        self.mb_out_job = None;
+        self.mb_in_result = None;
         self.acc_bool = false;
         self.acc_word = 0;
         self.scan_count = 0;
@@ -171,6 +196,29 @@ impl MicroVm {
     pub fn step_scan(&mut self, dt_ms: u32) {
         if !self.running || self.prog_len == 0 {
             return;
+        }
+
+        // 1. Clear 1-scan pulses (DONE and ERROR) for Modbus Master FBs
+        for inst in &mut self.mb_master {
+            inst.done = false;
+            inst.error = false;
+        }
+
+        // 2. Consume incoming Modbus communication results from background task
+        if let Some(res) = self.mb_in_result.take() {
+            let inst = (res.instance_id as usize).min(MAX_MB_MASTER_INSTANCES - 1);
+            if self.mb_master[inst].busy && self.mb_master[inst].job_id == res.job_id {
+                self.mb_master[inst].busy = false;
+                if res.success {
+                    self.mb_master[inst].done = true;
+                    self.mb_master[inst].error = false;
+                    self.mb_master[inst].status = MB_ERR_OK;
+                } else {
+                    self.mb_master[inst].done = false;
+                    self.mb_master[inst].error = true;
+                    self.mb_master[inst].status = res.error_code;
+                }
+            }
         }
 
         let mut acc = false;
@@ -448,6 +496,75 @@ impl MicroVm {
                     }
                 }
                 0x51 => {} // LBL (Jump Target)
+
+                // Modbus Master Communication Function Block (IEC 61131-3)
+                0x60 => {
+                    // MB_MASTER:
+                    // addr: instance_id (0..7)
+                    // imm: (slave_id as u16) | ((func as u16) << 8)
+                    let inst_id = (addr as usize).min(MAX_MB_MASTER_INSTANCES - 1);
+                    let slave_id = (ins.imm & 0xFF) as u8;
+                    let func = ((ins.imm >> 8) & 0xFF) as u8;
+
+                    let p1 = if pc + 1 < max_pc { self.program[pc + 1] } else { VmInstruction::default() };
+                    let p2 = if pc + 2 < max_pc { self.program[pc + 2] } else { VmInstruction::default() };
+                    pc += 2;
+
+                    let rising_req = acc && !self.mb_master[inst_id].prev_req && mc_active;
+                    self.mb_master[inst_id].prev_req = acc;
+
+                    if rising_req {
+                        if self.mb_master[inst_id].busy {
+                            self.mb_master[inst_id].error = true;
+                            self.mb_master[inst_id].status = MB_ERR_BUSY;
+                        } else {
+                            self.next_job_id = self.next_job_id.wrapping_add(1);
+                            if self.next_job_id == 0 {
+                                self.next_job_id = 1;
+                            }
+                            let j_id = self.next_job_id;
+
+                            self.mb_master[inst_id].busy = true;
+                            self.mb_master[inst_id].done = false;
+                            self.mb_master[inst_id].error = false;
+                            self.mb_master[inst_id].status = 0;
+                            self.mb_master[inst_id].job_id = j_id;
+
+                            let is_write = (p2.addr & 0x01) != 0
+                                || matches!(
+                                    func,
+                                    MB_FC_WRITE_SINGLE_COIL
+                                        | MB_FC_WRITE_SINGLE_REGISTER
+                                        | MB_FC_WRITE_MULTIPLE_REGISTERS
+                                );
+
+                            self.mb_out_job = Some(ModbusMasterJob {
+                                job_id: j_id,
+                                instance_id: inst_id as u8,
+                                slave_id,
+                                function_code: func,
+                                reg_addr: p1.imm,
+                                count: p2.imm,
+                                buffer_addr: p1.addr,
+                                is_write,
+                            });
+                        }
+                    }
+                    acc = self.mb_master[inst_id].done;
+                }
+                0x61 | 0x62 => {} // MB_PARAM1, MB_PARAM2 (consumed by 0x60)
+                0x63 => {
+                    // MB_STATUS: Query FB output flags (imm: 0=DONE, 1=BUSY, 2=ERROR, 3=STATUS)
+                    let inst_id = (addr as usize).min(MAX_MB_MASTER_INSTANCES - 1);
+                    match ins.imm {
+                        0 => acc = self.mb_master[inst_id].done,
+                        1 => acc = self.mb_master[inst_id].busy,
+                        2 => acc = self.mb_master[inst_id].error,
+                        3 => self.acc_word = self.mb_master[inst_id].status as i32,
+                        _ => {}
+                    }
+                }
+
                 0xFF => break, // END
                 _ => {}
             }
@@ -827,5 +944,123 @@ mod tests {
         assert_eq!(&tx_buf[4..20], &raw);
         assert_eq!(tx_buf[20], MicroVm::compute_crc8(&tx_buf[1..20]));
     }
+
+    #[test]
+    fn test_modbus_rtu_framing_and_crc() {
+        // Standard Modbus test vector: Read 10 holding registers from addr 0, slave ID 1
+        let req_job = ModbusMasterJob {
+            job_id: 1,
+            instance_id: 0,
+            slave_id: 1,
+            function_code: MB_FC_READ_HOLDING_REGISTERS,
+            reg_addr: 0x0000,
+            count: 10,
+            buffer_addr: 0x20, // D0
+            is_write: false,
+        };
+        let word_mem = [0i32; 256];
+        let bit_mem = [0u8; 256];
+        let mut frame_buf = [0u8; 32];
+        let frame_len = encode_rtu_request(&req_job, &word_mem, &bit_mem, &mut frame_buf).unwrap();
+
+        assert_eq!(frame_len, 8);
+        assert_eq!(&frame_buf[..6], &[0x01, 0x03, 0x00, 0x00, 0x00, 0x0A]);
+        // Standard Modbus CRC for [01 03 00 00 00 0A] is 0xC5CD (Little Endian: CD, C5)
+        let crc = compute_crc16(&frame_buf[..6]);
+        assert_eq!(u16::from_le_bytes([frame_buf[6], frame_buf[7]]), crc);
+
+        // Decode simulated response: 2 registers (D0=1234, D1=5678)
+        let mut sim_resp = [
+            0x01, 0x03, 0x04,
+            0x04, 0xD2, // 1234
+            0x16, 0x2E, // 5678
+            0x00, 0x00, // CRC placeholder
+        ];
+        let resp_crc = compute_crc16(&sim_resp[..7]);
+        let [rc_lo, rc_hi] = resp_crc.to_le_bytes();
+        sim_resp[7] = rc_lo;
+        sim_resp[8] = rc_hi;
+
+        let mut read_job = req_job;
+        read_job.count = 2;
+        let mut target_words = [0i32; 256];
+        let mut target_bits = [0u8; 256];
+
+        let decode_res = decode_rtu_response(&read_job, &sim_resp, &mut target_words, &mut target_bits);
+        assert!(decode_res.is_ok());
+        assert_eq!(target_words[0x20], 1234); // D0
+        assert_eq!(target_words[0x21], 5678); // D1
+    }
+
+    #[test]
+    fn test_vm_mb_master_execution() {
+        let mut vm = MicroVm::new();
+        // Bytecode:
+        // 0: LD X0 (0x01, addr 0)
+        // 1: MB_MASTER inst 0, slave 1, func 3 (0x60, addr 0, imm 0x0301)
+        // 2: MB_PARAM1 buffer D0 (0x20), reg_addr 100 (0x61, addr 0x20, imm 100)
+        // 3: MB_PARAM2 flags 0, count 2 (0x62, addr 0, imm 2)
+        // 4: MB_STATUS inst 0, check BUSY (0x63, addr 0, imm 1)
+        // 5: ST M1 (0x07, addr 0x41)
+        // 6: END (0xFF)
+        let prog = [
+            VmInstruction { op: 0x01, addr: 0x00, imm: 0 },
+            VmInstruction { op: 0x60, addr: 0x00, imm: 0x0301 },
+            VmInstruction { op: 0x61, addr: 0x20, imm: 100 },
+            VmInstruction { op: 0x62, addr: 0x00, imm: 2 },
+            VmInstruction { op: 0x63, addr: 0x00, imm: 1 },
+            VmInstruction { op: 0x07, addr: 0x41, imm: 0 },
+            VmInstruction { op: 0xFF, addr: 0x00, imm: 0 },
+        ];
+        for (i, ins) in prog.iter().enumerate() {
+            vm.program[i] = *ins;
+        }
+        vm.prog_len = prog.len() as u16;
+
+        // Scan 1: X0 is OFF -> No trigger
+        vm.step_scan(10);
+        assert!(!vm.mb_master[0].busy);
+        assert!(vm.mb_out_job.is_none());
+
+        // Scan 2: X0 turns ON -> Rising edge triggers MB_MASTER
+        vm.set_digital_input(0, true);
+        vm.step_scan(10);
+        assert!(vm.mb_master[0].busy);
+        assert!(vm.bit_mem[0x41] != 0, "M1 (BUSY status) should be ON");
+        assert!(vm.mb_out_job.is_some());
+        let job = vm.mb_out_job.take().unwrap();
+        assert_eq!(job.slave_id, 1);
+        assert_eq!(job.function_code, 3);
+        assert_eq!(job.reg_addr, 100);
+        assert_eq!(job.count, 2);
+        assert_eq!(job.buffer_addr, 0x20);
+
+        // Scan 3: Still waiting for response -> busy remains true
+        vm.step_scan(10);
+        assert!(vm.mb_master[0].busy);
+
+        // Response arrives from background task
+        vm.word_mem[0x20] = 999;
+        vm.word_mem[0x21] = 888;
+        vm.mb_in_result = Some(ModbusJobResult {
+            job_id: job.job_id,
+            instance_id: 0,
+            success: true,
+            error_code: MB_ERR_OK,
+        });
+
+        // Scan 4: Consumes result -> BUSY turns OFF, DONE turns ON (1-scan pulse)
+        vm.step_scan(10);
+        assert!(!vm.mb_master[0].busy);
+        assert!(vm.mb_master[0].done);
+        assert_eq!(vm.mb_master[0].status, MB_ERR_OK);
+
+        // Scan 5: Next scan -> DONE turns OFF automatically
+        vm.step_scan(10);
+        assert!(!vm.mb_master[0].done);
+        assert_eq!(vm.word_mem[0x20], 999);
+        assert_eq!(vm.word_mem[0x21], 888);
+    }
 }
+
 

@@ -3770,6 +3770,86 @@ impl CanvasViewport {
                     palette.symbol_subtext,
                 );
             }
+            TypeTag::MbMaster => {
+                let card_w = w - 18.0 * self.zoom;
+                let card_h = h - 18.0 * self.zoom;
+                let card_rect = Rect::from_center_size(center, vec2(card_w, card_h));
+
+                self.draw_power_wire(
+                    painter,
+                    pos2(x0, mid_y),
+                    pos2(card_rect.min.x, mid_y),
+                    power_in && sim_active,
+                    palette,
+                );
+                self.draw_power_wire(
+                    painter,
+                    pos2(card_rect.max.x, mid_y),
+                    pos2(x0 + w, mid_y),
+                    elem.is_energized && sim_active,
+                    palette,
+                );
+
+                let is_on = elem.is_energized && sim_active;
+                let border_c = if is_on {
+                    palette.accent_ok
+                } else if is_selected {
+                    palette.accent_heading
+                } else {
+                    palette.card_border
+                };
+
+                painter.rect_filled(card_rect, 6.0 * self.zoom, palette.card_bg);
+                painter.rect_stroke(
+                    card_rect,
+                    6.0 * self.zoom,
+                    Stroke::new(1.5 * self.zoom, border_c),
+                    StrokeKind::Inside,
+                );
+
+                // Header Band
+                let hdr_rect = Rect::from_min_max(
+                    card_rect.min,
+                    pos2(card_rect.max.x, card_rect.min.y + 18.0 * self.zoom),
+                );
+                let hdr_bg = Color32::from_rgb(180, 85, 20); // Amber/copper industrial color for Modbus
+                painter.rect_filled(
+                    hdr_rect,
+                    CornerRadius {
+                        nw: (6.0 * self.zoom) as u8,
+                        ne: (6.0 * self.zoom) as u8,
+                        sw: 0,
+                        se: 0,
+                    },
+                    hdr_bg,
+                );
+                painter.text(
+                    hdr_rect.center(),
+                    Align2::CENTER_CENTER,
+                    "MB_MASTER",
+                    self.font_mono(10.0),
+                    Color32::WHITE,
+                );
+
+                // Center: Instance name
+                painter.text(
+                    pos2(center.x, center.y - 4.0 * self.zoom),
+                    Align2::CENTER_CENTER,
+                    &elem.name,
+                    self.font_mono(13.0),
+                    if is_selected { Color32::WHITE } else { palette.rung_text_num },
+                );
+
+                // Bottom: Slave ID, Func, Buffer
+                let subtext = format!("ID:{} FC:{} -> {}", elem.mb_slave_id, elem.mb_function, elem.target_reg);
+                painter.text(
+                    pos2(center.x, y0 + h - 14.0 * self.zoom),
+                    Align2::CENTER_CENTER,
+                    &subtext,
+                    self.font_mono(9.5),
+                    palette.symbol_subtext,
+                );
+            }
             TypeTag::Branch => {}
         }
     }

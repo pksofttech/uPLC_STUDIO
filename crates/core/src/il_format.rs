@@ -163,6 +163,14 @@ impl IlParser {
                         out.push_str(&format!("    {} : SR;\n", el.name));
                     }
                 }
+                TypeTag::MbMaster => {
+                    if declared.insert(el.name.clone()) {
+                        out.push_str(&format!(
+                            "    {} : MB_MASTER; (* Slave: {}, Func: {}, Addr: {}, Count: {}, Buffer: {} *)\n",
+                            el.name, el.mb_slave_id, el.mb_function, el.preset_value, el.preset_value1, el.target_reg
+                        ));
+                    }
+                }
                 TypeTag::Rs => {
                     if declared.insert(el.name.clone()) {
                         out.push_str(&format!("    {} : RS;\n", el.name));
@@ -364,6 +372,13 @@ impl IlParser {
                 }
                 TypeTag::MasterRelay => {
                     out.push_str("    MC\n");
+                    first = false;
+                }
+                TypeTag::MbMaster => {
+                    out.push_str(&format!(
+                        "    CAL  {}(SLAVE := {}, FUNC := {}, ADDR := {}, COUNT := {}, BUFFER := {})\n",
+                        el.name, el.mb_slave_id, el.mb_function, el.preset_value, el.preset_value1, el.target_reg
+                    ));
                     first = false;
                 }
                 TypeTag::Sr => {
@@ -871,6 +886,72 @@ impl IlParser {
                     });
                 }
 
+                if cal_name.starts_with("MB")
+                    || cal_name.contains("MB_MASTER")
+                    || fb_presets
+                        .get(cal_name)
+                        .map(|(t, _)| *t == TypeTag::MbMaster)
+                        .unwrap_or(false)
+                {
+                    let mut slave = 1u8;
+                    let mut func = 3u8;
+                    let mut addr = 0i32;
+                    let mut count = 1i32;
+                    let mut buffer = "D0".to_string();
+
+                    if let Some(idx) = rest.find("SLAVE :=") {
+                        let part = &rest[idx + "SLAVE :=".len()..];
+                        if let Some(s) = part.split(|c: char| c == ',' || c == ')').next() {
+                            if let Ok(v) = s.trim().parse::<u8>() {
+                                slave = v;
+                            }
+                        }
+                    }
+                    if let Some(idx) = rest.find("FUNC :=") {
+                        let part = &rest[idx + "FUNC :=".len()..];
+                        if let Some(s) = part.split(|c: char| c == ',' || c == ')').next() {
+                            if let Ok(v) = s.trim().parse::<u8>() {
+                                func = v;
+                            }
+                        }
+                    }
+                    if let Some(idx) = rest.find("ADDR :=") {
+                        let part = &rest[idx + "ADDR :=".len()..];
+                        if let Some(s) = part.split(|c: char| c == ',' || c == ')').next() {
+                            if let Ok(v) = s.trim().parse::<i32>() {
+                                addr = v;
+                            }
+                        }
+                    }
+                    if let Some(idx) = rest.find("COUNT :=") {
+                        let part = &rest[idx + "COUNT :=".len()..];
+                        if let Some(s) = part.split(|c: char| c == ',' || c == ')').next() {
+                            if let Ok(v) = s.trim().parse::<i32>() {
+                                count = v;
+                            }
+                        }
+                    }
+                    if let Some(idx) = rest.find("BUFFER :=") {
+                        let part = &rest[idx + "BUFFER :=".len()..];
+                        if let Some(s) = part.split(|c: char| c == ',' || c == ')').next() {
+                            buffer = s.trim().to_string();
+                        }
+                    }
+
+                    return Some(LadderElement {
+                        id,
+                        element_type: TypeTag::MbMaster,
+                        name: cal_name.to_string(),
+                        symbol: cal_name.to_string(),
+                        preset_value: addr,
+                        preset_value1: count,
+                        target_reg: buffer,
+                        mb_slave_id: slave,
+                        mb_function: func,
+                        ..Default::default()
+                    });
+                }
+
                 None
             }
             "MOVE" => {
@@ -1146,6 +1227,8 @@ impl IlParser {
                     fb_presets.insert(name, (TypeTag::Sr, 0));
                 } else if ty.starts_with("RS") {
                     fb_presets.insert(name, (TypeTag::Rs, 0));
+                } else if ty.starts_with("MB_MASTER") || ty.starts_with("MODBUS") {
+                    fb_presets.insert(name, (TypeTag::MbMaster, 0));
                 }
             }
         }

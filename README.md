@@ -47,3 +47,29 @@ cargo test
 ```bash
 cargo build --release -p uplc-studio
 ```
+
+---
+
+## ⚡ RP2040 Firmware (Micro-VM & Hardware PLC)
+
+uPLC Studio can flash and communicate directly with a physical **Raspberry Pi Pico (RP2040)** running our async Embassy runtime.
+
+- **Source & Full Documentation**: See [firmware/rp2040-embassy/README.md](firmware/rp2040-embassy/README.md).
+
+### Quick Build & Flash
+
+```bash
+cd firmware/rp2040-embassy
+
+# 1. Build release binary
+cargo build --release
+
+# 2. Flash via Debug Probe (SWD / CMSIS-DAP)
+cargo run --release
+
+# OR Flash via USB BOOTSEL (Hold BOOTSEL button while plugging in USB)
+elf2uf2-rs -d -s target/thumbv6m-none-eabi/release/uplc-rp2040-embassy
+```
+
+Once flashed, connect the Pico's micro-USB to your PC and use **"⚡ Update to PLC"** or **"Online Monitor"** in uPLC Studio to download ladder programs and monitor I/O live!
+
