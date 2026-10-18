@@ -16,34 +16,48 @@ pub fn render(ui: &mut Ui, app: &CanvasApp) {
 
         // 2. Online Monitoring / Simulation Status
         if app.online_mode {
-            let target = if app.online_target_hw { "HW MCU" } else { "SIM" };
-            match app.online_program_match_info() {
-                Some((true, _, ide_crc, _, _)) => {
-                    ui.label(
-                        RichText::new(format!(
-                            "🟢 ONLINE ({}) ✔ CODE MATCH [0x{:04X}]",
-                            target, ide_crc
-                        ))
-                        .color(palette.accent_ok)
-                        .strong(),
-                    );
-                }
-                Some((false, _, ide_crc, _, plc_crc)) => {
-                    ui.label(
-                        RichText::new(format!(
-                            "⚠ ONLINE ({}) CODE MISMATCH [IDE:0x{:04X} ≠ PLC:0x{:04X}]",
-                            target, ide_crc, plc_crc
-                        ))
-                        .color(palette.accent_warn)
-                        .strong(),
-                    );
-                }
-                None => {
-                    ui.label(
-                        RichText::new(format!("🟢 ONLINE MONITORING ({})", target))
+            let is_hw = app.online_target_hw;
+            let target = if is_hw { "RP2040 MCU" } else { "SIM" };
+            let is_connected = !is_hw || app.is_hw_online_connected();
+
+            if is_hw && !is_connected {
+                ui.label(
+                    RichText::new(format!(
+                        "⚠ ONLINE ({}) DISCONNECTED - AUTO-RECONNECTING...",
+                        target
+                    ))
+                    .color(palette.accent_warn)
+                    .strong(),
+                );
+            } else {
+                match app.online_program_match_info() {
+                    Some((true, _, ide_crc, _, _)) => {
+                        ui.label(
+                            RichText::new(format!(
+                                "🟢 ONLINE ({}) ✔ CODE MATCH [0x{:04X}]",
+                                target, ide_crc
+                            ))
                             .color(palette.accent_ok)
                             .strong(),
-                    );
+                        );
+                    }
+                    Some((false, _, ide_crc, _, plc_crc)) => {
+                        ui.label(
+                            RichText::new(format!(
+                                "⚠ ONLINE ({}) CODE MISMATCH [IDE:0x{:04X} ≠ PLC:0x{:04X}]",
+                                target, ide_crc, plc_crc
+                            ))
+                            .color(palette.accent_warn)
+                            .strong(),
+                        );
+                    }
+                    None => {
+                        ui.label(
+                            RichText::new(format!("🟢 ONLINE MONITORING ({})", target))
+                                .color(palette.accent_ok)
+                                .strong(),
+                        );
+                    }
                 }
             }
         } else {
@@ -71,13 +85,18 @@ pub fn render(ui: &mut Ui, app: &CanvasApp) {
         }
         ui.separator();
 
-        // 3. COM Port Info
-        ui.label(format!("Port: {} @ {} bps", app.com_port, app.baud_rate));
+        // 3. COM Port & Target Info
+        let target_str = if app.online_target_hw { "RP2040" } else { "Simulator" };
+        ui.label(format!("Target: {} | Port: {} @ {} bps", target_str, app.com_port, app.baud_rate));
         ui.separator();
 
         let (scan_cnt, cycle_ms) = if app.online_mode && app.online_target_hw {
-            let sc = app.latest_snapshot.as_ref().map_or(0, |s| s.scan_count as u64);
-            (sc, 1u32) // Deterministic 1ms scan cycle on RP2040 hardware
+            let sc = if app.is_hw_online_connected() {
+                app.latest_snapshot.as_ref().map_or(0, |s| s.scan_count as u64)
+            } else {
+                0
+            };
+            (sc, 10u32) // Deterministic 10ms scan cycle on RP2040 hardware (SCAN_CYCLE_MS)
         } else {
             (app.doc.simulator.scan_count, app.doc.simulator.cycle_time_ms)
         };
@@ -86,8 +105,12 @@ pub fn render(ui: &mut Ui, app: &CanvasApp) {
         if app.online_mode || app.doc.simulator.is_active() {
             ui.separator();
             let (acc_b, acc_w) = if app.online_mode && app.online_target_hw {
-                if let Some(snap) = app.latest_snapshot.as_ref() {
-                    (snap.acc_bool, snap.acc_word)
+                if app.is_hw_online_connected() {
+                    if let Some(snap) = app.latest_snapshot.as_ref() {
+                        (snap.acc_bool, snap.acc_word)
+                    } else {
+                        (false, 0)
+                    }
                 } else {
                     (false, 0)
                 }

@@ -142,8 +142,10 @@ pub struct CanvasApp {
     pub online_target_hw: bool,
     pub online_status_text: String,
     pub latest_snapshot: Option<PlcStatusSnapshot>,
+    pub last_telemetry_rx: Option<Instant>,
     pub online_worker_stop: Arc<AtomicBool>,
-    pub online_worker_rx: Option<Receiver<PlcStatusSnapshot>>,
+    pub online_worker_rx: Option<Receiver<(PlcStatusSnapshot, String)>>,
+    pub online_worker_cmd_tx: Option<mpsc::Sender<Vec<u8>>>,
     pub last_folder: Option<PathBuf>,
     pub pending_action: Option<PendingAction>,
     pub allow_exit: bool,
@@ -199,8 +201,10 @@ impl Default for CanvasApp {
             online_target_hw: settings.online_target_hw,
             online_status_text: "Offline".to_string(),
             latest_snapshot: None,
+            last_telemetry_rx: None,
             online_worker_stop: Arc::new(AtomicBool::new(false)),
             online_worker_rx: None,
+            online_worker_cmd_tx: None,
             last_folder: settings.last_folder,
             pending_action: None,
             allow_exit: false,
@@ -241,8 +245,8 @@ impl CanvasApp {
         ports
     }
 
-    /// Find a connected RP2040 Micro-VM USB-CDC port (`/dev/ttyACM*` whose USB product contains `"uPLC"`)
-    fn detect_uplc_usb_port() -> Option<String> {
+    /// Find a connected RP2040 Micro-VM USB-CDC port (`/dev/ttyACM*` or `/dev/ttyUSB*`)
+    pub fn detect_uplc_usb_port() -> Option<String> {
         if let Ok(entries) = std::fs::read_dir("/dev") {
             let mut candidates: Vec<String> = entries
                 .flatten()
@@ -250,12 +254,27 @@ impl CanvasApp {
                 .filter(|n| n.starts_with("ttyACM") || n.starts_with("ttyUSB"))
                 .collect();
             candidates.sort();
+
+            // Priority 1: device whose product description contains "uPLC", "RP2040", or "Pico", and is not a Debugprobe
             for name in &candidates {
                 let prod_path = format!("/sys/class/tty/{}/device/../product", name);
                 if let Ok(prod) = std::fs::read_to_string(&prod_path) {
-                    if prod.contains("uPLC") || prod.contains("RP2040") {
+                    if !prod.contains("Debugprobe")
+                        && (prod.contains("uPLC") || prod.contains("RP2040") || prod.contains("Pico"))
+                    {
                         return Some(format!("/dev/{}", name));
                     }
+                }
+            }
+
+            // Priority 2: any ttyACM or ttyUSB that is explicitly not a Debugprobe
+            for name in &candidates {
+                let prod_path = format!("/sys/class/tty/{}/device/../product", name);
+                let is_debugprobe = std::fs::read_to_string(&prod_path)
+                    .map(|p| p.contains("Debugprobe"))
+                    .unwrap_or(false);
+                if !is_debugprobe {
+                    return Some(format!("/dev/{}", name));
                 }
             }
         }
@@ -396,11 +415,40 @@ impl CanvasApp {
 
         let packet = bc.to_serial_packet(cmd);
 
+        // Fast-path: If Hardware Online Monitoring is active and this is a Run/Stop/Step command, route through cmd channel
+        if self.online_mode && self.online_target_hw {
+            if let Some(ref tx) = self.online_worker_cmd_tx {
+                if cmd != my_canvas_core::PlcSerialCommand::DownloadProgram
+                    && cmd != my_canvas_core::PlcSerialCommand::UploadProgram
+                {
+                    if tx.send(packet.clone()).is_ok() {
+                        match cmd {
+                            my_canvas_core::PlcSerialCommand::RunStopControl => {
+                                self.plc_remote_running = true;
+                                self.update_plc_status = "▶ PLC RUN Command sent to hardware".to_string();
+                            }
+                            my_canvas_core::PlcSerialCommand::StopPlc => {
+                                self.plc_remote_running = false;
+                                self.update_plc_status = "⏹ PLC STOP Command sent to hardware".to_string();
+                            }
+                            my_canvas_core::PlcSerialCommand::StepPlc => {
+                                self.plc_remote_running = false;
+                                self.update_plc_status = "⏭ PLC STEP Command sent to hardware".to_string();
+                            }
+                            _ => {}
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+
         // If Hardware Online Monitoring is currently polling the serial port, pause it during transmission
         let resume_online_hw = self.online_mode && self.online_target_hw;
         if resume_online_hw {
             self.online_worker_stop.store(true, Ordering::Relaxed);
             self.online_worker_rx = None;
+            self.online_worker_cmd_tx = None;
             thread::sleep(Duration::from_millis(60));
         }
 
@@ -437,7 +485,7 @@ impl CanvasApp {
             Ok(mut file) => match file.write_all(&packet) {
                 Ok(_) => {
                     let _ = file.flush();
-                    // Briefly drain any 3-byte ACK ([0xAA, 0x81/0x82, 0x00]) so RX buffer stays clean
+                    // Briefly drain any 3-byte ACK ([0xAA, 0x81/0x82/0x85, 0x00]) so RX buffer stays clean
                     thread::sleep(Duration::from_millis(15));
                     let mut ack_drain = [0u8; 32];
                     let _ = file.read(&mut ack_drain);
@@ -466,6 +514,13 @@ impl CanvasApp {
                             self.plc_remote_running = false;
                             self.update_plc_status = format!(
                                 "⏹ PLC STOP Command (0x02, payload=0x00) sent to {} — All Outputs Safely Turned OFF",
+                                port_path
+                            );
+                        }
+                        my_canvas_core::PlcSerialCommand::StepPlc => {
+                            self.plc_remote_running = false;
+                            self.update_plc_status = format!(
+                                "⏭ PLC STEP Command (0x05) sent to {} — Single Scan Executed",
                                 port_path
                             );
                         }
@@ -891,9 +946,15 @@ impl CanvasApp {
                 }
             }
 
+            if !std::path::Path::new(&port_path).exists() {
+                self.online_status_text = format!("⚠ Waiting for port '{}'...", port_path);
+            }
+
             let baud = self.baud_rate.clone();
-            let (tx, rx) = mpsc::channel();
+            let (tx, rx) = mpsc::channel::<(PlcStatusSnapshot, String)>();
             self.online_worker_rx = Some(rx);
+            let (cmd_tx, cmd_rx) = mpsc::channel::<Vec<u8>>();
+            self.online_worker_cmd_tx = Some(cmd_tx);
 
             thread::spawn(move || {
                 use std::io::{Read, Write};
@@ -903,9 +964,14 @@ impl CanvasApp {
                 let mut rx_accum: Vec<u8> = Vec::with_capacity(1024);
 
                 while !stop_flag.load(Ordering::Relaxed) {
+                    // Check if current port_path exists; if not, attempt auto-detection (hotplug)
                     if !std::path::Path::new(&port_path).exists() {
-                        thread::sleep(Duration::from_millis(200));
-                        continue;
+                        if let Some(detected) = Self::detect_uplc_usb_port() {
+                            port_path = detected;
+                        } else {
+                            thread::sleep(Duration::from_millis(250));
+                            continue;
+                        }
                     }
 
                     // Configure stty raw mode with timeout
@@ -918,59 +984,102 @@ impl CanvasApp {
                             // Drain any stale bytes on initial open
                             let _ = file.read(&mut chunk);
                             rx_accum.clear();
+                            let mut consecutive_failures = 0u32;
 
                             while !stop_flag.load(Ordering::Relaxed) {
-                                if file.write_all(&req).is_ok() && file.flush().is_ok() {
-                                    let start = Instant::now();
-                                    while start.elapsed().as_millis() < 220 {
-                                        match file.read(&mut chunk) {
-                                            Ok(0) => thread::sleep(Duration::from_millis(4)),
-                                            Ok(n) => {
-                                                rx_accum.extend_from_slice(&chunk[..n]);
-                                                // Search for [0xAA, 0x83, len_lo, len_hi] where payload len is 462 (0x01CE) or 458 (0x01CA)
-                                                if let Some(pos) = rx_accum.windows(4).position(|w| {
-                                                    if w[0] == 0xAA && w[1] == 0x83 {
-                                                        let plen = u16::from_le_bytes([w[2], w[3]]) as usize;
-                                                        plen == PlcStatusSnapshot::PAYLOAD_LEN
-                                                            || plen == PlcStatusSnapshot::LEGACY_PAYLOAD_LEN
-                                                    } else {
-                                                        false
-                                                    }
-                                                }) {
-                                                    if pos > 0 {
-                                                        rx_accum.drain(..pos);
-                                                    }
-                                                    if rx_accum.len() >= 4 {
-                                                        let plen = u16::from_le_bytes([rx_accum[2], rx_accum[3]]) as usize;
-                                                        let frame_len = plen + 5;
-                                                        if rx_accum.len() >= frame_len {
-                                                            let frame: Vec<u8> =
-                                                                rx_accum.drain(..frame_len).collect();
-                                                            if let Ok(snap) =
-                                                                PlcStatusSnapshot::parse_from_packet(
-                                                                    &frame,
-                                                                )
-                                                            {
-                                                                if tx.send(snap).is_err() {
-                                                                    return; // UI receiver dropped
-                                                                }
-                                                            }
-                                                            break;
-                                                        }
-                                                    }
-                                                } else if rx_accum.len() > 1024 {
-                                                    rx_accum.clear();
+                                // 1. Check and send any pending interactive commands from UI (RUN / STOP / STEP)
+                                while let Ok(cmd_packet) = cmd_rx.try_recv() {
+                                    if file.write_all(&cmd_packet).is_ok() && file.flush().is_ok() {
+                                        thread::sleep(Duration::from_millis(5));
+                                        let mut ack = [0u8; 16];
+                                        let _ = file.read(&mut ack);
+                                    }
+                                }
+
+                                // 2. Poll Status Snapshot
+                                if file.write_all(&req).is_err() || file.flush().is_err() {
+                                    // Write failed: port likely disconnected
+                                    break;
+                                }
+
+                                let start = Instant::now();
+                                let mut got_packet = false;
+                                while start.elapsed().as_millis() < 220 {
+                                    if stop_flag.load(Ordering::Relaxed) {
+                                        break;
+                                    }
+                                    match file.read(&mut chunk) {
+                                        Ok(0) => thread::sleep(Duration::from_millis(4)),
+                                        Ok(n) => {
+                                            rx_accum.extend_from_slice(&chunk[..n]);
+                                            // Search for [0xAA, 0x83, len_lo, len_hi] where payload len is 462 (0x01CE) or 458 (0x01CA)
+                                            if let Some(pos) = rx_accum.windows(4).position(|w| {
+                                                if w[0] == 0xAA && w[1] == 0x83 {
+                                                    let plen = u16::from_le_bytes([w[2], w[3]]) as usize;
+                                                    plen == PlcStatusSnapshot::PAYLOAD_LEN
+                                                        || plen == PlcStatusSnapshot::LEGACY_PAYLOAD_LEN
+                                                } else {
+                                                    false
                                                 }
+                                            }) {
+                                                if pos > 0 {
+                                                    rx_accum.drain(..pos);
+                                                }
+                                                if rx_accum.len() >= 4 {
+                                                    let plen = u16::from_le_bytes([rx_accum[2], rx_accum[3]]) as usize;
+                                                    let frame_len = plen + 5;
+                                                    if rx_accum.len() >= frame_len {
+                                                        let frame: Vec<u8> =
+                                                            rx_accum.drain(..frame_len).collect();
+                                                        if let Ok(snap) =
+                                                            PlcStatusSnapshot::parse_from_packet(
+                                                                &frame,
+                                                            )
+                                                        {
+                                                            got_packet = true;
+                                                            consecutive_failures = 0;
+                                                            if tx.send((snap, port_path.clone())).is_err() {
+                                                                return; // UI receiver dropped
+                                                            }
+                                                        }
+                                                        break;
+                                                    }
+                                                }
+                                            } else if rx_accum.len() > 1024 {
+                                                // Prevent buffer bloat on noise or desynchronization
+                                                rx_accum.clear();
                                             }
-                                            Err(_) => break,
+                                        }
+                                        Err(_) => {
+                                            // Read error: device disconnected or serial error
+                                            break;
                                         }
                                     }
                                 }
+
+                                if !got_packet {
+                                    consecutive_failures += 1;
+                                    if consecutive_failures >= 4 {
+                                        // Repeated timeouts: drain OS serial buffer in case of framing jam
+                                        let mut drain = [0u8; 512];
+                                        let _ = file.read(&mut drain);
+                                        rx_accum.clear();
+                                        // If still failing after 8 attempts (~2s), force re-opening port
+                                        if consecutive_failures >= 8 {
+                                            break;
+                                        }
+                                    }
+                                }
+
                                 thread::sleep(Duration::from_millis(50));
                             }
                         }
                         Err(_) => {
-                            thread::sleep(Duration::from_millis(200));
+                            // Port cannot be opened: wait and check for hotplug re-detection
+                            thread::sleep(Duration::from_millis(250));
+                            if let Some(detected) = Self::detect_uplc_usb_port() {
+                                port_path = detected;
+                            }
                         }
                     }
                 }
@@ -988,8 +1097,66 @@ impl CanvasApp {
         self.online_mode = false;
         self.online_worker_stop.store(true, Ordering::Relaxed);
         self.online_worker_rx = None;
+        self.online_worker_cmd_tx = None;
+        self.last_telemetry_rx = None;
         self.doc.set_online_mode(false);
         self.online_status_text = "Offline".to_string();
+    }
+
+    /// Returns true if Hardware Online Monitoring is currently receiving live packets within the heartbeat window (1000ms).
+    pub fn is_hw_online_connected(&self) -> bool {
+        self.online_mode
+            && self.online_target_hw
+            && self
+                .last_telemetry_rx
+                .map_or(false, |t| t.elapsed() < Duration::from_millis(1000))
+    }
+
+    /// Toggle RUN/STOP mode for either local simulator or hardware PLC.
+    pub fn toggle_run_mode(&mut self) {
+        if self.online_target_hw {
+            if !self.online_mode {
+                self.start_online_monitoring();
+            }
+            if self.plc_remote_running {
+                self.transmit_bytecode_to_plc(my_canvas_core::PlcSerialCommand::StopPlc);
+            } else {
+                self.transmit_bytecode_to_plc(my_canvas_core::PlcSerialCommand::RunStopControl);
+            }
+        } else {
+            self.doc.toggle_simulation();
+        }
+    }
+
+    /// Execute a single scan step on either local simulator or hardware PLC.
+    pub fn single_step_mode(&mut self) {
+        if self.online_target_hw {
+            if !self.online_mode {
+                self.start_online_monitoring();
+            }
+            self.transmit_bytecode_to_plc(my_canvas_core::PlcSerialCommand::StepPlc);
+        } else {
+            self.doc.single_step_simulation(self.doc.simulator.cycle_time_ms);
+        }
+    }
+
+    /// Stop execution and safely turn off outputs for either local simulator or hardware PLC.
+    pub fn stop_run_mode(&mut self) {
+        if self.online_target_hw {
+            self.transmit_bytecode_to_plc(my_canvas_core::PlcSerialCommand::StopPlc);
+        } else {
+            self.doc.stop_simulation();
+        }
+    }
+
+    /// Reset simulation/PLC execution.
+    pub fn reset_run_mode(&mut self) {
+        if self.online_target_hw {
+            self.transmit_bytecode_to_plc(my_canvas_core::PlcSerialCommand::StopPlc);
+            self.doc.clear_conduction();
+        } else {
+            self.doc.reset_simulation();
+        }
     }
 
     pub fn toggle_online_mode(&mut self) {
@@ -1010,8 +1177,20 @@ impl CanvasApp {
     }
 
     pub fn set_online_target_hw(&mut self, is_hw: bool) {
+        if self.online_target_hw == is_hw {
+            return;
+        }
         self.online_target_hw = is_hw;
         self.save_settings();
+        self.latest_snapshot = None;
+        self.last_telemetry_rx = None;
+        self.doc.clear_conduction();
+
+        if is_hw {
+            // Switching to hardware target: pause / halt local simulator
+            self.doc.stop_simulation();
+        }
+
         if self.online_mode {
             self.stop_online_monitoring();
             self.start_online_monitoring();
@@ -1197,47 +1376,63 @@ impl eframe::App for CanvasApp {
             if self.online_target_hw {
                 let mut latest = None;
                 if let Some(ref rx) = self.online_worker_rx {
-                    while let Ok(snap) = rx.try_recv() {
-                        latest = Some(snap);
+                    while let Ok((snap, port)) = rx.try_recv() {
+                        latest = Some((snap, port));
                     }
                 }
-                if let Some(snap) = latest {
+                if let Some((snap, port)) = latest {
                     self.plc_remote_running = snap.running;
                     self.latest_snapshot = Some(snap);
+                    self.last_telemetry_rx = Some(Instant::now());
+                    if !port.is_empty() && self.com_port != port {
+                        self.com_port = port;
+                    }
                 }
 
-                // Verify code match against latest snapshot
-                let bc = self.doc.compile_to_bytecode();
-                let is_matched = self
-                    .latest_snapshot
-                    .as_ref()
-                    .map_or(false, |snap| snap.matches_program(&bc));
+                let is_connected = self.is_hw_online_connected();
 
-                if is_matched {
-                    if let Some(ref snap) = self.latest_snapshot {
-                        self.doc.set_online_mode(true);
-                        self.doc.apply_online_snapshot(snap);
+                if is_connected {
+                    // Verify code match against latest snapshot
+                    let bc = self.doc.compile_to_bytecode();
+                    let is_matched = self
+                        .latest_snapshot
+                        .as_ref()
+                        .map_or(false, |snap| snap.matches_program(&bc));
+
+                    if is_matched {
+                        if let Some(ref snap) = self.latest_snapshot {
+                            self.doc.set_online_mode(true);
+                            self.doc.apply_online_snapshot(snap);
+                        }
+                    } else {
+                        // Safety & Accuracy: Do NOT show simulation/live conduction on canvas if code is mismatched!
+                        self.doc.set_online_mode(false);
+                        self.doc.clear_conduction();
+                    }
+
+                    if let Some((matched, _ide_len, ide_crc, _plc_len, plc_crc)) =
+                        self.online_program_match_info()
+                    {
+                        let snap = self.latest_snapshot.as_ref().unwrap();
+                        let match_tag = if matched {
+                            format!("✔ MATCH (0x{:04X})", plc_crc)
+                        } else {
+                            format!("⚠ MISMATCH (IDE:0x{:04X}≠PLC:0x{:04X})", ide_crc, plc_crc)
+                        };
+                        self.online_status_text = format!(
+                            "Online (HW) | Scan #{} | {} | {}",
+                            snap.scan_count,
+                            if snap.running { "RUN" } else { "STOP" },
+                            match_tag
+                        );
                     }
                 } else {
-                    // Safety & Accuracy: Do NOT show simulation/live conduction on canvas if code is mismatched!
+                    // Disconnected or waiting for hotplug reconnection: clear conduction for safety
                     self.doc.set_online_mode(false);
                     self.doc.clear_conduction();
-                }
-
-                if let Some((matched, _ide_len, ide_crc, _plc_len, plc_crc)) =
-                    self.online_program_match_info()
-                {
-                    let snap = self.latest_snapshot.as_ref().unwrap();
-                    let match_tag = if matched {
-                        format!("✔ MATCH (0x{:04X})", plc_crc)
-                    } else {
-                        format!("⚠ MISMATCH (IDE:0x{:04X}≠PLC:0x{:04X})", ide_crc, plc_crc)
-                    };
                     self.online_status_text = format!(
-                        "Online (HW) | Scan #{} | {} | {}",
-                        snap.scan_count,
-                        if snap.running { "RUN" } else { "STOP" },
-                        match_tag
+                        "⚠ Waiting for RP2040 ({}) - Auto-reconnecting...",
+                        self.com_port
                     );
                 }
             } else {
@@ -1335,13 +1530,13 @@ impl eframe::App for CanvasApp {
                 }
                 if ui.input(|i| i.key_pressed(egui::Key::F5)) {
                     if ui.input(|i| i.modifiers.shift) {
-                        self.doc.reset_simulation();
+                        self.reset_run_mode();
                     } else {
-                        self.doc.toggle_simulation();
+                        self.toggle_run_mode();
                     }
                 }
                 if ui.input(|i| i.key_pressed(egui::Key::F6)) {
-                    self.doc.single_step_simulation(self.doc.simulator.cycle_time_ms);
+                    self.single_step_mode();
                 }
                 if ui.input(|i| i.key_pressed(egui::Key::F7) || (i.modifiers.command && i.key_pressed(egui::Key::M))) {
                     self.toggle_online_mode();
@@ -1511,7 +1706,10 @@ impl eframe::App for CanvasApp {
 
                     let painter = ui.painter();
                     let is_hw = self.online_target_hw;
-                    let glow_color = if !is_matched {
+                    let is_hw_conn = !is_hw || self.is_hw_online_connected();
+                    let glow_color = if !is_hw_conn {
+                        palette.accent_warn
+                    } else if !is_matched {
                         palette.accent_warn
                     } else if is_hw {
                         palette.accent_ok
@@ -1527,19 +1725,34 @@ impl eframe::App for CanvasApp {
                     );
 
                     let snap = self.latest_snapshot.as_ref();
-                    let scan_txt = snap.map_or(0, |s| s.scan_count);
-                    let is_run = snap.map_or(false, |s| s.running);
-                    let acc_b = snap.map_or(false, |s| s.acc_bool);
-                    let acc_w = snap.map_or(0, |s| s.acc_word);
+                    let scan_txt = if is_hw && !is_hw_conn {
+                        0
+                    } else {
+                        snap.map_or(0, |s| s.scan_count)
+                    };
+                    let is_run = is_hw_conn && snap.map_or(false, |s| s.running);
+                    let acc_b = is_hw_conn && snap.map_or(false, |s| s.acc_bool);
+                    let acc_w = if is_hw_conn { snap.map_or(0, |s| s.acc_word) } else { 0 };
 
                     let target_str = if is_hw { "RP2040 MCU" } else { "Simulator" };
-                    let run_str = if is_run { "● RUN" } else { "⏹ STOP" };
-                    let run_color = if is_run { palette.accent_ok } else { palette.accent_danger };
+                    let (title_str, run_str, run_color) = if is_hw && !is_hw_conn {
+                        (
+                            format!("⚠ RECONNECTING: {}", target_str),
+                            "WAITING USB",
+                            palette.accent_warn,
+                        )
+                    } else {
+                        (
+                            format!("🟢 ONLINE: {}", target_str),
+                            if is_run { "● RUN" } else { "⏹ STOP" },
+                            if is_run { palette.accent_ok } else { palette.accent_danger },
+                        )
+                    };
 
                     painter.text(
                         egui::pos2(hud_rect.min.x + 10.0, hud_rect.min.y + 15.0),
                         egui::Align2::LEFT_CENTER,
-                        format!("🟢 ONLINE: {}", target_str),
+                        title_str,
                         egui::FontId::proportional(12.5),
                         palette.text_primary,
                     );
@@ -2635,6 +2848,81 @@ mod tests {
         app.execute_pending_action(&ctx);
         assert!(app.pending_action.is_none());
         assert!(app.allow_exit);
+    }
+
+    #[test]
+    fn test_online_target_switching_logic() {
+        let mut app = CanvasApp::default();
+
+        // 1. Initial default state
+        app.set_online_target_hw(false);
+        assert!(!app.online_target_hw);
+
+        // 2. Start simulation in simulator mode
+        app.doc.simulator.state = SimState::Running;
+        assert_eq!(app.doc.simulator.state, SimState::Running);
+
+        // 3. Switch to Hardware target: should stop simulator and clear snapshots
+        app.set_online_target_hw(true);
+        assert!(app.online_target_hw);
+        assert_eq!(app.doc.simulator.state, SimState::Stopped);
+        assert!(app.latest_snapshot.is_none());
+
+        // 4. Redundant call should be a no-op
+        app.set_online_target_hw(true);
+        assert!(app.online_target_hw);
+
+        // 5. Online mode transitions
+        app.set_online_target_hw(false);
+        app.start_online_monitoring();
+        assert!(app.online_mode);
+        assert_eq!(app.online_status_text, "Online (Sim)");
+        assert_eq!(app.doc.simulator.state, SimState::Running);
+
+        // Switch target to HW while Online
+        app.set_online_target_hw(true);
+        assert!(app.online_mode);
+        assert!(app.online_target_hw);
+        assert_eq!(app.doc.simulator.state, SimState::Stopped);
+
+        // Switch back to Simulator while Online
+        app.set_online_target_hw(false);
+        assert!(app.online_mode);
+        assert!(!app.online_target_hw);
+        assert_eq!(app.online_status_text, "Online (Sim)");
+        assert_eq!(app.doc.simulator.state, SimState::Running);
+
+        // Clean shutdown
+        app.stop_online_monitoring();
+        assert!(!app.online_mode);
+        assert_eq!(app.online_status_text, "Offline");
+    }
+
+    #[test]
+    fn test_online_hw_connection_watchdog_and_heartbeat() {
+        let mut app = CanvasApp::default();
+        app.online_mode = true;
+        app.online_target_hw = true;
+
+        // 1. Initial state without received telemetry: not connected
+        assert!(!app.is_hw_online_connected());
+
+        // 2. Recent telemetry received: connected
+        app.last_telemetry_rx = Some(Instant::now());
+        assert!(app.is_hw_online_connected());
+
+        // 3. Telemetry expired (> 1000ms): watchdog flags disconnected
+        app.last_telemetry_rx = Some(Instant::now() - Duration::from_millis(1500));
+        assert!(!app.is_hw_online_connected());
+
+        // 4. Fresh packet arrives: automatically reconnects
+        app.last_telemetry_rx = Some(Instant::now());
+        assert!(app.is_hw_online_connected());
+
+        // 5. Stopping online monitoring clears heartbeat
+        app.stop_online_monitoring();
+        assert!(app.last_telemetry_rx.is_none());
+        assert!(!app.is_hw_online_connected());
     }
 }
 

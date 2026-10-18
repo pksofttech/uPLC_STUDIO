@@ -32,6 +32,7 @@ pub const CMD_MONITOR_STATUS: u8 = 0x03;
 pub const CMD_STATUS_RESPONSE: u8 = 0x83;
 pub const CMD_UPLOAD_PROGRAM: u8 = 0x04;
 pub const CMD_UPLOAD_PROGRAM_RESPONSE: u8 = 0x84;
+pub const CMD_STEP: u8 = 0x05;
 
 /// Online Monitoring Status Packet Lengths (includes 2B prog_len + 2B prog_crc16 signature)
 pub const STATUS_SNAPSHOT_PAYLOAD_LEN: usize = 1 + 4 + 1 + 4 + 256 + 64 + 64 + 64 + 2 + 2; // 462 bytes
@@ -750,6 +751,15 @@ impl MicroVm {
             }
             CMD_MONITOR_STATUS => Ok(CMD_MONITOR_STATUS),
             CMD_UPLOAD_PROGRAM => Ok(CMD_UPLOAD_PROGRAM),
+            CMD_STEP => {
+                if self.prog_len > 0 {
+                    let was_running = self.running;
+                    self.running = true;
+                    self.step_scan(10);
+                    self.running = was_running;
+                }
+                Ok(CMD_STEP)
+            }
             _ => Err("Unknown command code"),
         }
     }

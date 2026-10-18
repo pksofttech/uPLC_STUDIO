@@ -176,11 +176,16 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 });
 
                 // =========================================================================
-                // Group 2: Simulation Station (Run, Step, Stop, Reset, Speed, Timer)
+                // Group 2: Simulation / PLC Control Station (Run, Step, Stop, Reset)
                 // =========================================================================
-                let is_running = app.doc.simulator.is_running();
-                let is_stopped = app.doc.simulator.is_stopped();
-                let is_step = app.doc.simulator.is_step();
+                let is_hw = app.online_target_hw;
+                let is_hw_conn = !is_hw || app.is_hw_online_connected();
+                let (is_running, is_stopped, is_step) = if is_hw {
+                    let r = is_hw_conn && app.plc_remote_running;
+                    (r, !r, !r)
+                } else {
+                    (app.doc.simulator.is_running(), app.doc.simulator.is_stopped(), app.doc.simulator.is_step())
+                };
 
                 toolbar_group(ui, palette, |ui| {
                     // Start / RUN Button
@@ -190,6 +195,20 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                         ("", 28.0)
                     } else {
                         ("Start", 60.0)
+                    };
+
+                    let run_hover = if is_hw {
+                        if app.online_mode && !is_hw_conn {
+                            "Waiting for RP2040 USB Connection (Auto-reconnecting...)"
+                        } else if is_running {
+                            "Halt / STOP Hardware PLC Execution (F5)"
+                        } else if app.online_mode {
+                            "Start / RUN Hardware PLC Execution (F5)"
+                        } else {
+                            "Connect & Start Hardware PLC Execution (F5)"
+                        }
+                    } else {
+                        "Start / Continuous Simulation (F5)"
                     };
 
                     if modern_tool_button(
@@ -203,18 +222,20 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                         start_w,
                         palette,
                     )
-                    .on_hover_text("Start / Continuous Simulation (F5)")
+                    .on_hover_text(run_hover)
                     .clicked()
                     {
-                        if is_running {
-                            app.doc.stop_simulation();
-                        } else {
-                            app.doc.start_simulation();
-                        }
+                        app.toggle_run_mode();
                     }
 
                     // Step Button
                     let (step_lbl, step_w) = if is_compact { ("", 28.0) } else { ("Step", 56.0) };
+                    let step_hover = if is_hw {
+                        "Execute Single Scan Step on Hardware PLC (F6)"
+                    } else {
+                        "Execute Single Scan Step (F6)"
+                    };
+
                     if modern_tool_button(
                         ui,
                         Some(VectorIcon::Step),
@@ -226,33 +247,50 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                         step_w,
                         palette,
                     )
-                    .on_hover_text("Execute Single Scan Step (F6)")
+                    .on_hover_text(step_hover)
                     .clicked()
                     {
-                        app.doc.single_step_simulation(app.doc.simulator.cycle_time_ms);
+                        app.single_step_mode();
                     }
 
                     // Stop Button
                     let (stop_lbl, stop_w) = if is_compact { ("", 28.0) } else { ("Stop", 56.0) };
+                    let stop_hover = if is_hw {
+                        "Halt Hardware PLC Scan & Safe Output Shutdown"
+                    } else {
+                        "Stop Simulation & Safe Output Shutdown"
+                    };
+                    let stop_enabled = if is_hw {
+                        app.online_mode && is_running
+                    } else {
+                        !is_stopped
+                    };
+
                     if modern_tool_button(
                         ui,
                         Some(VectorIcon::Stop),
                         stop_lbl,
                         palette.accent_danger,
                         false,
-                        !is_stopped,
+                        stop_enabled,
                         false,
                         stop_w,
                         palette,
                     )
-                    .on_hover_text("Stop Simulation & Safe Output Shutdown")
+                    .on_hover_text(stop_hover)
                     .clicked()
                     {
-                        app.doc.stop_simulation();
+                        app.stop_run_mode();
                     }
 
                     // Reset Button
                     let (reset_lbl, reset_w) = if is_compact { ("", 28.0) } else { ("Reset", 58.0) };
+                    let reset_hover = if is_hw {
+                        "Reset / Halt Hardware PLC (Shift+F5)"
+                    } else {
+                        "Reset Simulation & Clear Memory (Shift+F5)"
+                    };
+
                     if modern_tool_button(
                         ui,
                         Some(VectorIcon::Reset),
@@ -264,29 +302,37 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                         reset_w,
                         palette,
                     )
-                    .on_hover_text("Reset Simulation & Clear Memory (Shift+F5)")
+                    .on_hover_text(reset_hover)
                     .clicked()
                     {
-                        app.doc.reset_simulation();
+                        app.reset_run_mode();
                     }
 
                     toolbar_divider(ui, palette);
 
-                    // Simulation Speed Multiplier
-                    egui::ComboBox::from_id_salt("toolbar_sim_speed_combo")
-                        .width(42.0)
-                        .selected_text(format!("x{}", app.doc.simulator.speed_multiplier))
-                        .show_ui(ui, |ui| {
-                            for mult in [1u32, 2, 5, 10] {
-                                ui.selectable_value(
-                                    &mut app.doc.simulator.speed_multiplier,
-                                    mult,
-                                    format!("x{}", mult),
-                                );
-                            }
-                        });
+                    // Simulation Speed Multiplier (Virtual Simulator only)
+                    ui.add_enabled_ui(!is_hw, |ui| {
+                        egui::ComboBox::from_id_salt("toolbar_sim_speed_combo")
+                            .width(42.0)
+                            .selected_text(format!("x{}", app.doc.simulator.speed_multiplier))
+                            .show_ui(ui, |ui| {
+                                for mult in [1u32, 2, 5, 10] {
+                                    ui.selectable_value(
+                                        &mut app.doc.simulator.speed_multiplier,
+                                        mult,
+                                        format!("x{}", mult),
+                                    );
+                                }
+                            })
+                            .response
+                            .on_hover_text(if is_hw {
+                                "Simulation speed (Fixed 10ms hardware scan cycle on RP2040)"
+                            } else {
+                                "Virtual simulation speed multiplier"
+                            });
+                    });
 
-                    // Digital Hardware Scan Timer Display
+                    // Digital Hardware Scan Timer / Counter Display
                     if !is_ultra_compact {
                         let lcd_frame = egui::Frame::new()
                             .fill(palette.canvas_bg)
@@ -294,16 +340,29 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                             .corner_radius(CornerRadius::same(4))
                             .inner_margin(egui::Margin::symmetric(6, 4));
 
+                        let (time_text, text_color) = if is_hw {
+                            if app.online_mode && !is_hw_conn {
+                                ("RECONN...".to_string(), palette.accent_warn)
+                            } else {
+                                let scans = app.latest_snapshot.as_ref().map_or(0, |s| s.scan_count);
+                                (
+                                    format!("{:>6} scans", scans),
+                                    if is_running { palette.accent_ok } else { palette.accent_heading },
+                                )
+                            }
+                        } else {
+                            (
+                                app.doc.simulator.formatted_sim_time(),
+                                if is_running { palette.accent_ok } else { palette.accent_heading },
+                            )
+                        };
+
                         lcd_frame.show(ui, |ui| {
                             ui.label(
-                                RichText::new(app.doc.simulator.formatted_sim_time())
+                                RichText::new(time_text)
                                     .monospace()
                                     .size(11.5)
-                                    .color(if is_running {
-                                        palette.accent_ok
-                                    } else {
-                                        palette.accent_heading
-                                    }),
+                                    .color(text_color),
                             );
                         });
                     }
@@ -345,24 +404,31 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     toolbar_divider(ui, palette);
 
                     // Target selector: Hardware (RP2040) vs Local Simulator
-                    let cur_target_label = if app.online_target_hw { "🔌 HW" } else { "💻 Sim" };
+                    let cur_target_label = if is_compact {
+                        if app.online_target_hw { "🔌 HW" } else { "💻 Sim" }
+                    } else {
+                        if app.online_target_hw { "🔌 RP2040" } else { "💻 Simulator" }
+                    };
+                    let combo_w = if is_compact { 68.0 } else { 96.0 };
                     egui::ComboBox::from_id_salt("toolbar_online_target_combo")
-                        .width(if is_compact { 64.0 } else { 74.0 })
+                        .width(combo_w)
                         .selected_text(cur_target_label)
                         .show_ui(ui, |ui| {
                             if ui
-                                .selectable_label(app.online_target_hw, "🔌 Hardware (USB CDC)")
-                                .on_hover_text("Monitor physical RP2040 Micro-VM over USB CDC Serial")
+                                .selectable_label(app.online_target_hw, "🔌 Hardware (RP2040 USB)")
+                                .on_hover_text("Monitor & control physical RP2040 Micro-VM over USB CDC Serial")
                                 .clicked()
                             {
                                 app.set_online_target_hw(true);
+                                ui.close();
                             }
                             if ui
                                 .selectable_label(!app.online_target_hw, "💻 Virtual Simulator")
-                                .on_hover_text("Monitor internal local PLC software simulation engine")
+                                .on_hover_text("Monitor & control internal local PLC software simulation engine")
                                 .clicked()
                             {
                                 app.set_online_target_hw(false);
+                                ui.close();
                             }
                         });
 

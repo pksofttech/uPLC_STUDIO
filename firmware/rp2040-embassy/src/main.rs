@@ -29,7 +29,7 @@ use embassy_usb::class::cdc_acm::{CdcAcmClass, State as CdcAcmState};
 use embassy_usb::{Builder as UsbBuilder, Config as UsbConfig, UsbDevice};
 use static_cell::StaticCell;
 use uplc_vm::{
-    MicroVm, CMD_DOWNLOAD_PROGRAM, CMD_MONITOR_STATUS, CMD_RUN_STOP, CMD_UPLOAD_PROGRAM,
+    MicroVm, CMD_DOWNLOAD_PROGRAM, CMD_MONITOR_STATUS, CMD_RUN_STOP, CMD_STEP, CMD_UPLOAD_PROGRAM,
     MAX_INSTRUCTIONS, PACKET_SOF,
 };
 use panic_halt as _;
@@ -265,6 +265,11 @@ async fn usb_cdc_comm_task(mut class: CdcAcmClass<'static, UsbDriver<'static, US
                                         offset += chunk;
                                     }
                                 }
+                            }
+                            Ok(CMD_STEP) => {
+                                PLC_HAS_ERROR.store(false, Ordering::Relaxed);
+                                info!("USB-CDC CMD 0x05: Executed Single Scan Step!");
+                                let _ = class.write_packet(&[PACKET_SOF, 0x85, 0x00]).await;
                             }
                             Err(e) => {
                                 info!("USB-CDC Packet Error: {}", e);

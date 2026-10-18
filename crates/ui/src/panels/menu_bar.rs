@@ -244,21 +244,45 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 ui.close();
             }
             ui.separator();
-            let sim_label = if app.doc.simulator.is_running() {
+            let is_hw = app.online_target_hw;
+            let is_running = if is_hw {
+                app.online_mode && app.plc_remote_running
+            } else {
+                app.doc.simulator.is_running()
+            };
+            let sim_label = if is_hw {
+                if is_running {
+                    "■ Stop PLC Execution (F5)"
+                } else if app.online_mode {
+                    "▶ Start / RUN PLC (F5)"
+                } else {
+                    "▶ Connect & RUN PLC (F5)"
+                }
+            } else if is_running {
                 "■ Stop Simulation (F5)"
             } else {
                 "▶ Start Simulation (F5)"
             };
             if ui.button(sim_label).clicked() {
-                app.doc.toggle_simulation();
+                app.toggle_run_mode();
                 ui.close();
             }
-            if ui.button("⏭ Single Scan Step (F6)").clicked() {
-                app.doc.single_step_simulation(app.doc.simulator.cycle_time_ms);
+            let step_label = if is_hw {
+                "⏭ Single Scan Step PLC (F6)"
+            } else {
+                "⏭ Single Scan Step (F6)"
+            };
+            if ui.button(step_label).clicked() {
+                app.single_step_mode();
                 ui.close();
             }
-            if ui.button("↺ Reset Simulation (Shift+F5)").clicked() {
-                app.doc.reset_simulation();
+            let reset_label = if is_hw {
+                "↺ Reset / Halt PLC (Shift+F5)"
+            } else {
+                "↺ Reset Simulation (Shift+F5)"
+            };
+            if ui.button(reset_label).clicked() {
+                app.reset_run_mode();
                 ui.close();
             }
             ui.separator();

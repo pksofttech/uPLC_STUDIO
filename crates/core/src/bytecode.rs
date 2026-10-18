@@ -18,6 +18,8 @@ pub enum PlcSerialCommand {
     MonitorStatus = 0x03,
     /// 0x04: Upload / Read Bytecode Program from PLC
     UploadProgram = 0x04,
+    /// 0x05: Execute Single Scan Step on PLC
+    StepPlc = 0x05,
     /// 0x02 (Payload = 0x00): Stop / HALT PLC Scan Execution & Safe Output Shutdown
     StopPlc = 0x12,
 }
@@ -520,6 +522,7 @@ impl BytecodeProgram {
             PlcSerialCommand::StopPlc => (0x02u8, vec![0x00u8]),
             PlcSerialCommand::MonitorStatus => (0x03u8, Vec::new()),
             PlcSerialCommand::UploadProgram => (0x04u8, Vec::new()),
+            PlcSerialCommand::StepPlc => (0x05u8, Vec::new()),
         };
         let len = (payload.len() as u16).to_le_bytes();
         let mut packet = Vec::with_capacity(5 + payload.len());
