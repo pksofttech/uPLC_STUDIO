@@ -1594,4 +1594,99 @@ fn test_online_monitoring_code_mismatch_suppresses_conduction() {
     assert!(!doc.program.rungs[0].elements[1].is_done, "Coil done flag should be cleared");
 }
 
+#[test]
+fn test_document_force_io_and_write_registers() {
+    let mut doc = Document::default();
+    // Program: LD %IX0.0; ST %QX0.0
+    let il = "LD %IX0.0\nST %QX0.0\n";
+    doc.program = IlParser::parse(il).expect("Parse IL failed");
+
+    // Start simulation
+    doc.simulator.start(&mut doc.program);
+
+    // Initial state: X0 is false -> Y0 is false
+    assert!(!doc.simulator.get_var_value("%QX0.0"));
+    assert!(!doc.simulator.get_var_value("%IX0.0"));
+
+    // 1. Force %IX0.0 ON (addr 0x00)
+    doc.force_bit(0, true);
+    assert_eq!(doc.is_bit_forced(0), Some(true));
+    doc.simulator.step_scan(&mut doc.program, 10);
+    assert!(doc.simulator.get_var_value("%QX0.0"), "Y0 should be ON when X0 is forced ON");
+
+    // 2. Force %QX0.0 OFF (addr 0x20)
+    doc.force_bit(0x20, false);
+    assert_eq!(doc.is_bit_forced(0x20), Some(false));
+    doc.simulator.step_scan(&mut doc.program, 10);
+    assert!(!doc.simulator.get_var_value("%QX0.0"), "Y0 should be OFF when forced OFF");
+
+    // 3. Write Word Register %MW5 = 12345
+    doc.write_word_register(5, 12345);
+    assert_eq!(doc.simulator.registers.get("%MW5").copied(), Some(12345));
+
+    // 4. Unforce %QX0.0
+    doc.unforce_bit(0x20);
+    assert_eq!(doc.is_bit_forced(0x20), None);
+    doc.simulator.step_scan(&mut doc.program, 10);
+    assert!(doc.simulator.get_var_value("%QX0.0"), "Y0 should be ON again after unforcing");
+
+    // 5. Clear all forces
+    doc.clear_all_forces();
+    assert_eq!(doc.is_bit_forced(0), None);
+}
+
+#[test]
+fn test_special_system_markers_and_registers() {
+    use my_canvas_core::bytecode::{BytecodeCompiler, MemoryRegion};
+
+    // 1. Verify Compiler parses %SM0..%SM31, M8000..M8031, %SD0..%SD31, D8000..D8031
+    let (addr, canon, region) = BytecodeCompiler::parse_direct_address("%SM0", false).unwrap();
+    assert_eq!(addr, 0xA0);
+    assert_eq!(canon, "SM0");
+    assert_eq!(region, MemoryRegion::InternalRelayM);
+
+    let (addr, _, _) = BytecodeCompiler::parse_direct_address("M8000", false).unwrap();
+    assert_eq!(addr, 0xA0);
+
+    let (addr, canon, _) = BytecodeCompiler::parse_direct_address("%SM2", false).unwrap();
+    assert_eq!(addr, 0xA2);
+    assert_eq!(canon, "SM2");
+
+    let (addr, canon, region) = BytecodeCompiler::parse_direct_address("%SD0", true).unwrap();
+    assert_eq!(addr, 0xA0);
+    assert_eq!(canon, "SD0");
+    assert_eq!(region, MemoryRegion::DataRegisterD);
+
+    let (addr, _, _) = BytecodeCompiler::parse_direct_address("D8000", true).unwrap();
+    assert_eq!(addr, 0xA0);
+
+    // 2. Ladder Logic:
+    // Rung 1: LD %SM0 -> ST %QX0.0 (Always ON)
+    // Rung 2: LD %SM2 -> ST %QX0.1 (First scan pulse only)
+    let il = "LD %SM0\nST %QX0.0\nLD %SM2\nST %QX0.1\n";
+    let mut doc = Document::default();
+    doc.program = IlParser::parse(il).expect("Parse IL failed");
+
+    // Scan cycle 1: First scan
+    doc.simulator.step_scan(&mut doc.program, 10);
+    assert!(doc.simulator.get_var_value("%SM0"), "%SM0 must be Always ON");
+    assert!(doc.simulator.get_var_value("M8000"), "M8000 must alias %SM0");
+    assert!(doc.simulator.get_var_value("%SM2"), "%SM2 must be true on First Scan");
+    assert!(doc.simulator.get_var_value("%QX0.0"), "Y0 must be energised by %SM0");
+    assert!(doc.simulator.get_var_value("%QX0.1"), "Y1 must be energised by %SM2 on first scan");
+
+    // Special registers on Scan 1
+    assert_eq!(doc.simulator.registers.get("%SD0").copied(), Some(100)); // Watchdog preset
+    assert_eq!(doc.simulator.registers.get("%SD4").copied(), Some(1));   // Scan count = 1
+
+    // Scan cycle 2: Second scan
+    doc.simulator.step_scan(&mut doc.program, 10);
+    assert!(doc.simulator.get_var_value("%SM0"), "%SM0 remains Always ON");
+    assert!(!doc.simulator.get_var_value("%SM2"), "%SM2 must be false after first scan");
+    assert!(doc.simulator.get_var_value("%QX0.0"), "Y0 remains ON");
+    assert!(!doc.simulator.get_var_value("%QX0.1"), "Y1 must turn OFF after first scan");
+    assert_eq!(doc.simulator.registers.get("%SD4").copied(), Some(2));   // Scan count = 2
+}
+
+
 

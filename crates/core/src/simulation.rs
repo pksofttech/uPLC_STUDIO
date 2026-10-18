@@ -37,6 +37,11 @@ fn get_iec_channel_info(name: &str) -> Option<(char, usize)> {
             } else if let Ok(idx) = num.parse::<usize>() {
                 return Some(('M', idx));
             }
+        } else if remainder.starts_with("SM") {
+            let num = remainder[2..].trim();
+            if let Ok(idx) = num.parse::<usize>() {
+                return Some(('M', 96 + idx.min(31)));
+            }
         }
     }
 
@@ -54,10 +59,20 @@ fn get_iec_channel_info(name: &str) -> Option<(char, usize)> {
         }
     }
 
-    // Check legacy M0..M99 or R0..R99
+    // Check legacy M0..M99 or R0..R99 or M8000..M8031
     if (s.starts_with('M') || s.starts_with('R')) && s.len() > 1 && s[1..].chars().all(|c| c.is_ascii_digit()) {
         if let Ok(idx) = s[1..].parse::<usize>() {
+            if (8000..=8031).contains(&idx) {
+                return Some(('M', 96 + (idx - 8000)));
+            }
             return Some(('M', idx));
+        }
+    }
+
+    // Check SM0..SM31
+    if s.starts_with("SM") && s.len() > 2 && s[2..].chars().all(|c| c.is_ascii_digit()) {
+        if let Ok(idx) = s[2..].parse::<usize>() {
+            return Some(('M', 96 + idx.min(31)));
         }
     }
 
@@ -98,6 +113,8 @@ pub struct PlcSimulator {
     pub registers: HashMap<String, i32>,
     // Edge detection states keyed by element ID
     pub edge_states: HashMap<u64, bool>,
+    // Forced bit states: address (u8) -> forced bool value (Force ON / Force OFF)
+    pub forced_bits: HashMap<u8, bool>,
 }
 
 impl Default for PlcSimulator {
@@ -121,7 +138,7 @@ impl Default for PlcSimulator {
         }
 
         let mut markers = HashMap::new();
-        for i in 0..32 {
+        for i in 0..96 {
             let byte = i / 8;
             let bit = i % 8;
             markers.insert(format!("M{}", i), false);
@@ -130,14 +147,28 @@ impl Default for PlcSimulator {
             markers.insert(format!("R{:02}", i), false);
             markers.insert(format!("%MX{}.{}", byte, bit), false);
         }
+        for i in 0..32 {
+            let val = i == 0; // %SM0 is always ON by default
+            markers.insert(format!("%SM{}", i), val);
+            markers.insert(format!("SM{}", i), val);
+            markers.insert(format!("M{}", 96 + i), val);
+            markers.insert(format!("M{}", 8000 + i), val);
+        }
 
         let mut registers = HashMap::new();
-        for i in 0..16 {
+        for i in 0..128 {
             registers.insert(format!("D{}", i), 0);
             registers.insert(format!("D{:02}", i), 0);
             registers.insert(format!("V{}", i), 0);
             registers.insert(format!("V{:02}", i), 0);
             registers.insert(format!("%MW{}", i), 0);
+        }
+        for i in 0..32 {
+            let val = if i == 0 { 100 } else { 0 }; // %SD0 watchdog preset 100ms
+            registers.insert(format!("%SD{}", i), val);
+            registers.insert(format!("SD{}", i), val);
+            registers.insert(format!("D{}", 128 + i), val);
+            registers.insert(format!("D{}", 8000 + i), val);
         }
 
         Self {
@@ -158,6 +189,7 @@ impl Default for PlcSimulator {
             counters: HashMap::new(),
             registers,
             edge_states: HashMap::new(),
+            forced_bits: HashMap::new(),
         }
     }
 }
@@ -165,6 +197,63 @@ impl Default for PlcSimulator {
 impl PlcSimulator {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Force a bit (Input X: 0x00..0x1F, Output Y: 0x20..0x3F, or Marker M: 0x40..0xBF) to ON/OFF
+    pub fn force_bit(&mut self, addr: u8, val: bool) {
+        self.forced_bits.insert(addr, val);
+        self.apply_forced_bit_to_memory(addr, val);
+    }
+
+    /// Release force override on a bit address
+    pub fn unforce_bit(&mut self, addr: u8) {
+        self.forced_bits.remove(&addr);
+    }
+
+    /// Release all active force overrides
+    pub fn clear_all_forces(&mut self) {
+        self.forced_bits.clear();
+    }
+
+    /// Check if a bit address is forced, returning Some(val) or None
+    pub fn is_bit_forced(&self, addr: u8) -> Option<bool> {
+        self.forced_bits.get(&addr).copied()
+    }
+
+    /// Apply forced value directly into simulator's inputs/outputs/markers maps
+    pub fn apply_forced_bit_to_memory(&mut self, addr: u8, val: bool) {
+        if addr < 0x20 {
+            // Inputs X0..X31 / %IX0.0..%IX3.7
+            let byte = addr / 8;
+            let bit = addr % 8;
+            self.inputs.insert(format!("X{}", addr), val);
+            self.inputs.insert(format!("X{:02}", addr), val);
+            self.inputs.insert(format!("%IX{}.{}", byte, bit), val);
+        } else if addr < 0x40 {
+            // Outputs Y0..Y31 / %QX0.0..%QX3.7
+            let idx = addr - 0x20;
+            let byte = idx / 8;
+            let bit = idx % 8;
+            self.outputs.insert(format!("Y{}", idx), val);
+            self.outputs.insert(format!("Y{:02}", idx), val);
+            self.outputs.insert(format!("%QX{}.{}", byte, bit), val);
+        } else if addr < 0xC0 {
+            // Markers M0..M127 / %MX0.0..%MX15.7
+            let idx = addr - 0x40;
+            let byte = idx / 8;
+            let bit = idx % 8;
+            self.markers.insert(format!("M{}", idx), val);
+            self.markers.insert(format!("M{:02}", idx), val);
+            self.markers.insert(format!("R{}", idx), val);
+            self.markers.insert(format!("R{:02}", idx), val);
+            self.markers.insert(format!("%MX{}.{}", byte, bit), val);
+            if idx >= 96 {
+                let sm_idx = idx - 96;
+                self.markers.insert(format!("%SM{}", sm_idx), val);
+                self.markers.insert(format!("SM{}", sm_idx), val);
+                self.markers.insert(format!("M{}", 8000 + sm_idx as u16), val);
+            }
+        }
     }
 
     #[inline]
@@ -267,6 +356,12 @@ impl PlcSimulator {
                     if let Some(&v) = self.markers.get(&format!("%MX{}.{}", byte, bit)) {
                         return v;
                     }
+                    if idx >= 96 {
+                        let sm_idx = idx - 96;
+                        if let Some(&v) = self.markers.get(&format!("%SM{}", sm_idx)) {
+                            return v;
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -299,6 +394,12 @@ impl PlcSimulator {
                     self.markers.insert(format!("R{}", idx), val);
                     self.markers.insert(format!("R{:02}", idx), val);
                     self.markers.insert(format!("%MX{}.{}", byte, bit), val);
+                    if idx >= 96 {
+                        let sm_idx = idx - 96;
+                        self.markers.insert(format!("%SM{}", sm_idx), val);
+                        self.markers.insert(format!("SM{}", sm_idx), val);
+                        self.markers.insert(format!("M{}", 8000 + sm_idx), val);
+                    }
                     self.markers.insert(upper, val);
                 }
                 _ => {}
@@ -413,6 +514,14 @@ impl PlcSimulator {
         for val in self.registers.values_mut() {
             *val = 0;
         }
+        self.markers.insert("%SM0".to_string(), true);
+        self.markers.insert("SM0".to_string(), true);
+        self.markers.insert("M8000".to_string(), true);
+        self.markers.insert("M96".to_string(), true);
+        self.registers.insert("%SD0".to_string(), 100);
+        self.registers.insert("SD0".to_string(), 100);
+        self.registers.insert("D8000".to_string(), 100);
+        self.registers.insert("D128".to_string(), 100);
         self.timers.clear();
         self.counters.clear();
         self.edge_states.clear();
@@ -436,6 +545,68 @@ impl PlcSimulator {
         let scaled_dt = dt_ms.saturating_mul(self.speed_multiplier.max(1));
         self.scan_count += 1;
         self.simulation_time_ms += scaled_dt as u64;
+
+        // Update Special System Markers (%SM / M8000..)
+        let sm0_always_on = true;
+        let sm1_always_off = false;
+        let sm2_first_scan = self.scan_count <= 1;
+        let sm10_clock_10ms = (self.simulation_time_ms % 20) < 10;
+        let sm11_clock_100ms = (self.simulation_time_ms % 200) < 100;
+        let sm12_clock_1s = (self.simulation_time_ms % 2000) < 1000;
+        let sm13_clock_1min = (self.simulation_time_ms % 120_000) < 60_000;
+        let sm20_error = false;
+        let sm21_overrun = false;
+
+        let sm_values: [(usize, usize, bool); 9] = [
+            (0, 8000, sm0_always_on),
+            (1, 8001, sm1_always_off),
+            (2, 8002, sm2_first_scan),
+            (10, 8011, sm10_clock_10ms),
+            (11, 8012, sm11_clock_100ms),
+            (12, 8013, sm12_clock_1s),
+            (13, 8014, sm13_clock_1min),
+            (20, 8004, sm20_error),
+            (21, 8020, sm21_overrun),
+        ];
+
+        for (sm_idx, m_legacy, val) in sm_values {
+            let m_addr = 96 + sm_idx;
+            self.markers.insert(format!("%SM{}", sm_idx), val);
+            self.markers.insert(format!("SM{}", sm_idx), val);
+            self.markers.insert(format!("M{}", m_legacy), val);
+            self.markers.insert(format!("M{}", m_addr), val);
+        }
+
+        // Update Special System Registers (%SD / D8000..)
+        let scan_us = scaled_dt.saturating_mul(1000) as i32;
+        let sd_values: [(usize, usize, usize, i32); 6] = [
+            (0, 8000, 128, 100),                                         // Watchdog preset (100 ms)
+            (1, 8010, 129, scan_us),                                     // Current scan time (us)
+            (2, 8011, 130, scan_us),                                     // Min scan time (us)
+            (3, 8012, 131, scan_us),                                     // Max scan time (us)
+            (4, 8004, 132, (self.scan_count & 0xFFFF) as i32),           // Scan count low
+            (5, 8005, 133, ((self.scan_count >> 16) & 0xFFFF) as i32),  // Scan count high
+        ];
+
+        for (sd_idx, d_legacy, d_addr, val) in sd_values {
+            self.registers.insert(format!("%SD{}", sd_idx), val);
+            self.registers.insert(format!("SD{}", sd_idx), val);
+            self.registers.insert(format!("D{}", d_legacy), val);
+            self.registers.insert(format!("D{}", d_addr), val);
+        }
+
+        // Re-assert forced inputs before scan cycle
+        if !self.forced_bits.is_empty() {
+            let in_forces: Vec<(u8, bool)> = self
+                .forced_bits
+                .iter()
+                .filter(|(&a, _)| a < 0x20)
+                .map(|(&a, &v)| (a, v))
+                .collect();
+            for (addr, val) in in_forces {
+                self.apply_forced_bit_to_memory(addr, val);
+            }
+        }
 
         let mut jump_target: Option<String> = None;
         let mut rung_idx = 0;
@@ -472,6 +643,19 @@ impl PlcSimulator {
 
             rung.is_energized = power_flow;
             rung_idx += 1;
+        }
+
+        // Re-assert forced outputs and markers after ladder logic scan
+        if !self.forced_bits.is_empty() {
+            let out_forces: Vec<(u8, bool)> = self
+                .forced_bits
+                .iter()
+                .filter(|(&a, _)| a >= 0x20)
+                .map(|(&a, &v)| (a, v))
+                .collect();
+            for (addr, val) in out_forces {
+                self.apply_forced_bit_to_memory(addr, val);
+            }
         }
     }
 
@@ -768,10 +952,16 @@ impl PlcSimulator {
                 bit_mem[0x20 + i] = 1;
             }
         }
-        // Internal Markers 0x40..0x5F
-        for i in 0..32 {
+        // Internal Markers 0x40..0x9F (M0..M95)
+        for i in 0..96 {
             if *self.markers.get(&format!("M{}", i)).unwrap_or(&false) {
                 bit_mem[0x40 + i] = 1;
+            }
+        }
+        // Special System Markers 0xA0..0xBF (%SM0..%SM31)
+        for i in 0..32 {
+            if *self.markers.get(&format!("%SM{}", i)).or_else(|| self.markers.get(&format!("M{}", 96 + i))).unwrap_or(&false) {
+                bit_mem[0xA0 + i] = 1;
             }
         }
         // Timers 0xC0..0xCF
@@ -839,8 +1029,8 @@ impl PlcSimulator {
             self.outputs.insert(format!("%QX{}.{}", byte, bit), val);
         }
 
-        // 3. Internal Relays / Markers: M0..M31 / %MX0.0..%MX3.7
-        for i in 0..32 {
+        // 3. Internal Relays / Markers: M0..M95 / %MX0.0..%MX11.7
+        for i in 0..96 {
             let byte = i / 8;
             let bit = i % 8;
             let val = snapshot.bit_mem[0x40 + i] != 0;
@@ -849,6 +1039,15 @@ impl PlcSimulator {
             self.markers.insert(format!("R{}", i), val);
             self.markers.insert(format!("R{:02}", i), val);
             self.markers.insert(format!("%MX{}.{}", byte, bit), val);
+        }
+
+        // 3b. Special System Markers: %SM0..%SM31 / M8000..M8031 (0xA0..0xBF)
+        for i in 0..32 {
+            let val = snapshot.bit_mem[0xA0 + i] != 0;
+            self.markers.insert(format!("%SM{}", i), val);
+            self.markers.insert(format!("SM{}", i), val);
+            self.markers.insert(format!("M{}", 96 + i), val);
+            self.markers.insert(format!("M{}", 8000 + i), val);
         }
 
         // 4. Timers: T0..T15
@@ -875,6 +1074,14 @@ impl PlcSimulator {
             self.registers.insert(format!("V{}", i), val);
             self.registers.insert(format!("V{:02}", i), val);
             self.registers.insert(format!("%MW{}", i), val);
+        }
+
+        // 7. Re-apply any local force overrides (in case snapshot packet was in flight before force command arrived)
+        if !self.forced_bits.is_empty() {
+            let forces: Vec<(u8, bool)> = self.forced_bits.iter().map(|(&a, &v)| (a, v)).collect();
+            for (addr, val) in forces {
+                self.apply_forced_bit_to_memory(addr, val);
+            }
         }
     }
 

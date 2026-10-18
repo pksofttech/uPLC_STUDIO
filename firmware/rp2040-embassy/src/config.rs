@@ -17,8 +17,8 @@
 //! X7 = -
 //! Y0 = GP15
 //! Y1 = GP14
-//! Y2 = GP6
-//! Y3 = GP7
+//! Y2 = GP7
+//! Y3 = GP6
 //! Y4 = GP2
 //! Y5 = GP3
 //! Y6 = -
@@ -141,13 +141,13 @@ macro_rules! configure_hardware_io {
                     embassy_rp::gpio::Level::Low,
                 )), // Y1: GP14
                 Some(embassy_rp::gpio::Output::new(
-                    $p.PIN_6,
-                    embassy_rp::gpio::Level::Low,
-                )), // Y2: GP6
-                Some(embassy_rp::gpio::Output::new(
                     $p.PIN_7,
                     embassy_rp::gpio::Level::Low,
                 )), // Y3: GP7
+                Some(embassy_rp::gpio::Output::new(
+                    $p.PIN_6,
+                    embassy_rp::gpio::Level::Low,
+                )), // Y2: GP6
                 Some(embassy_rp::gpio::Output::new(
                     $p.PIN_2,
                     embassy_rp::gpio::Level::Low,
@@ -181,3 +181,54 @@ pub fn configure_hardware_io_degraded(
         status_led: Output::new(led_pin, Level::Low),
     }
 }
+
+// =============================================================================
+// 6. Memory Partitioning & Latch Retention Area Configuration
+// =============================================================================
+
+#[allow(dead_code)]
+pub const LATCH_BIT_START_ADDR: u8 = 0x80;
+#[allow(dead_code)]
+pub const LATCH_BIT_COUNT: u8 = 32;
+
+#[allow(dead_code)]
+pub const LATCH_WORD_START_ADDR: u8 = 0x80;
+#[allow(dead_code)]
+pub const LATCH_WORD_COUNT: u8 = 32;
+
+// =============================================================================
+// 7. Special System Markers Configuration (%SM / M8000 Series)
+// =============================================================================
+
+/// Enable/disable automatic update of Special System Markers in Firmware scan loop
+pub const ENABLE_SPECIAL_MARKERS: bool = true;
+
+/// Special Bit Addresses (Mapped in bit_mem[0xA0..0xBF] / M96..M127)
+pub const SM_ALWAYS_ON: u8 = 0xA0; // %SM0  (M96 / M8000) : Always ON (True) while PLC is in RUN
+pub const SM_ALWAYS_OFF: u8 = 0xA1; // %SM1  (M97 / M8001) : Always OFF (False)
+pub const SM_FIRST_SCAN: u8 = 0xA2; // %SM2  (M98 / M8002) : ON for first scan only after RUN/Boot
+pub const SM_CLOCK_10MS: u8 = 0xAA; // %SM10 (M106 / M8011): 10ms clock pulse (5ms ON / 5ms OFF, 50 Hz)
+pub const SM_CLOCK_100MS: u8 = 0xAB; // %SM11 (M107 / M8012): 100ms clock pulse (50ms ON / 50ms OFF, 5 Hz)
+pub const SM_CLOCK_1S: u8 = 0xAC; // %SM12 (M108 / M8013): 1.0s clock pulse (500ms ON / 500ms OFF, 1 Hz)
+pub const SM_CLOCK_1MIN: u8 = 0xAD; // %SM13 (M109 / M8014): 1-minute pulse
+pub const SM_SYSTEM_ERROR: u8 = 0xB4; // %SM20 (M116 / M8004): General PLC / Hardware Error flag
+pub const SM_SCAN_OVERRUN: u8 = 0xB5; // %SM21 (M117 / M8020): Scan Time Overrun flag (> Watchdog preset)
+
+// =============================================================================
+// 8. Special System Registers Configuration (%SD / D8000 Series)
+// =============================================================================
+
+/// Enable/disable automatic measurement and recording of diagnostic registers
+pub const ENABLE_SPECIAL_REGISTERS: bool = true;
+
+/// Special Word Addresses (Mapped in word_mem[0xA0..0xBF] / D128..D159)
+pub const SD_WATCHDOG_PRESET: u8 = 0xA0; // %SD0  (D128 / D8000): Watchdog Preset in ms (Default 100ms)
+pub const SD_CURRENT_SCAN_TIME_US: u8 = 0xA1; // %SD1  (D129 / D8010): Current scan execution time (microseconds)
+pub const SD_MIN_SCAN_TIME_US: u8 = 0xA2; // %SD2  (D130 / D8011): Minimum scan execution time recorded (μs)
+pub const SD_MAX_SCAN_TIME_US: u8 = 0xA3; // %SD3  (D131 / D8012): Maximum scan execution time recorded (μs)
+pub const SD_SCAN_COUNT_LOW: u8 = 0xA4; // %SD4  (D132): Scan counter lower 32-bit word
+#[allow(dead_code)]
+pub const SD_SCAN_COUNT_HIGH: u8 = 0xA5; // %SD5  (D133): Scan counter upper 32-bit word
+
+/// Watchdog timeout limit in milliseconds. Scans exceeding this trip the SM_SCAN_OVERRUN flag.
+pub const DEFAULT_WATCHDOG_TIMEOUT_MS: u32 = 100;

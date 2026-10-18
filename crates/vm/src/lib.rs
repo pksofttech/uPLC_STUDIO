@@ -33,6 +33,10 @@ pub const CMD_STATUS_RESPONSE: u8 = 0x83;
 pub const CMD_UPLOAD_PROGRAM: u8 = 0x04;
 pub const CMD_UPLOAD_PROGRAM_RESPONSE: u8 = 0x84;
 pub const CMD_STEP: u8 = 0x05;
+pub const CMD_FORCE_IO: u8 = 0x06;
+pub const CMD_FORCE_IO_RESPONSE: u8 = 0x86;
+pub const CMD_WRITE_VALUE: u8 = 0x07;
+pub const CMD_WRITE_VALUE_RESPONSE: u8 = 0x87;
 
 /// Online Monitoring Status Packet Lengths (includes 2B prog_len + 2B prog_crc16 signature)
 pub const STATUS_SNAPSHOT_PAYLOAD_LEN: usize = 1 + 4 + 1 + 4 + 256 + 64 + 64 + 64 + 2 + 2; // 462 bytes
@@ -83,6 +87,10 @@ pub struct MicroVm {
 
     /// Unified Bit Memory (`X`, `Y`, `M`, `T-bit`, `C-bit`)
     pub bit_mem: [u8; 256],
+    /// Force Mask for Bit Memory: 1 = Forced (overridden), 0 = Normal
+    pub force_bit_mask: [u8; 256],
+    /// Forced Bit Values: 1 = Force ON, 0 = Force OFF
+    pub force_bit_val: [u8; 256],
     /// Previous scan bit state for rising/falling edge detection (`LDP`, `LDF`, `R_TRIG`, etc.)
     pub prev_bit_mem: [u8; 256],
     /// Unified Word Memory (`AI`, `AO`, `D`, `T-cv`, `C-cv`)
@@ -122,6 +130,8 @@ impl MicroVm {
             acc_bool: false,
             acc_word: 0,
             bit_mem: [0; 256],
+            force_bit_mask: [0; 256],
+            force_bit_val: [0; 256],
             prev_bit_mem: [0; 256],
             word_mem: [0; 256],
             ctu_prev: [0; 32],
@@ -138,6 +148,42 @@ impl MicroVm {
             mb_in_result: None,
             next_job_id: 0,
         }
+    }
+
+    /// Force a digital bit (Input X, Output Y, or Internal Relay M) to ON (true) or OFF (false)
+    pub fn force_bit(&mut self, addr: u8, val: bool) {
+        let idx = addr as usize;
+        self.force_bit_mask[idx] = 1;
+        self.force_bit_val[idx] = if val { 1 } else { 0 };
+        self.bit_mem[idx] = if val { 1 } else { 0 };
+    }
+
+    /// Release force on a digital bit, returning control to physical inputs or ladder logic
+    pub fn unforce_bit(&mut self, addr: u8) {
+        let idx = addr as usize;
+        self.force_bit_mask[idx] = 0;
+        self.force_bit_val[idx] = 0;
+    }
+
+    /// Release all active forces across all 256 bit memory addresses
+    pub fn clear_all_forces(&mut self) {
+        self.force_bit_mask = [0; 256];
+        self.force_bit_val = [0; 256];
+    }
+
+    /// Returns Some(true) if forced ON, Some(false) if forced OFF, or None if not forced
+    pub fn is_bit_forced(&self, addr: u8) -> Option<bool> {
+        let idx = addr as usize;
+        if self.force_bit_mask[idx] != 0 {
+            Some(self.force_bit_val[idx] != 0)
+        } else {
+            None
+        }
+    }
+
+    /// Direct write a 32-bit integer value into Word Memory (%MW / Data Register)
+    pub fn write_word(&mut self, addr: u8, val: i32) {
+        self.word_mem[addr as usize] = val;
     }
 
     /// Reset all outputs, internal relays, timers, counters, and communication jobs (Safe Shutdown)
@@ -180,14 +226,24 @@ impl MicroVm {
     #[inline]
     pub fn set_digital_input(&mut self, x_index: u8, state: bool) {
         if x_index < 32 {
-            self.bit_mem[x_index as usize] = u8::from(state);
+            let idx = x_index as usize;
+            if self.force_bit_mask[idx] != 0 {
+                self.bit_mem[idx] = self.force_bit_val[idx];
+            } else {
+                self.bit_mem[idx] = u8::from(state);
+            }
         }
     }
 
     #[inline]
     pub fn get_digital_output(&self, y_index: u8) -> bool {
         if y_index < 32 {
-            self.bit_mem[(0x20 + y_index) as usize] != 0
+            let idx = (0x20 + y_index) as usize;
+            if self.force_bit_mask[idx] != 0 {
+                self.force_bit_val[idx] != 0
+            } else {
+                self.bit_mem[idx] != 0
+            }
         } else {
             false
         }
@@ -574,6 +630,12 @@ impl MicroVm {
         }
 
         self.acc_bool = acc;
+        // Re-assert forced values for outputs and internal relays after ladder logic execution
+        for i in 0x20..256 {
+            if self.force_bit_mask[i] != 0 {
+                self.bit_mem[i] = self.force_bit_val[i];
+            }
+        }
         self.prev_bit_mem = self.bit_mem;
         self.scan_count = self.scan_count.wrapping_add(1);
     }
@@ -759,6 +821,43 @@ impl MicroVm {
                     self.running = was_running;
                 }
                 Ok(CMD_STEP)
+            }
+            CMD_FORCE_IO => {
+                // Payload: [ADDR: 1B, ACTION: 1B]
+                // ACTION: 0 = Unforce, 1 = Force ON, 2 = Force OFF, 0xFF = Clear All Forces
+                if payload.len() >= 2 {
+                    let addr = payload[0];
+                    let action = payload[1];
+                    match action {
+                        0 => self.unforce_bit(addr),
+                        1 => self.force_bit(addr, true),
+                        2 => self.force_bit(addr, false),
+                        0xFF => self.clear_all_forces(),
+                        _ => return Err("Invalid force action"),
+                    }
+                    Ok(CMD_FORCE_IO)
+                } else if payload.len() == 1 && payload[0] == 0xFF {
+                    self.clear_all_forces();
+                    Ok(CMD_FORCE_IO)
+                } else {
+                    Err("Invalid CMD_FORCE_IO payload")
+                }
+            }
+            CMD_WRITE_VALUE => {
+                // Payload: [TARGET: 1B (0=Bit, 1=Word), ADDR: 1B, VAL: 4B LE]
+                if payload.len() >= 6 {
+                    let target_type = payload[0];
+                    let addr = payload[1];
+                    let val = i32::from_le_bytes([payload[2], payload[3], payload[4], payload[5]]);
+                    if target_type == 0 {
+                        self.bit_mem[addr as usize] = if val != 0 { 1 } else { 0 };
+                    } else {
+                        self.word_mem[addr as usize] = val;
+                    }
+                    Ok(CMD_WRITE_VALUE)
+                } else {
+                    Err("Invalid CMD_WRITE_VALUE payload")
+                }
             }
             _ => Err("Unknown command code"),
         }
@@ -1070,6 +1169,55 @@ mod tests {
         assert!(!vm.mb_master[0].done);
         assert_eq!(vm.word_mem[0x20], 999);
         assert_eq!(vm.word_mem[0x21], 888);
+    }
+
+    #[test]
+    fn test_vm_force_io_and_write_value() {
+        let mut vm = MicroVm::new();
+        // Simple program: LD X0; ST Y0
+        let prog: [u8; 8] = [
+            0x01, 0x00, 0x00, 0x00, // LD X0
+            0x07, 0x20, 0x00, 0x00, // ST Y0
+        ];
+        vm.load_bytecode(&prog).unwrap();
+
+        // Normal execution: X0=0 -> Y0=0
+        vm.set_digital_input(0, false);
+        vm.step_scan(10);
+        assert!(!vm.get_digital_output(0));
+
+        // 1. Force X0 ON: even though physical input is set to false, force overrides to true
+        vm.force_bit(0, true);
+        assert_eq!(vm.is_bit_forced(0), Some(true));
+        vm.set_digital_input(0, false);
+        vm.step_scan(10);
+        assert!(vm.get_digital_output(0), "Y0 should be ON because X0 was forced ON");
+
+        // 2. Force Y0 OFF: even though ladder logic evaluates to ON, forced output overrides to false
+        vm.force_bit(0x20, false);
+        assert_eq!(vm.is_bit_forced(0x20), Some(false));
+        vm.step_scan(10);
+        assert!(!vm.get_digital_output(0), "Y0 should be OFF because Y0 was forced OFF");
+
+        // 3. Packet protocol test: Unforce Y0 via CMD_FORCE_IO packet [SOF, 0x06, 0x02, 0x00, ADDR, ACTION, CRC]
+        let mut unforce_pkt = [PACKET_SOF, CMD_FORCE_IO, 0x02, 0x00, 0x20, 0x00, 0x00];
+        unforce_pkt[6] = MicroVm::compute_crc8(&unforce_pkt[1..6]);
+        assert_eq!(vm.process_serial_packet(&unforce_pkt), Ok(CMD_FORCE_IO));
+        assert_eq!(vm.is_bit_forced(0x20), None);
+        vm.step_scan(10);
+        assert!(vm.get_digital_output(0), "Y0 should be ON again after unforcing");
+
+        // 4. CMD_WRITE_VALUE: write to %MW5 (word_mem[0x25])
+        let val: i32 = 12345;
+        let [b0, b1, b2, b3] = val.to_le_bytes();
+        let mut write_pkt = [PACKET_SOF, CMD_WRITE_VALUE, 0x06, 0x00, 1u8, 0x25, b0, b1, b2, b3, 0x00];
+        write_pkt[10] = MicroVm::compute_crc8(&write_pkt[1..10]);
+        assert_eq!(vm.process_serial_packet(&write_pkt), Ok(CMD_WRITE_VALUE));
+        assert_eq!(vm.word_mem[0x25], 12345);
+
+        // 5. Clear all forces
+        vm.clear_all_forces();
+        assert_eq!(vm.is_bit_forced(0), None);
     }
 }
 

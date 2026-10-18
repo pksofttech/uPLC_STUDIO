@@ -391,6 +391,14 @@ impl CanvasApp {
     }
 
     pub fn transmit_bytecode_to_plc(&mut self, cmd: my_canvas_core::PlcSerialCommand) {
+        self.transmit_packet_internal(cmd, None);
+    }
+
+    pub fn transmit_custom_packet_to_plc(&mut self, cmd: my_canvas_core::PlcSerialCommand, packet: Vec<u8>) {
+        self.transmit_packet_internal(cmd, Some(packet));
+    }
+
+    fn transmit_packet_internal(&mut self, cmd: my_canvas_core::PlcSerialCommand, custom_packet: Option<Vec<u8>>) {
         use std::io::{Read, Write};
         let bc = self.doc.compile_to_bytecode();
         if cmd == my_canvas_core::PlcSerialCommand::UploadProgram {
@@ -413,7 +421,7 @@ impl CanvasApp {
             return;
         }
 
-        let packet = bc.to_serial_packet(cmd);
+        let packet = custom_packet.unwrap_or_else(|| bc.to_serial_packet(cmd));
 
         // Fast-path: If Hardware Online Monitoring is active and this is a Run/Stop/Step command, route through cmd channel
         if self.online_mode && self.online_target_hw {
@@ -434,6 +442,12 @@ impl CanvasApp {
                             my_canvas_core::PlcSerialCommand::StepPlc => {
                                 self.plc_remote_running = false;
                                 self.update_plc_status = "⏭ PLC STEP Command sent to hardware".to_string();
+                            }
+                            my_canvas_core::PlcSerialCommand::ForceIo => {
+                                self.update_plc_status = "⚡ Force I/O Command sent to hardware".to_string();
+                            }
+                            my_canvas_core::PlcSerialCommand::WriteValue => {
+                                self.update_plc_status = "✍ Write Value Command sent to hardware".to_string();
                             }
                             _ => {}
                         }
@@ -494,11 +508,12 @@ impl CanvasApp {
                     match cmd {
                         my_canvas_core::PlcSerialCommand::DownloadProgram => {
                             self.plc_remote_running = true;
+                            let (_, prog_crc) = bc.program_signature();
                             self.update_plc_status = format!(
-                                "✔ Uploaded {} Bytes ({} instructions, CRC8=0x{:02X}) to {} @ {} baud — PLC is RUNNING",
+                                "✔ Uploaded {} Bytes ({} inst, CRC16=0x{:04X}) to {} @ {} baud — Burned to Flash (0x1FE000) & PLC RUNNING",
                                 packet.len(),
                                 bc.instructions.len(),
-                                packet.last().copied().unwrap_or(0),
+                                prog_crc,
                                 port_path,
                                 self.baud_rate
                             );
@@ -523,6 +538,12 @@ impl CanvasApp {
                                 "⏭ PLC STEP Command (0x05) sent to {} — Single Scan Executed",
                                 port_path
                             );
+                        }
+                        my_canvas_core::PlcSerialCommand::ForceIo => {
+                            self.update_plc_status = format!("⚡ Force I/O Command sent to {}", port_path);
+                        }
+                        my_canvas_core::PlcSerialCommand::WriteValue => {
+                            self.update_plc_status = format!("✍ Write Value Command sent to {}", port_path);
                         }
                         my_canvas_core::PlcSerialCommand::MonitorStatus => {
                             self.update_plc_status = format!(
@@ -1156,6 +1177,47 @@ impl CanvasApp {
             self.doc.clear_conduction();
         } else {
             self.doc.reset_simulation();
+        }
+    }
+
+    /// Force a digital bit (Input X, Output Y, or Marker M) to ON (true) or OFF (false)
+    pub fn force_bit(&mut self, addr: u8, val: bool) {
+        self.doc.force_bit(addr, val);
+        if self.online_target_hw {
+            let packet = my_canvas_core::BytecodeProgram::create_force_packet(addr, if val { 1 } else { 2 });
+            self.transmit_custom_packet_to_plc(my_canvas_core::PlcSerialCommand::ForceIo, packet);
+        }
+    }
+
+    /// Release force override on a digital bit, returning control to physical inputs or ladder logic
+    pub fn unforce_bit(&mut self, addr: u8) {
+        self.doc.unforce_bit(addr);
+        if self.online_target_hw {
+            let packet = my_canvas_core::BytecodeProgram::create_force_packet(addr, 0);
+            self.transmit_custom_packet_to_plc(my_canvas_core::PlcSerialCommand::ForceIo, packet);
+        }
+    }
+
+    /// Release all active force overrides across all bits
+    pub fn clear_all_forces(&mut self) {
+        self.doc.clear_all_forces();
+        if self.online_target_hw {
+            let packet = my_canvas_core::BytecodeProgram::create_force_packet(0, 0xFF);
+            self.transmit_custom_packet_to_plc(my_canvas_core::PlcSerialCommand::ForceIo, packet);
+        }
+    }
+
+    /// Check if a bit address is forced
+    pub fn is_bit_forced(&self, addr: u8) -> Option<bool> {
+        self.doc.is_bit_forced(addr)
+    }
+
+    /// Direct write a 32-bit integer value into a Word Memory register (%MW / Data Register)
+    pub fn write_word_register(&mut self, addr: u8, val: i32) {
+        self.doc.write_word_register(addr, val);
+        if self.online_target_hw {
+            let packet = my_canvas_core::BytecodeProgram::create_write_value_packet(true, addr, val);
+            self.transmit_custom_packet_to_plc(my_canvas_core::PlcSerialCommand::WriteValue, packet);
         }
     }
 
@@ -2582,6 +2644,22 @@ impl eframe::App for CanvasApp {
                                     .color(banner_fg),
                             );
                         });
+
+                    ui.add_space(3.0);
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new("💾 Flash Retention:")
+                                .strong()
+                                .size(11.0)
+                                .color(palette.accent_heading),
+                        );
+                        ui.label(
+                            RichText::new("Non-Volatile Flash Persistence Active (Sector 0x1FE000 with CRC16 Boot Integrity)")
+                                .size(11.0)
+                                .color(palette.accent_ok),
+                        );
+                    });
+                    ui.add_space(2.0);
 
                     // 6. Primary Bottom Action Bar (Unified PLC Controls)
                     ui.horizontal(|ui| {

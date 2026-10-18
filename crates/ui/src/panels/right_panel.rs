@@ -1086,11 +1086,49 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette) {
     let mut toggle_port_var: Option<String> = None;
     let mut add_input_port = false;
     let mut add_output_port = false;
+    let mut clear_all_forces = false;
+    let mut force_action: Option<(u8, Option<bool>)> = None;
+    let mut write_word_val: Option<(u8, i32)> = None;
 
     egui::ScrollArea::vertical()
         .id_salt("io_ports_monitor_scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
+            // Active Forces Warning Banner
+            if !app.doc.simulator.forced_bits.is_empty() {
+                egui::Frame::new()
+                    .fill(Color32::from_rgba_unmultiplied(230, 126, 34, 30))
+                    .stroke(Stroke::new(1.0, Color32::from_rgb(230, 126, 34)))
+                    .corner_radius(CornerRadius::same(6))
+                    .inner_margin(egui::Margin::symmetric(8, 6))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!(
+                                    "⚡ ACTIVE FORCES: {} override(s)",
+                                    app.doc.simulator.forced_bits.len()
+                                ))
+                                .strong()
+                                .size(11.0)
+                                .color(Color32::from_rgb(230, 126, 34)),
+                            );
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                let rel_btn = egui::Button::new(
+                                    RichText::new("✖ Release All Forces")
+                                        .size(10.5)
+                                        .strong()
+                                        .color(Color32::WHITE),
+                                )
+                                .fill(Color32::from_rgb(192, 57, 43));
+                                if ui.add(rel_btn).clicked() {
+                                    clear_all_forces = true;
+                                }
+                            });
+                        });
+                    });
+                ui.add_space(3.0);
+            }
+
             // Header: Hardware & Port Summary
             ui.group(|ui| {
                 ui.set_width(ui.available_width());
@@ -1131,10 +1169,11 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette) {
 
                 egui::Grid::new("input_ports_grid")
                     .striped(true)
-                    .num_columns(3)
-                    .spacing([6.0, 6.0])
+                    .num_columns(4)
+                    .spacing([5.0, 5.0])
                     .show(ui, |ui| {
                         ui.label(RichText::new("STATUS").strong().small().color(palette.rung_text_dim));
+                        ui.label(RichText::new("FORCE").strong().small().color(palette.rung_text_dim));
                         ui.label(RichText::new("IEC").strong().small().color(palette.rung_text_dim));
                         ui.label(RichText::new("SYMBOL").strong().small().color(palette.rung_text_dim));
                         ui.end_row();
@@ -1144,6 +1183,8 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette) {
                                 io.iec_address = io.iec_address(idx);
                             }
                             let iec_addr = io.iec_address.clone();
+                            let vm_addr = idx as u8;
+                            let is_forced = app.doc.simulator.is_bit_forced(vm_addr);
                             let state = app.doc.simulator.get_var_value(&iec_addr);
                             let btn_bg = if state {
                                 Color32::from_rgb(28, 140, 62)
@@ -1163,7 +1204,7 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette) {
                                     .size(11.0)
                                     .color(btn_fg),
                             )
-                            .min_size(Vec2::new(48.0, 20.0))
+                            .min_size(Vec2::new(44.0, 20.0))
                             .fill(btn_bg);
 
                             if ui
@@ -1174,13 +1215,45 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette) {
                                 toggle_port_var = Some(iec_addr.clone());
                             }
 
+                            // FORCE Column
+                            if let Some(forced_val) = is_forced {
+                                let f_btn = egui::Button::new(
+                                    RichText::new(if forced_val { "⚡ F: 1" } else { "⚡ F: 0" })
+                                        .size(10.5)
+                                        .strong()
+                                        .color(Color32::WHITE),
+                                )
+                                .fill(Color32::from_rgb(211, 84, 0))
+                                .min_size(Vec2::new(42.0, 20.0));
+                                if ui
+                                    .add(f_btn)
+                                    .on_hover_text("Bit is FORCED. Click to RELEASE force override.")
+                                    .clicked()
+                                {
+                                    force_action = Some((vm_addr, None));
+                                }
+                            } else {
+                                ui.menu_button("⚡", |ui| {
+                                    if ui.button("⚡ Force ON (1)").clicked() {
+                                        force_action = Some((vm_addr, Some(true)));
+                                        ui.close();
+                                    }
+                                    if ui.button("⚡ Force OFF (0)").clicked() {
+                                        force_action = Some((vm_addr, Some(false)));
+                                        ui.close();
+                                    }
+                                })
+                                .response
+                                .on_hover_text("Force override Input ON/OFF");
+                            }
+
                             if ui
                                 .add_sized(
-                                    egui::vec2(85.0, 20.0),
+                                    egui::vec2(78.0, 20.0),
                                     egui::TextEdit::singleline(&mut io.iec_address)
                                         .font(egui::TextStyle::Monospace)
                                         .text_color(palette.accent_warn)
-                                        .desired_width(85.0),
+                                        .desired_width(78.0),
                                 )
                                 .on_hover_text(format!("IEC 61131-3 Input Address (Editable, e.g. %IX0.0, %IX1.0) | Pin: {}", io.hw_pin))
                                 .changed()
@@ -1188,7 +1261,7 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette) {
                                 app.doc.is_dirty = true;
                             }
 
-                            let sym_w = (ui.available_width() - 4.0).max(80.0);
+                            let sym_w = (ui.available_width() - 4.0).max(70.0);
                             if ui.add(egui::TextEdit::singleline(&mut io.symbol).desired_width(sym_w)).changed() {
                                 app.doc.is_dirty = true;
                             }
@@ -1222,10 +1295,11 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette) {
 
                 egui::Grid::new("output_ports_grid")
                     .striped(true)
-                    .num_columns(3)
-                    .spacing([6.0, 6.0])
+                    .num_columns(4)
+                    .spacing([5.0, 5.0])
                     .show(ui, |ui| {
                         ui.label(RichText::new("LED").strong().small().color(palette.rung_text_dim));
+                        ui.label(RichText::new("FORCE").strong().small().color(palette.rung_text_dim));
                         ui.label(RichText::new("IEC").strong().small().color(palette.rung_text_dim));
                         ui.label(RichText::new("SYMBOL").strong().small().color(palette.rung_text_dim));
                         ui.end_row();
@@ -1235,6 +1309,8 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette) {
                                 io.iec_address = io.iec_address(idx);
                             }
                             let iec_addr = io.iec_address.clone();
+                            let vm_addr = 0x20 + (idx as u8);
+                            let is_forced = app.doc.simulator.is_bit_forced(vm_addr);
                             let state = app.doc.simulator.get_var_value(&iec_addr);
                             let badge = if state { "● ON" } else { "○ OFF" };
                             let led_color = if state {
@@ -1251,13 +1327,45 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette) {
                             )
                             .on_hover_text(format!("{} [{}] (Pin {})", io.symbol, iec_addr, io.hw_pin));
 
+                            // FORCE Column
+                            if let Some(forced_val) = is_forced {
+                                let f_btn = egui::Button::new(
+                                    RichText::new(if forced_val { "⚡ F: 1" } else { "⚡ F: 0" })
+                                        .size(10.5)
+                                        .strong()
+                                        .color(Color32::WHITE),
+                                )
+                                .fill(Color32::from_rgb(211, 84, 0))
+                                .min_size(Vec2::new(42.0, 20.0));
+                                if ui
+                                    .add(f_btn)
+                                    .on_hover_text("Output is FORCED. Click to RELEASE force override.")
+                                    .clicked()
+                                {
+                                    force_action = Some((vm_addr, None));
+                                }
+                            } else {
+                                ui.menu_button("⚡", |ui| {
+                                    if ui.button("⚡ Force ON (1)").clicked() {
+                                        force_action = Some((vm_addr, Some(true)));
+                                        ui.close();
+                                    }
+                                    if ui.button("⚡ Force OFF (0)").clicked() {
+                                        force_action = Some((vm_addr, Some(false)));
+                                        ui.close();
+                                    }
+                                })
+                                .response
+                                .on_hover_text("Force override Output ON/OFF");
+                            }
+
                             if ui
                                  .add_sized(
-                                     egui::vec2(85.0, 20.0),
+                                     egui::vec2(78.0, 20.0),
                                      egui::TextEdit::singleline(&mut io.iec_address)
                                          .font(egui::TextStyle::Monospace)
                                          .text_color(palette.accent_ok)
-                                         .desired_width(85.0),
+                                         .desired_width(78.0),
                                  )
                                  .on_hover_text(format!("IEC 61131-3 Output Address (Editable, e.g. %QX0.0, %QX1.0) | Pin: {}", io.hw_pin))
                                  .changed()
@@ -1265,7 +1373,7 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette) {
                                 app.doc.is_dirty = true;
                             }
 
-                            let sym_w = (ui.available_width() - 4.0).max(80.0);
+                            let sym_w = (ui.available_width() - 4.0).max(70.0);
                             if ui.add(egui::TextEdit::singleline(&mut io.symbol).desired_width(sym_w)).changed() {
                                 app.doc.is_dirty = true;
                             }
@@ -1335,22 +1443,49 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette) {
                 ui.horizontal_wrapped(|ui| {
                     for i in 0..8 {
                         let addr = format!("%MX0.{}", i);
+                        let m_addr = 0x40 + (i as u8);
+                        let m_forced = app.doc.simulator.is_bit_forced(m_addr);
                         let m_on = app.doc.simulator.get_var_value(&addr);
-                        let col = if m_on { palette.accent_ok } else { palette.rung_text_dim };
-                        let txt = format!("M{}:{}", i, u8::from(m_on));
-                        if ui
-                            .selectable_label(m_on, RichText::new(txt).monospace().size(10.5).color(col))
-                            .on_hover_text(format!("{} (M{:02}) — Click to toggle in simulation", addr, i))
-                            .clicked()
-                        {
-                            toggle_port_var = Some(addr);
+
+                        let (col, txt) = if let Some(f_val) = m_forced {
+                            (
+                                Color32::from_rgb(230, 126, 34),
+                                format!("M{}:{}⚡F:{}", i, u8::from(m_on), if f_val { 1 } else { 0 }),
+                            )
+                        } else {
+                            (
+                                if m_on { palette.accent_ok } else { palette.rung_text_dim },
+                                format!("M{}:{}", i, u8::from(m_on)),
+                            )
+                        };
+
+                        let resp = ui.selectable_label(m_on, RichText::new(txt).monospace().size(10.5).color(col));
+                        if resp.clicked() {
+                            toggle_port_var = Some(addr.clone());
                         }
+                        resp.context_menu(|ui| {
+                            ui.label(RichText::new(format!("Marker %MX0.{} (M{})", i, i)).strong());
+                            if ui.button("⚡ Force ON (1)").clicked() {
+                                force_action = Some((m_addr, Some(true)));
+                                ui.close();
+                            }
+                            if ui.button("⚡ Force OFF (0)").clicked() {
+                                force_action = Some((m_addr, Some(false)));
+                                ui.close();
+                            }
+                            if m_forced.is_some() {
+                                if ui.button("✖ Release Force").clicked() {
+                                    force_action = Some((m_addr, None));
+                                    ui.close();
+                                }
+                            }
+                        });
                     }
                 });
 
                 ui.add_space(3.0);
 
-                // 3. Timers (T0..T3) & Counters (C0..C3)
+                // 3. Timers (T0..T3) & Counters (C0..C3) & Word Registers (%MW0..%MW3)
                 egui::Grid::new("live_tc_mw_grid")
                     .striped(true)
                     .num_columns(3)
@@ -1399,7 +1534,8 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette) {
                                 .get(&format!("%MW{}", i))
                                 .copied()
                                 .unwrap_or(0);
-                            ui.label(
+
+                            ui.menu_button(
                                 RichText::new(format!("%MW{}: {}", i, mw_val))
                                     .monospace()
                                     .size(10.5)
@@ -1408,7 +1544,21 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette) {
                                     } else {
                                         palette.text_primary
                                     }),
-                            );
+                                |ui| {
+                                    ui.label(RichText::new(format!("Direct Write to %MW{} (D{})", i, i)).strong());
+                                    let mut edit_val = mw_val;
+                                    ui.horizontal(|ui| {
+                                        ui.add(egui::DragValue::new(&mut edit_val).speed(1.0));
+                                        if ui.button("✍ Write").clicked() {
+                                            write_word_val = Some((i as u8, edit_val));
+                                            ui.close();
+                                        }
+                                    });
+                                },
+                            )
+                            .response
+                            .on_hover_text(format!("%MW{} (D{}) — Click to direct write 32-bit register value", i, i));
+
                             ui.end_row();
                         }
                     });
@@ -1476,6 +1626,19 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette) {
             is_input: false,
         });
         app.doc.is_dirty = true;
+    }
+    if clear_all_forces {
+        app.clear_all_forces();
+    }
+    if let Some((addr, maybe_val)) = force_action {
+        if let Some(val) = maybe_val {
+            app.force_bit(addr, val);
+        } else {
+            app.unforce_bit(addr);
+        }
+    }
+    if let Some((addr, val)) = write_word_val {
+        app.write_word_register(addr, val);
     }
     if let Some(var) = toggle_port_var {
         app.doc.toggle_input(&var);

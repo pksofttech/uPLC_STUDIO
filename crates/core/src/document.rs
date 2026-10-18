@@ -330,6 +330,34 @@ impl Document {
         }
     }
 
+    pub fn force_bit(&mut self, addr: u8, val: bool) {
+        self.simulator.force_bit(addr, val);
+        self.simulator.evaluate_conduction_only(&mut self.program);
+    }
+
+    pub fn unforce_bit(&mut self, addr: u8) {
+        self.simulator.unforce_bit(addr);
+        self.simulator.evaluate_conduction_only(&mut self.program);
+    }
+
+    pub fn clear_all_forces(&mut self) {
+        self.simulator.clear_all_forces();
+        self.simulator.evaluate_conduction_only(&mut self.program);
+    }
+
+    pub fn is_bit_forced(&self, addr: u8) -> Option<bool> {
+        self.simulator.is_bit_forced(addr)
+    }
+
+    pub fn write_word_register(&mut self, addr: u8, val: i32) {
+        self.simulator.registers.insert(format!("%MW{}", addr), val);
+        self.simulator.registers.insert(format!("D{}", addr), val);
+        self.simulator.registers.insert(format!("D{:02}", addr), val);
+        self.simulator.registers.insert(format!("V{}", addr), val);
+        self.simulator.registers.insert(format!("V{:02}", addr), val);
+        self.simulator.evaluate_conduction_only(&mut self.program);
+    }
+
     /// Update process image from an Online Monitoring Status Snapshot and re-evaluate ladder conduction
     pub fn apply_online_snapshot(&mut self, snapshot: &PlcStatusSnapshot) {
         self.simulator.apply_online_snapshot(snapshot);

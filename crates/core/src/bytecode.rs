@@ -20,8 +20,45 @@ pub enum PlcSerialCommand {
     UploadProgram = 0x04,
     /// 0x05: Execute Single Scan Step on PLC
     StepPlc = 0x05,
+    /// 0x06: Force Digital Bit (Input, Output, Relay) ON/OFF or Release
+    ForceIo = 0x06,
+    /// 0x07: Write Value into Word or Bit Memory
+    WriteValue = 0x07,
     /// 0x02 (Payload = 0x00): Stop / HALT PLC Scan Execution & Safe Output Shutdown
     StopPlc = 0x12,
+}
+
+impl PlcSerialCommand {
+    /// Create CMD 0x06 packet: `[0xAA, 0x06, 0x02, 0x00, ADDR, ACTION, CRC8]`
+    /// action: 0 = Unforce, 1 = Force ON, 2 = Force OFF, 0xFF = Clear All Forces
+    pub fn create_force_packet(addr: u8, action: u8) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(7);
+        buf.push(PACKET_SOF);
+        buf.push(0x06); // CMD_FORCE_IO
+        buf.push(0x02); // Len lo
+        buf.push(0x00); // Len hi
+        buf.push(addr);
+        buf.push(action);
+        let crc = BytecodeProgram::compute_crc8(&buf[1..6]);
+        buf.push(crc);
+        buf
+    }
+
+    /// Create CMD 0x07 packet: `[0xAA, 0x07, 0x06, 0x00, TARGET, ADDR, VAL (4B LE), CRC8]`
+    /// target: 0 = Bit, 1 = Word
+    pub fn create_write_value_packet(target_is_word: bool, addr: u8, val: i32) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(11);
+        buf.push(PACKET_SOF);
+        buf.push(0x07); // CMD_WRITE_VALUE
+        buf.push(0x06); // Len lo
+        buf.push(0x00); // Len hi
+        buf.push(if target_is_word { 1 } else { 0 });
+        buf.push(addr);
+        buf.extend_from_slice(&val.to_le_bytes());
+        let crc = BytecodeProgram::compute_crc8(&buf[1..10]);
+        buf.push(crc);
+        buf
+    }
 }
 
 /// Online Monitoring Status Snapshot received from RP2040 Micro-VM or Local Simulator
@@ -523,6 +560,8 @@ impl BytecodeProgram {
             PlcSerialCommand::MonitorStatus => (0x03u8, Vec::new()),
             PlcSerialCommand::UploadProgram => (0x04u8, Vec::new()),
             PlcSerialCommand::StepPlc => (0x05u8, Vec::new()),
+            PlcSerialCommand::ForceIo => (0x06u8, Vec::new()),
+            PlcSerialCommand::WriteValue => (0x07u8, Vec::new()),
         };
         let len = (payload.len() as u16).to_le_bytes();
         let mut packet = Vec::with_capacity(5 + payload.len());
@@ -535,6 +574,16 @@ impl BytecodeProgram {
         let crc = Self::compute_crc8(&packet[1..]);
         packet.push(crc);
         packet
+    }
+
+    /// Construct a complete `CMD_FORCE_IO (0x06)` Serial Packet Frame
+    pub fn create_force_packet(addr: u8, action: u8) -> Vec<u8> {
+        PlcSerialCommand::create_force_packet(addr, action)
+    }
+
+    /// Construct a complete `CMD_WRITE_VALUE (0x07)` Serial Packet Frame
+    pub fn create_write_value_packet(target_is_word: bool, addr: u8, val: i32) -> Vec<u8> {
+        PlcSerialCommand::create_write_value_packet(target_is_word, addr, val)
     }
 
     /// Decode raw 32-bit aligned bytecode payload bytes (`4 * N` bytes) into a `BytecodeProgram`
@@ -1047,6 +1096,34 @@ impl BytecodeCompiler {
         if let Some(rest) = upper.strip_prefix("%MW") {
             let idx = rest.parse::<usize>().ok()?.min(159) as u8;
             return Some((0x20 + idx, format!("D{}", idx), MemoryRegion::DataRegisterD));
+        }
+
+        // Special System Markers (%SM / M8000 series)
+        if let Some(rest) = upper.strip_prefix("%SM") {
+            let idx = rest.parse::<usize>().ok()?.min(31) as u8;
+            return Some((0xA0 + idx, format!("SM{}", idx), MemoryRegion::InternalRelayM));
+        }
+        if upper.starts_with("M80") {
+            if let Ok(num) = upper[1..].parse::<usize>() {
+                if (8000..=8031).contains(&num) {
+                    let idx = (num - 8000) as u8;
+                    return Some((0xA0 + idx, format!("SM{}", idx), MemoryRegion::InternalRelayM));
+                }
+            }
+        }
+
+        // Special System Registers (%SD / D8000 series)
+        if let Some(rest) = upper.strip_prefix("%SD") {
+            let idx = rest.parse::<usize>().ok()?.min(31) as u8;
+            return Some((0xA0 + idx, format!("SD{}", idx), MemoryRegion::DataRegisterD));
+        }
+        if upper.starts_with("D80") {
+            if let Ok(num) = upper[1..].parse::<usize>() {
+                if (8000..=8031).contains(&num) {
+                    let idx = (num - 8000) as u8;
+                    return Some((0xA0 + idx, format!("SD{}", idx), MemoryRegion::DataRegisterD));
+                }
+            }
         }
 
         // Analog AI / AO

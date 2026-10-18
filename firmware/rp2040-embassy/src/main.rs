@@ -24,12 +24,13 @@ use embassy_rp::uart::{self, BufferedInterruptHandler, BufferedUart};
 use embassy_rp::usb::{Driver as UsbDriver, InterruptHandler as UsbInterruptHandler};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::mutex::Mutex;
-use embassy_time::{Duration, Ticker};
+use embassy_time::{Duration, Instant, Ticker};
 use embassy_usb::class::cdc_acm::{CdcAcmClass, State as CdcAcmState};
 use embassy_usb::{Builder as UsbBuilder, Config as UsbConfig, UsbDevice};
 use static_cell::StaticCell;
 use uplc_vm::{
-    MicroVm, CMD_DOWNLOAD_PROGRAM, CMD_MONITOR_STATUS, CMD_RUN_STOP, CMD_STEP, CMD_UPLOAD_PROGRAM,
+    MicroVm, CMD_DOWNLOAD_PROGRAM, CMD_FORCE_IO, CMD_FORCE_IO_RESPONSE, CMD_MONITOR_STATUS,
+    CMD_RUN_STOP, CMD_STEP, CMD_UPLOAD_PROGRAM, CMD_WRITE_VALUE, CMD_WRITE_VALUE_RESPONSE,
     MAX_INSTRUCTIONS, PACKET_SOF,
 };
 use panic_halt as _;
@@ -271,6 +272,16 @@ async fn usb_cdc_comm_task(mut class: CdcAcmClass<'static, UsbDriver<'static, US
                                 info!("USB-CDC CMD 0x05: Executed Single Scan Step!");
                                 let _ = class.write_packet(&[PACKET_SOF, 0x85, 0x00]).await;
                             }
+                            Ok(CMD_FORCE_IO) => {
+                                PLC_HAS_ERROR.store(false, Ordering::Relaxed);
+                                info!("USB-CDC CMD 0x06: Force I/O state updated!");
+                                let _ = class.write_packet(&[PACKET_SOF, CMD_FORCE_IO_RESPONSE, 0x00]).await;
+                            }
+                            Ok(CMD_WRITE_VALUE) => {
+                                PLC_HAS_ERROR.store(false, Ordering::Relaxed);
+                                info!("USB-CDC CMD 0x07: Write Value updated!");
+                                let _ = class.write_packet(&[PACKET_SOF, CMD_WRITE_VALUE_RESPONSE, 0x00]).await;
+                            }
                             Err(e) => {
                                 info!("USB-CDC Packet Error: {}", e);
                                 PLC_HAS_ERROR.store(true, Ordering::Relaxed);
@@ -298,9 +309,13 @@ async fn plc_scan_task(
     let mut ticker = Ticker::every(Duration::from_millis(SCAN_CYCLE_MS as u64));
     let mut scan_div: u32 = 0;
     let mut led_ms: u32 = 0;
+    let mut total_ms: u64 = 0;
+    let mut min_scan_us: u32 = 0;
+    let mut max_scan_us: u32 = 0;
 
     loop {
         ticker.next().await;
+        total_ms = total_ms.wrapping_add(SCAN_CYCLE_MS as u64);
         led_ms = (led_ms + SCAN_CYCLE_MS) % 2000;
 
         let mut vm = SHARED_VM.lock().await;
@@ -319,8 +334,42 @@ async fn plc_scan_task(
             }
         }
 
-        // 2. Execute 1 PLC Scan Cycle
+        // 1.5 Update Special System Markers (%SM) prior to scan execution
+        if ENABLE_SPECIAL_MARKERS {
+            vm.bit_mem[SM_ALWAYS_ON as usize] = 1;
+            vm.bit_mem[SM_ALWAYS_OFF as usize] = 0;
+            vm.bit_mem[SM_FIRST_SCAN as usize] = if vm.scan_count == 0 { 1 } else { 0 };
+            vm.bit_mem[SM_CLOCK_10MS as usize] = if (total_ms % 20) < 10 { 1 } else { 0 };
+            vm.bit_mem[SM_CLOCK_100MS as usize] = if (total_ms % 200) < 100 { 1 } else { 0 };
+            vm.bit_mem[SM_CLOCK_1S as usize] = if (total_ms % 2000) < 1000 { 1 } else { 0 };
+            vm.bit_mem[SM_CLOCK_1MIN as usize] = if (total_ms % 60000) < (SCAN_CYCLE_MS as u64) { 1 } else { 0 };
+            vm.bit_mem[SM_SYSTEM_ERROR as usize] = if PLC_HAS_ERROR.load(Ordering::Relaxed) { 1 } else { 0 };
+        }
+
+        // 2. Execute 1 PLC Scan Cycle with Precise Microsecond Execution Measurement
+        let scan_start = Instant::now();
         vm.step_scan(SCAN_CYCLE_MS);
+        let last_scan_us = scan_start.elapsed().as_micros() as u32;
+
+        if min_scan_us == 0 || last_scan_us < min_scan_us {
+            min_scan_us = last_scan_us;
+        }
+        if last_scan_us > max_scan_us {
+            max_scan_us = last_scan_us;
+        }
+
+        // 2.5 Update Diagnostic Special System Registers (%SD) and Overrun Flag
+        let is_overrun = last_scan_us > (DEFAULT_WATCHDOG_TIMEOUT_MS * 1000);
+        if ENABLE_SPECIAL_MARKERS {
+            vm.bit_mem[SM_SCAN_OVERRUN as usize] = if is_overrun { 1 } else { 0 };
+        }
+        if ENABLE_SPECIAL_REGISTERS {
+            vm.word_mem[SD_WATCHDOG_PRESET as usize] = DEFAULT_WATCHDOG_TIMEOUT_MS as i32;
+            vm.word_mem[SD_CURRENT_SCAN_TIME_US as usize] = last_scan_us as i32;
+            vm.word_mem[SD_MIN_SCAN_TIME_US as usize] = min_scan_us as i32;
+            vm.word_mem[SD_MAX_SCAN_TIME_US as usize] = max_scan_us as i32;
+            vm.word_mem[SD_SCAN_COUNT_LOW as usize] = (vm.scan_count & 0xFFFFFFFF) as i32;
+        }
 
         // 3. Update Physical Outputs Y0..Y7 from Unified Bit Memory (0x20..0x27)
         for (i, out_opt) in outputs.iter_mut().enumerate() {
@@ -368,14 +417,14 @@ async fn plc_scan_task(
             scan_div = scan_div.wrapping_add(1);
             if scan_div % 25 == 0 {
                 info!(
-                    "PLC Scan #{} | Status: {:?} | Prog: {} inst | Y0(GP15)={} Y1(GP14)={} | T0={}ms T1={}ms",
+                    "PLC Scan #{} | Status: {:?} | Prog: {} inst | ScanTime: {}us | Y0(GP15)={} Y1(GP14)={} | T0={}ms",
                     vm.scan_count,
                     plc_status,
                     vm.prog_len,
+                    last_scan_us,
                     vm.bit_mem[0x20],
                     vm.bit_mem[0x21],
-                    vm.word_mem[0xC0],
-                    vm.word_mem[0xC1]
+                    vm.word_mem[0xC0]
                 );
             }
         }
@@ -383,12 +432,14 @@ async fn plc_scan_task(
 }
 
 
-/// Restore saved PLC Bytecode from RP2040 Flash on power-up (or load Demo LED Blink program if empty)
+/// Restore saved PLC Bytecode from RP2040 Flash on power-up with CRC16 integrity check (or load Demo LED Blink program if empty/corrupted)
 async fn load_program_from_flash(flash: &mut Flash<'static, FLASH, Async, FLASH_SIZE_BYTES>) {
-    let mut header = [0u8; 8];
+    let mut header = [0u8; 12];
     if flash.blocking_read(FLASH_PLC_OFFSET, &mut header).is_ok() {
         let magic = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
         let byte_len = u32::from_le_bytes([header[4], header[5], header[6], header[7]]) as usize;
+        let expected_crc = u16::from_le_bytes([header[8], header[9]]);
+
         if magic == FLASH_MAGIC
             && byte_len > 0
             && byte_len <= MAX_INSTRUCTIONS * 4
@@ -397,18 +448,27 @@ async fn load_program_from_flash(flash: &mut Flash<'static, FLASH, Async, FLASH_
             static LOAD_BUF: StaticCell<[u8; MAX_INSTRUCTIONS * 4]> = StaticCell::new();
             let buf = LOAD_BUF.init([0u8; MAX_INSTRUCTIONS * 4]);
             if flash
-                .blocking_read(FLASH_PLC_OFFSET + 8, &mut buf[..byte_len])
+                .blocking_read(FLASH_PLC_OFFSET + 12, &mut buf[..byte_len])
                 .is_ok()
             {
-                let mut vm = SHARED_VM.lock().await;
-                let _ = vm.load_bytecode(&buf[..byte_len]);
-                vm.running = true;
-                info!(
-                    "Loaded saved PLC program from Flash ({} instructions, {} bytes)",
-                    byte_len / 4,
-                    byte_len
-                );
-                return;
+                let actual_crc = MicroVm::compute_crc16(&buf[..byte_len]);
+                if actual_crc == expected_crc {
+                    let mut vm = SHARED_VM.lock().await;
+                    let _ = vm.load_bytecode(&buf[..byte_len]);
+                    vm.running = true;
+                    info!(
+                        "Loaded saved PLC program from Flash ({} instructions, {} bytes, CRC16: 0x{:04X})",
+                        byte_len / 4,
+                        byte_len,
+                        actual_crc
+                    );
+                    return;
+                } else {
+                    info!(
+                        "Flash CRC16 mismatch: expected 0x{:04X}, computed 0x{:04X}. Corrupted flash, falling back to demo!",
+                        expected_crc, actual_crc
+                    );
+                }
             }
         }
     }
@@ -438,7 +498,7 @@ async fn load_program_from_flash(flash: &mut Flash<'static, FLASH, Async, FLASH_
     info!("Loaded built-in Demo LED Blink program (14 instructions, 56 bytes)");
 }
 
-/// Erase sector and save PLC Bytecode to RP2040 Flash. Returns true if successful.
+/// Erase sector and save PLC Bytecode to RP2040 Flash with CRC16 header. Returns true if successful.
 fn save_program_to_flash(
     flash: &mut Flash<'static, FLASH, Async, FLASH_SIZE_BYTES>,
     payload: &[u8],
@@ -449,10 +509,16 @@ fn save_program_to_flash(
     let mut page_buf = [0xFFu8; 256];
     let magic_bytes = FLASH_MAGIC.to_le_bytes();
     let len_bytes = (payload.len() as u32).to_le_bytes();
+    let crc16 = MicroVm::compute_crc16(payload);
+    let crc_bytes = crc16.to_le_bytes();
+
     page_buf[0..4].copy_from_slice(&magic_bytes);
     page_buf[4..8].copy_from_slice(&len_bytes);
-    let first_chunk = payload.len().min(256 - 8);
-    page_buf[8..8 + first_chunk].copy_from_slice(&payload[..first_chunk]);
+    page_buf[8..10].copy_from_slice(&crc_bytes);
+    page_buf[10..12].copy_from_slice(&[0u8, 0u8]); // reserved
+
+    let first_chunk = payload.len().min(256 - 12);
+    page_buf[12..12 + first_chunk].copy_from_slice(&payload[..first_chunk]);
     if flash.blocking_write(FLASH_PLC_OFFSET, &page_buf).is_err() {
         return false;
     }
@@ -469,6 +535,7 @@ fn save_program_to_flash(
         offset += chunk;
         flash_addr += 256;
     }
+    info!("Saved program to Flash with CRC16: 0x{:04X}", crc16);
     true
 }
 
