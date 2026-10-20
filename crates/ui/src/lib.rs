@@ -2,6 +2,7 @@ pub mod app;
 pub mod canvas;
 pub mod icons;
 pub mod panels;
+pub mod serial;
 pub mod theme;
 pub mod tools;
 

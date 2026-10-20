@@ -25,6 +25,8 @@ pub const PACKET_SOF: u8 = 0xAA;
 
 pub mod modbus;
 pub use modbus::*;
+pub mod fb;
+pub use fb::*;
 
 pub const CMD_DOWNLOAD_PROGRAM: u8 = 0x01;
 pub const CMD_RUN_STOP: u8 = 0x02;
@@ -41,6 +43,11 @@ pub const CMD_PERSIST_SAVE: u8 = 0x08;
 pub const CMD_PERSIST_SAVE_RESPONSE: u8 = 0x88;
 pub const CMD_PERSIST_CLEAR: u8 = 0x09;
 pub const CMD_PERSIST_CLEAR_RESPONSE: u8 = 0x89;
+
+/// RETAIN area (Flash-latched): `M64..M95` = `bit_mem[0x80..0xA0]`, `D96..D127` = `word_mem[0x80..0xA0]`
+pub const RETAIN_BIT_START: usize = 0x80;
+pub const RETAIN_WORD_START: usize = 0x80;
+pub const RETAIN_LEN: usize = 32;
 
 /// Online Monitoring Status Packet Lengths (includes 2B prog_len + 2B prog_crc16 signature)
 pub const STATUS_SNAPSHOT_PAYLOAD_LEN: usize = 1 + 4 + 1 + 4 + 256 + 64 + 64 + 64 + 2 + 2; // 462 bytes
@@ -111,6 +118,20 @@ pub struct MicroVm {
     pub mb_in_result: Option<ModbusJobResult>,
     /// Incremental Job ID tracker
     pub next_job_id: u8,
+    /// PID function block instances (`PID`, opcode 0x72)
+    pub pid: [PidState; MAX_PID_INSTANCES],
+    /// Outgoing UART job for the firmware UART task (taken like `mb_out_job`)
+    pub uart_tx_out: Option<UartTx>,
+    /// `true` while a UART job is queued / being transmitted (firmware clears it after sending)
+    pub uart_tx_busy: bool,
+    /// Incoming UART byte placed by the firmware (consumed by `URX`, 1 byte per scan)
+    pub uart_rx_in: Option<u8>,
+    /// Pending UartSend requests (rising edge latched while the UART is busy)
+    pub uart_tx_req: [bool; MAX_UART_INSTANCES],
+    /// Previous EN state per UartSend instance (rising-edge detection)
+    pub uart_tx_prev: [bool; MAX_UART_INSTANCES],
+    /// Previous EN state per edge slot for edge-triggered function blocks (Shift / ShiftReg)
+    pub fb_edge_prev: [u8; MAX_FB_EDGE_SLOTS],
 }
 
 impl Default for MicroVm {
@@ -151,6 +172,13 @@ impl MicroVm {
             mb_out_job: None,
             mb_in_result: None,
             next_job_id: 0,
+            pid: [PidState::new(); MAX_PID_INSTANCES],
+            uart_tx_out: None,
+            uart_tx_busy: false,
+            uart_rx_in: None,
+            uart_tx_req: [false; MAX_UART_INSTANCES],
+            uart_tx_prev: [false; MAX_UART_INSTANCES],
+            fb_edge_prev: [0; MAX_FB_EDGE_SLOTS],
         }
     }
 
@@ -200,9 +228,70 @@ impl MicroVm {
         self.mb_master = [ModbusMasterState::default(); MAX_MB_MASTER_INSTANCES];
         self.mb_out_job = None;
         self.mb_in_result = None;
+        self.reset_fb_state();
         self.acc_bool = false;
         self.acc_word = 0;
         self.scan_count = 0;
+    }
+
+    /// Like [`reset_memory`](Self::reset_memory) but keeps the RETAIN area
+    /// (`M64..M95` = `bit_mem[0x80..0xA0]`, `D96..D127` = `word_mem[0x80..0xA0]`). Used at boot
+    /// after the retained values have been restored from Flash.
+    pub fn reset_memory_keep_retain(&mut self) {
+        let mut bits = [0u8; RETAIN_LEN];
+        let mut words = [0i32; RETAIN_LEN];
+        bits.copy_from_slice(&self.bit_mem[RETAIN_BIT_START..RETAIN_BIT_START + RETAIN_LEN]);
+        words.copy_from_slice(&self.word_mem[RETAIN_WORD_START..RETAIN_WORD_START + RETAIN_LEN]);
+        self.reset_memory();
+        self.bit_mem[RETAIN_BIT_START..RETAIN_BIT_START + RETAIN_LEN].copy_from_slice(&bits);
+        self.prev_bit_mem[RETAIN_BIT_START..RETAIN_BIT_START + RETAIN_LEN].copy_from_slice(&bits);
+        self.word_mem[RETAIN_WORD_START..RETAIN_WORD_START + RETAIN_LEN].copy_from_slice(&words);
+    }
+
+    /// Reset PID / UART / edge state of the feature-level-2 function blocks
+    fn reset_fb_state(&mut self) {
+        self.pid = [PidState::new(); MAX_PID_INSTANCES];
+        self.uart_tx_out = None;
+        self.uart_tx_busy = false;
+        self.uart_rx_in = None;
+        self.uart_tx_req = [false; MAX_UART_INSTANCES];
+        self.uart_tx_prev = [false; MAX_UART_INSTANCES];
+        self.fb_edge_prev = [0; MAX_FB_EDGE_SLOTS];
+    }
+
+    /// Decode one `OPND` word `[0x6F, kind, imm_lo, imm_hi]` into its current value:
+    /// kind 0 = `word_mem[imm_lo]`, kind 1 = sign-extended i16 constant, kind 2 = `bit_mem[imm_lo]`.
+    pub fn read_opnd(&self, w: [u8; 4]) -> i32 {
+        self.read_opnd_ins(VmInstruction::from_le_bytes(w))
+    }
+
+    #[inline]
+    fn read_opnd_ins(&self, w: VmInstruction) -> i32 {
+        match w.addr {
+            OPND_KIND_WORD => self.word_mem[(w.imm & 0xFF) as usize],
+            OPND_KIND_CONST => w.imm as i16 as i32,
+            OPND_KIND_BIT => i32::from(self.bit_mem[(w.imm & 0xFF) as usize] != 0),
+            _ => 0,
+        }
+    }
+
+    /// Value of the operand word at `idx` (0 if out of range or not an `OPND` word)
+    #[inline]
+    fn opnd_at(&self, idx: usize, max_pc: usize) -> i32 {
+        if idx < max_pc && self.program[idx].op == OP_OPND {
+            self.read_opnd_ins(self.program[idx])
+        } else {
+            0
+        }
+    }
+
+    /// Rising-edge detection on an edge slot; always records the new state
+    #[inline]
+    fn fb_rising_edge(&mut self, slot: usize, en: bool) -> bool {
+        let slot = slot % MAX_FB_EDGE_SLOTS;
+        let prev = self.fb_edge_prev[slot] != 0;
+        self.fb_edge_prev[slot] = u8::from(en);
+        en && !prev
     }
 
     /// Load raw 32-bit aligned bytecode payload (`4 * N` bytes) into VM program memory
@@ -626,6 +715,142 @@ impl MicroVm {
                     }
                 }
 
+                // ---------------- Feature level 2: OPND-based function blocks ----------------
+                OP_MOVW => {
+                    // MOVW dst, A
+                    if acc && mc_active {
+                        let a = self.opnd_at(pc + 1, max_pc);
+                        self.word_mem[addr] = a;
+                        self.acc_word = a;
+                    }
+                    pc += 1;
+                }
+                OP_WAND | OP_WOR | OP_WXOR | OP_WNOT | OP_SHL | OP_SHR => {
+                    // dst := A op B (imm bit 15 = rising-edge trigger on slot imm & 0xFF)
+                    let en = acc && mc_active;
+                    let fire = if (ins.op == OP_SHL || ins.op == OP_SHR) && (ins.imm & SHIFT_EDGE_FLAG) != 0 {
+                        self.fb_rising_edge((ins.imm & 0xFF) as usize, en)
+                    } else {
+                        en
+                    };
+                    if fire {
+                        let a = self.opnd_at(pc + 1, max_pc);
+                        let b = self.opnd_at(pc + 2, max_pc);
+                        let r = bitwise(ins.op, a, b);
+                        self.word_mem[addr] = r;
+                        self.acc_word = r;
+                    }
+                    pc += 2;
+                }
+                OP_SHREG => {
+                    // SHREG base, imm = len | (edge_slot << 8); IN operand
+                    let en = acc && mc_active;
+                    let len = ((ins.imm & 0xFF) as usize).clamp(1, 32);
+                    let slot = (ins.imm >> 8) as usize;
+                    if self.fb_rising_edge(slot, en) {
+                        let input = self.opnd_at(pc + 1, max_pc);
+                        let last = (addr + len - 1).min(255);
+                        let mut i = last;
+                        while i > addr {
+                            self.word_mem[i] = self.word_mem[i - 1];
+                            i -= 1;
+                        }
+                        self.word_mem[addr] = input;
+                        self.acc_word = input;
+                    }
+                    pc += 1;
+                }
+                OP_SHBIT => {
+                    // SHBIT word, imm = edge_slot; BIT operand: w = (w << 1) | bit
+                    let en = acc && mc_active;
+                    if self.fb_rising_edge((ins.imm & 0xFF) as usize, en) {
+                        let bit = self.opnd_at(pc + 1, max_pc);
+                        self.word_mem[addr] = shift_in_bit(self.word_mem[addr], bit);
+                        self.acc_word = self.word_mem[addr];
+                    }
+                    pc += 1;
+                }
+                OP_SCALE => {
+                    // SCALE dst; IN, in_min, in_max, out_min, out_max
+                    if acc && mc_active {
+                        let v = scale(
+                            self.opnd_at(pc + 1, max_pc),
+                            self.opnd_at(pc + 2, max_pc),
+                            self.opnd_at(pc + 3, max_pc),
+                            self.opnd_at(pc + 4, max_pc),
+                            self.opnd_at(pc + 5, max_pc),
+                        );
+                        self.word_mem[addr] = v;
+                        self.acc_word = v;
+                    }
+                    pc += 5;
+                }
+                OP_LIMIT => {
+                    // LIMIT dst; IN, MIN, MAX
+                    if acc && mc_active {
+                        let v = limit(
+                            self.opnd_at(pc + 1, max_pc),
+                            self.opnd_at(pc + 2, max_pc),
+                            self.opnd_at(pc + 3, max_pc),
+                        );
+                        self.word_mem[addr] = v;
+                        self.acc_word = v;
+                    }
+                    pc += 3;
+                }
+                OP_PID => {
+                    // PID dst(CV), imm = instance; PV, SP, Kp, Ki, Kd, OutMax
+                    let inst = (ins.imm as usize) % MAX_PID_INSTANCES;
+                    if acc && mc_active {
+                        let pv = self.opnd_at(pc + 1, max_pc);
+                        let sp_v = self.opnd_at(pc + 2, max_pc);
+                        let kp = self.opnd_at(pc + 3, max_pc);
+                        let ki = self.opnd_at(pc + 4, max_pc);
+                        let kd = self.opnd_at(pc + 5, max_pc);
+                        let out_max = self.opnd_at(pc + 6, max_pc);
+                        let cv = self.pid[inst].step(pv, sp_v, kp, ki, kd, out_max, dt_ms);
+                        self.word_mem[addr] = cv;
+                        self.acc_word = cv;
+                    } else {
+                        self.pid[inst].reset();
+                    }
+                    pc += 6;
+                }
+                OP_UTX => {
+                    // UTX inst, imm = mode; IN operand. Rising edge latches a request; ENO = sent/idle
+                    let inst = addr % MAX_UART_INSTANCES;
+                    let en = acc && mc_active;
+                    if en && !self.uart_tx_prev[inst] {
+                        self.uart_tx_req[inst] = true;
+                    }
+                    self.uart_tx_prev[inst] = en;
+                    if self.uart_tx_req[inst] && !self.uart_tx_busy && self.uart_tx_out.is_none() {
+                        let value = self.opnd_at(pc + 1, max_pc);
+                        self.uart_tx_out = Some(UartTx {
+                            instance: inst as u8,
+                            mode: (ins.imm & 0xFF) as u8,
+                            value,
+                        });
+                        self.uart_tx_busy = true;
+                        self.uart_tx_req[inst] = false;
+                    }
+                    acc = en && !self.uart_tx_req[inst] && !self.uart_tx_busy;
+                    pc += 1;
+                }
+                OP_URX => {
+                    // URX dst: ENO = 1 only in the scan a byte was received
+                    let mut got = false;
+                    if acc && mc_active {
+                        if let Some(b) = self.uart_rx_in.take() {
+                            self.word_mem[addr] = b as i32;
+                            self.acc_word = b as i32;
+                            got = true;
+                        }
+                    }
+                    acc = got;
+                }
+                OP_OPND => {} // Operand word (consumed by the preceding header opcode)
+
                 0xFF => break, // END
                 _ => {}
             }
@@ -665,13 +890,19 @@ impl MicroVm {
         out[idx..idx + 4].copy_from_slice(&self.scan_count.to_le_bytes());
         idx += 4;
 
-        out[idx] = if self.acc_bool { 1 } else { 0 };
+        // acc_bool byte: bit0 = acc_bool, high nibble = FW_FEATURE_LEVEL (legacy firmware sends 0/1)
+        out[idx] = (if self.acc_bool { 1 } else { 0 }) | (FW_FEATURE_LEVEL << 4);
         idx += 1;
 
         out[idx..idx + 4].copy_from_slice(&self.acc_word.to_le_bytes());
         idx += 4;
 
         out[idx..idx + 256].copy_from_slice(&self.bit_mem);
+        // Encode %SD7 (word_mem[0xA7], RETAIN Flash save count) in bit 1 of bit_mem[0xA0..0xB0]
+        let sd7 = self.word_mem[0xA7] as u16;
+        for b in 0..16 {
+            out[idx + 0xA0 + b] = (out[idx + 0xA0 + b] & 0x01) | (((sd7 >> b) as u8 & 0x01) << 1);
+        }
         idx += 256;
 
         // Timers T0..T15 current values (word_mem[0xC0..0xD0])
@@ -688,9 +919,10 @@ impl MicroVm {
             idx += 4;
         }
 
-        // Data Registers D0..D15 / %MW0..%MW15 (word_mem[0..16])
+        // Data Registers D0..D15 / %MW0..%MW15 (word_mem[0x20..0x30]) with fallback to AI0..AI15 (word_mem[0..16])
         for i in 0..16 {
-            let val = self.word_mem[i];
+            let d_val = self.word_mem[0x20 + i];
+            let val = if d_val != 0 { d_val } else { self.word_mem[i] };
             out[idx..idx + 4].copy_from_slice(&val.to_le_bytes());
             idx += 4;
         }
@@ -1019,7 +1251,8 @@ mod tests {
         assert_eq!(buf[4], 1); // running = true
         let scan = u32::from_le_bytes([buf[5], buf[6], buf[7], buf[8]]);
         assert_eq!(scan, 1420);
-        assert_eq!(buf[9], 1); // acc_bool = true
+        assert_eq!(buf[9] & 0x01, 1); // acc_bool = true (bit0)
+        assert_eq!(buf[9] >> 4, FW_FEATURE_LEVEL); // feature level in high nibble
         let acc_w = i32::from_le_bytes([buf[10], buf[11], buf[12], buf[13]]);
         assert_eq!(acc_w, 42);
         // Verify bit_mem
@@ -1224,6 +1457,233 @@ mod tests {
         // 5. Clear all forces
         vm.clear_all_forces();
         assert_eq!(vm.is_bit_forced(0), None);
+    }
+
+    // ---------------- Feature level 2 tests ----------------
+
+    const fn ins(op: u8, addr: u8, imm: u16) -> VmInstruction {
+        VmInstruction { op, addr, imm }
+    }
+    const fn w(addr: u8) -> VmInstruction {
+        ins(OP_OPND, OPND_KIND_WORD, addr as u16)
+    }
+    const fn k(v: i16) -> VmInstruction {
+        ins(OP_OPND, OPND_KIND_CONST, v as u16)
+    }
+    const fn b(addr: u8) -> VmInstruction {
+        ins(OP_OPND, OPND_KIND_BIT, addr as u16)
+    }
+
+    fn load(vm: &mut MicroVm, prog: &[VmInstruction]) {
+        let mut raw = [0u8; MAX_INSTRUCTIONS * 4];
+        for (i, p) in prog.iter().enumerate() {
+            raw[i * 4..i * 4 + 4].copy_from_slice(&p.to_le_bytes());
+        }
+        vm.load_bytecode(&raw[..prog.len() * 4]).unwrap();
+    }
+
+    #[test]
+    fn test_vm_movw_bitwise() {
+        let mut vm = MicroVm::new();
+        // LD X0; MOVW D0 <- AI0; WAND D1 = D0 & 0x00FF; WOR D2 = D1 | 0x100; WXOR D3 = D2 ^ D0;
+        // WNOT D4 = !D1; SHL D5 = D1 << 4 (level); SHR D6 = D0 >> K2; ST Y0
+        let prog = [
+            ins(0x01, 0x00, 0),
+            ins(OP_MOVW, 0x20, 0), w(0x00),
+            ins(OP_WAND, 0x21, 0), w(0x20), k(0x00FF),
+            ins(OP_WOR, 0x22, 0), w(0x21), k(0x100),
+            ins(OP_WXOR, 0x23, 0), w(0x22), w(0x20),
+            ins(OP_WNOT, 0x24, 0), w(0x21), k(0),
+            ins(OP_SHL, 0x25, 0), w(0x21), k(4),
+            ins(OP_SHR, 0x26, 0), w(0x20), k(2),
+            ins(0x07, 0x20, 0),
+            ins(0xFF, 0, 0),
+        ];
+        load(&mut vm, &prog);
+        vm.word_mem[0x00] = 0x1234;
+
+        vm.step_scan(10);
+        assert_eq!(vm.word_mem[0x20], 0, "EN=0 -> no MOVW");
+        assert!(!vm.get_digital_output(0));
+
+        vm.set_digital_input(0, true);
+        vm.step_scan(10);
+        assert_eq!(vm.word_mem[0x20], 0x1234);
+        assert_eq!(vm.word_mem[0x21], 0x34);
+        assert_eq!(vm.word_mem[0x22], 0x134);
+        assert_eq!(vm.word_mem[0x23], 0x134 ^ 0x1234);
+        assert_eq!(vm.word_mem[0x24], !0x34);
+        assert_eq!(vm.word_mem[0x25], 0x340);
+        assert_eq!(vm.word_mem[0x26], 0x1234 >> 2);
+        assert!(vm.get_digital_output(0), "ENO passes power through word ops");
+    }
+
+    #[test]
+    fn test_vm_opnd_negative_const() {
+        let mut vm = MicroVm::new();
+        let prog = [
+            ins(0x01, 0x00, 0),
+            ins(OP_MOVW, 0x20, 0), k(-5),
+            ins(OP_LIMIT, 0x21, 0), k(-32768), k(-100), k(100),
+            ins(0xFF, 0, 0),
+        ];
+        load(&mut vm, &prog);
+        vm.set_digital_input(0, true);
+        vm.step_scan(10);
+        assert_eq!(vm.word_mem[0x20], -5);
+        assert_eq!(vm.word_mem[0x21], -100);
+        assert_eq!(vm.read_opnd([OP_OPND, OPND_KIND_CONST, 0x00, 0x80]), -32768);
+        assert_eq!(vm.read_opnd([OP_OPND, OPND_KIND_CONST, 0xFF, 0x7F]), 32767);
+    }
+
+    #[test]
+    fn test_vm_scale_limit() {
+        let mut vm = MicroVm::new();
+        // LD X0; SCALE D20 <- AI0 [0..4095] -> [0..1000]; LIMIT D21 <- D20 [100..900]
+        let prog = [
+            ins(0x01, 0x00, 0),
+            ins(OP_SCALE, 0x34, 0), w(0x00), k(0), k(4095), k(0), k(1000),
+            ins(OP_LIMIT, 0x35, 0), w(0x34), k(100), k(900),
+            ins(0xFF, 0, 0),
+        ];
+        load(&mut vm, &prog);
+        vm.set_digital_input(0, true);
+        for (raw, scaled, limited) in [(0, 0, 100), (2048, 500, 500), (4095, 1000, 900), (409, 99, 100)] {
+            vm.word_mem[0x00] = raw;
+            vm.step_scan(10);
+            assert_eq!(vm.word_mem[0x34], scaled, "scale({})", raw);
+            assert_eq!(vm.word_mem[0x35], limited, "limit({})", scaled);
+        }
+    }
+
+    #[test]
+    fn test_vm_pid_converges() {
+        let mut vm = MicroVm::new();
+        // LD X0; PID inst 0: CV=D12 PV=D10 SP=D11 Kp=1.00 Ki=2.00/s Kd=0.05s OutMax=1000
+        let prog = [
+            ins(0x01, 0x00, 0),
+            ins(OP_PID, 0x2C, 0), w(0x2A), w(0x2B), k(100), k(200), k(5), k(1000),
+            ins(0xFF, 0, 0),
+        ];
+        load(&mut vm, &prog);
+        vm.set_digital_input(0, true);
+        vm.word_mem[0x2B] = 500; // SP
+
+        // First-order plant: tau = 0.5 s, gain 1.0, dt = 10 ms
+        let mut pv = 0.0f64;
+        for _ in 0..1500 {
+            vm.word_mem[0x2A] = pv as i32;
+            vm.step_scan(10);
+            let cv = vm.word_mem[0x2C] as f64;
+            assert!((0.0..=1000.0).contains(&cv), "CV must stay within 0..OutMax");
+            pv += (cv - pv) * (10.0 / 500.0);
+        }
+        let err = (pv - 500.0).abs();
+        assert!(err <= 10.0, "PV should converge to SP +/-2% (pv = {})", pv);
+
+        // EN = 0 resets the integral
+        vm.set_digital_input(0, false);
+        vm.step_scan(10);
+        assert_eq!(vm.pid[0].integral, 0);
+        assert!(!vm.pid[0].active);
+    }
+
+    #[test]
+    fn test_vm_shift_reg_edge() {
+        let mut vm = MicroVm::new();
+        // LD X0; SHREG D60 len 4 slot 0 <- D59; SHBIT D70 slot 1 <- X1; SHL D40 edge slot 2 by 1
+        let prog = [
+            ins(0x01, 0x00, 0),
+            ins(OP_SHREG, 0x20 + 60, 4), w(0x20 + 59),
+            ins(OP_SHBIT, 0x20 + 70, 1), b(0x01),
+            ins(OP_SHL, 0x20 + 40, SHIFT_EDGE_FLAG | 2), w(0x20 + 40), k(1),
+            ins(0xFF, 0, 0),
+        ];
+        load(&mut vm, &prog);
+        vm.word_mem[0x20 + 40] = 1;
+        let mut val = 10;
+        for pulse in 0..5 {
+            vm.word_mem[0x20 + 59] = val;
+            vm.set_digital_input(1, pulse % 2 == 0);
+            vm.set_digital_input(0, true);
+            vm.step_scan(10);
+            // Holding EN high must NOT shift again
+            vm.step_scan(10);
+            vm.step_scan(10);
+            vm.set_digital_input(0, false);
+            vm.step_scan(10);
+            val += 10;
+        }
+        // 5 rising edges: inputs 10,20,30,40,50 -> D60..D63 = 50,40,30,20
+        assert_eq!(&vm.word_mem[0x20 + 60..0x20 + 64], &[50, 40, 30, 20]);
+        assert_eq!(vm.word_mem[0x20 + 64], 0, "shift register must not exceed its length");
+        // Bits shifted in: 1,0,1,0,1 -> 0b10101
+        assert_eq!(vm.word_mem[0x20 + 70], 0b10101);
+        // 5 edges of SHL by 1 starting from 1 -> 32
+        assert_eq!(vm.word_mem[0x20 + 40], 32);
+    }
+
+    #[test]
+    fn test_vm_uart_tx_rx_slots() {
+        let mut vm = MicroVm::new();
+        // LD X0; UTX inst 1 mode 1 <- D80; ST Y0 (ENO); LD X1; URX D81; ST Y1
+        let prog = [
+            ins(0x01, 0x00, 0),
+            ins(OP_UTX, 1, 1), w(0x20 + 80),
+            ins(0x07, 0x20, 0),
+            ins(0x01, 0x01, 0),
+            ins(OP_URX, 0x20 + 81, 0),
+            ins(0x07, 0x21, 0),
+            ins(0xFF, 0, 0),
+        ];
+        load(&mut vm, &prog);
+        vm.word_mem[0x20 + 80] = 42;
+
+        vm.set_digital_input(0, true);
+        vm.step_scan(10);
+        let job = vm.uart_tx_out.take().expect("rising edge must queue a UART job");
+        assert_eq!(job, UartTx { instance: 1, mode: 1, value: 42 });
+        assert!(vm.uart_tx_busy);
+        assert!(!vm.get_digital_output(0), "ENO stays OFF while busy");
+        let mut buf = [0u8; 16];
+        let n = job.encode(&mut buf);
+        assert_eq!(&buf[..n], b"42\r\n");
+
+        // Firmware finished sending
+        vm.uart_tx_busy = false;
+        vm.step_scan(10);
+        assert!(vm.uart_tx_out.is_none(), "Held EN must not resend");
+        assert!(vm.get_digital_output(0), "ENO = sent");
+
+        // RX: no byte -> ENO off; byte -> stored + ENO for one scan
+        vm.set_digital_input(1, true);
+        vm.step_scan(10);
+        assert!(!vm.get_digital_output(1));
+        vm.uart_rx_in = Some(0x41);
+        vm.step_scan(10);
+        assert_eq!(vm.word_mem[0x20 + 81], 0x41);
+        assert!(vm.get_digital_output(1));
+        assert!(vm.uart_rx_in.is_none());
+        vm.step_scan(10);
+        assert!(!vm.get_digital_output(1));
+    }
+
+    #[test]
+    fn test_vm_reset_memory_keep_retain() {
+        let mut vm = MicroVm::new();
+        vm.bit_mem[0x40] = 1; // M0 (volatile)
+        vm.bit_mem[0x80] = 1; // M64 (retain)
+        vm.word_mem[0x20] = 7; // D0 (volatile)
+        vm.word_mem[0x80] = 99; // D96 (retain)
+        vm.word_mem[0x9F] = -3; // D127 (retain)
+        vm.word_mem[0xA0] = 5; // D128 / %SD0 (not retained)
+        vm.reset_memory_keep_retain();
+        assert_eq!(vm.bit_mem[0x40], 0);
+        assert_eq!(vm.bit_mem[0x80], 1);
+        assert_eq!(vm.word_mem[0x20], 0);
+        assert_eq!(vm.word_mem[0x80], 99);
+        assert_eq!(vm.word_mem[0x9F], -3);
+        assert_eq!(vm.word_mem[0xA0], 0);
     }
 }
 

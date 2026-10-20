@@ -148,9 +148,8 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
             .on_hover_text("Duplicate selected network below (copy & paste)")
             .clicked()
             {
-                if let Some(idx) = cur_idx {
-                    let src = app.copied_rung_idx.unwrap_or(idx);
-                    app.doc.copy_rung_at(src, idx + 1);
+                if cur_idx.is_some() {
+                    app.paste_network_below();
                 }
             }
 
@@ -743,16 +742,46 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                         );
                     });
 
-                    // 6. Hardware & Extensions
+                    // 6. Process Control
                     egui::CollapsingHeader::new(
-                        RichText::new("🔌 Hardware & Extensions")
+                        RichText::new("🎛 Process Control")
                             .size(11.5)
                             .strong()
-                            .color(palette.accent_heading),
+                            .color(palette.accent_ok),
                     )
                     .default_open(false)
                     .show(ui, |ui| {
                         ui.spacing_mut().item_spacing.y = 2.0;
+                        component_accordion_item(
+                            ui,
+                            app,
+                            Some(VectorIcon::FunctionBlock),
+                            "PID",
+                            "PID Controller",
+                            ActiveTool::Pid,
+                            palette.accent_ok,
+                            palette,
+                        );
+                        component_accordion_item(
+                            ui,
+                            app,
+                            Some(VectorIcon::FunctionBlock),
+                            "SCL",
+                            "Scale (Linear Map)",
+                            ActiveTool::Scale,
+                            palette.accent_heading,
+                            palette,
+                        );
+                        component_accordion_item(
+                            ui,
+                            app,
+                            Some(VectorIcon::FunctionBlock),
+                            "LIM",
+                            "Limit (Clamp Min/Max)",
+                            ActiveTool::Limit,
+                            palette.accent_warn,
+                            palette,
+                        );
                         component_accordion_item(
                             ui,
                             app,
@@ -763,16 +792,59 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                             palette.accent_heading,
                             palette,
                         );
+                    });
+
+                    // 7. Bitwise & Shift
+                    egui::CollapsingHeader::new(
+                        RichText::new("🔣 Bitwise & Shift")
+                            .size(11.5)
+                            .strong()
+                            .color(palette.accent_warn),
+                    )
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
                         component_accordion_item(
                             ui,
                             app,
-                            Some(VectorIcon::ShiftReg),
-                            "S00",
-                            "Shift Register (S00)",
-                            ActiveTool::ShiftReg,
+                            Some(VectorIcon::FunctionBlock),
+                            "AND",
+                            "Bitwise AND [&]",
+                            ActiveTool::BitAnd,
+                            palette.accent_ok,
+                            palette,
+                        );
+                        component_accordion_item(
+                            ui,
+                            app,
+                            Some(VectorIcon::FunctionBlock),
+                            "OR",
+                            "Bitwise OR [|]",
+                            ActiveTool::BitOr,
+                            palette.accent_heading,
+                            palette,
+                        );
+                        component_accordion_item(
+                            ui,
+                            app,
+                            Some(VectorIcon::FunctionBlock),
+                            "XOR",
+                            "Bitwise XOR [^]",
+                            ActiveTool::BitXor,
                             palette.accent_warn,
                             palette,
                         );
+                        component_accordion_item(
+                            ui,
+                            app,
+                            Some(VectorIcon::FunctionBlock),
+                            "NOT",
+                            "Bitwise NOT [~]",
+                            ActiveTool::BitNot,
+                            palette.accent_danger,
+                            palette,
+                        );
+                        ui.separator();
                         component_accordion_item(
                             ui,
                             app,
@@ -793,7 +865,58 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                             palette.accent_warn,
                             palette,
                         );
-                        ui.separator();
+                        component_accordion_item(
+                            ui,
+                            app,
+                            Some(VectorIcon::ShiftReg),
+                            "SFT",
+                            "Shift Register (Array)",
+                            ActiveTool::ShiftReg,
+                            palette.accent_warn,
+                            palette,
+                        );
+                        component_accordion_item(
+                            ui,
+                            app,
+                            Some(VectorIcon::ShiftReg),
+                            "SBIT",
+                            "Bit Shift In (SFT_BIT)",
+                            ActiveTool::ShiftRegInbit,
+                            palette.accent_warn,
+                            palette,
+                        );
+                        component_accordion_item(
+                            ui,
+                            app,
+                            Some(VectorIcon::ShiftReg),
+                            "SHV",
+                            "Shift Variable (SHV)",
+                            ActiveTool::ShiftVariable,
+                            palette.accent_warn,
+                            palette,
+                        );
+                        component_accordion_item(
+                            ui,
+                            app,
+                            Some(VectorIcon::ShiftReg),
+                            "SRST",
+                            "Shift Reg Reset (SRST)",
+                            ActiveTool::ShiftRegReset,
+                            palette.accent_danger,
+                            palette,
+                        );
+                    });
+
+                    // 8. Communication & Serial
+                    egui::CollapsingHeader::new(
+                        RichText::new("📡 Communication")
+                            .size(11.5)
+                            .strong()
+                            .color(palette.accent_heading),
+                    )
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
                         component_accordion_item(
                             ui,
                             app,
@@ -1435,29 +1558,78 @@ const ALL_COMPONENTS: &[ComponentDef] = &[
         category: "Program Flow",
         accent_kind: 0,
     },
-    // Hardware & Extensions
+    // Process Control
+    ComponentDef {
+        icon: Some(VectorIcon::FunctionBlock),
+        badge: "PID",
+        name: "PID Controller",
+        tool: ActiveTool::Pid,
+        category: "Process Control",
+        accent_kind: 0,
+    },
+    ComponentDef {
+        icon: Some(VectorIcon::FunctionBlock),
+        badge: "SCL",
+        name: "Scale (Linear Map)",
+        tool: ActiveTool::Scale,
+        category: "Process Control",
+        accent_kind: 2,
+    },
+    ComponentDef {
+        icon: Some(VectorIcon::FunctionBlock),
+        badge: "LIM",
+        name: "Limit (Clamp Min/Max)",
+        tool: ActiveTool::Limit,
+        category: "Process Control",
+        accent_kind: 1,
+    },
     ComponentDef {
         icon: Some(VectorIcon::FunctionBlock),
         badge: "ADC",
         name: "A/D Converter Read",
         tool: ActiveTool::Adc,
-        category: "Hardware & Extensions",
+        category: "Process Control",
+        accent_kind: 2,
+    },
+    // Bitwise & Shift
+    ComponentDef {
+        icon: Some(VectorIcon::FunctionBlock),
+        badge: "AND",
+        name: "Bitwise AND [&]",
+        tool: ActiveTool::BitAnd,
+        category: "Bitwise & Shift",
+        accent_kind: 0,
+    },
+    ComponentDef {
+        icon: Some(VectorIcon::FunctionBlock),
+        badge: "OR",
+        name: "Bitwise OR [|]",
+        tool: ActiveTool::BitOr,
+        category: "Bitwise & Shift",
         accent_kind: 2,
     },
     ComponentDef {
-        icon: Some(VectorIcon::ShiftReg),
-        badge: "S00",
-        name: "Shift Register (S00)",
-        tool: ActiveTool::ShiftReg,
-        category: "Hardware & Extensions",
+        icon: Some(VectorIcon::FunctionBlock),
+        badge: "XOR",
+        name: "Bitwise XOR [^]",
+        tool: ActiveTool::BitXor,
+        category: "Bitwise & Shift",
         accent_kind: 1,
+    },
+    ComponentDef {
+        icon: Some(VectorIcon::FunctionBlock),
+        badge: "NOT",
+        name: "Bitwise NOT [~]",
+        tool: ActiveTool::BitNot,
+        category: "Bitwise & Shift",
+        accent_kind: 4,
     },
     ComponentDef {
         icon: Some(VectorIcon::ShiftReg),
         badge: "SHL",
         name: "Shift Left (SHL)",
         tool: ActiveTool::ShiftLeft,
-        category: "Hardware & Extensions",
+        category: "Bitwise & Shift",
         accent_kind: 1,
     },
     ComponentDef {
@@ -1465,15 +1637,48 @@ const ALL_COMPONENTS: &[ComponentDef] = &[
         badge: "SHR",
         name: "Shift Right (SHR)",
         tool: ActiveTool::ShiftRight,
-        category: "Hardware & Extensions",
+        category: "Bitwise & Shift",
         accent_kind: 1,
     },
+    ComponentDef {
+        icon: Some(VectorIcon::ShiftReg),
+        badge: "SFT",
+        name: "Shift Register (Array)",
+        tool: ActiveTool::ShiftReg,
+        category: "Bitwise & Shift",
+        accent_kind: 1,
+    },
+    ComponentDef {
+        icon: Some(VectorIcon::ShiftReg),
+        badge: "SBIT",
+        name: "Bit Shift In (SFT_BIT)",
+        tool: ActiveTool::ShiftRegInbit,
+        category: "Bitwise & Shift",
+        accent_kind: 1,
+    },
+    ComponentDef {
+        icon: Some(VectorIcon::ShiftReg),
+        badge: "SHV",
+        name: "Shift Variable (SHV)",
+        tool: ActiveTool::ShiftVariable,
+        category: "Bitwise & Shift",
+        accent_kind: 1,
+    },
+    ComponentDef {
+        icon: Some(VectorIcon::ShiftReg),
+        badge: "SRST",
+        name: "Shift Reg Reset (SRST)",
+        tool: ActiveTool::ShiftRegReset,
+        category: "Bitwise & Shift",
+        accent_kind: 4,
+    },
+    // Communication
     ComponentDef {
         icon: Some(VectorIcon::SerialComm),
         badge: "TX",
         name: "UART Send (TX)",
         tool: ActiveTool::UartSend,
-        category: "Hardware & Extensions",
+        category: "Communication",
         accent_kind: 2,
     },
     ComponentDef {
@@ -1481,7 +1686,7 @@ const ALL_COMPONENTS: &[ComponentDef] = &[
         badge: "RX",
         name: "UART Recv (RX)",
         tool: ActiveTool::UartRecv,
-        category: "Hardware & Extensions",
+        category: "Communication",
         accent_kind: 0,
     },
 ];

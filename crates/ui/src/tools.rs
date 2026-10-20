@@ -1,4 +1,4 @@
-use my_canvas_core::{CoilMode, ContactMode, LadderElement, TypeTag};
+use my_canvas_core::{CoilMode, ContactMode, FbParams, LadderElement, TypeTag};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveTool {
@@ -25,6 +25,9 @@ pub enum ActiveTool {
     ShiftReg,
     ShiftLeft,
     ShiftRight,
+    ShiftVariable,
+    ShiftRegReset,
+    ShiftRegInbit,
     Move,
     Compare,
     Add,
@@ -32,7 +35,14 @@ pub enum ActiveTool {
     Mul,
     Div,
     Mod,
+    BitAnd,
+    BitOr,
+    BitXor,
+    BitNot,
     Adc,
+    Pid,
+    Scale,
+    Limit,
     RTrig,
     FTrig,
     UartSend,
@@ -78,9 +88,12 @@ impl ActiveTool {
             Self::Ctu => "CTU (Count Up)",
             Self::Ctd => "CTD (Count Down)",
             Self::Ctud => "CTUD (Up/Down Counter)",
-            Self::ShiftReg => "Shift Register",
+            Self::ShiftReg => "Shift Register (Array)",
             Self::ShiftLeft => "Shift Left (SHL)",
             Self::ShiftRight => "Shift Right (SHR)",
+            Self::ShiftVariable => "Shift Variable (SHV)",
+            Self::ShiftRegReset => "Shift Register Reset (SRST)",
+            Self::ShiftRegInbit => "Bit Shift In (SFT_BIT)",
             Self::Move => "Move [:=]",
             Self::Compare => "Compare [EQ, NE, GT, LT, GE, LE]",
             Self::Add => "Add [+=]",
@@ -88,11 +101,18 @@ impl ActiveTool {
             Self::Mul => "Mul [*=]",
             Self::Div => "Div [/=]",
             Self::Mod => "Mod [%=]",
+            Self::BitAnd => "Bitwise AND [&]",
+            Self::BitOr => "Bitwise OR [|]",
+            Self::BitXor => "Bitwise XOR [^]",
+            Self::BitNot => "Bitwise NOT [~]",
             Self::Adc => "A/D Converter Read (ADC)",
+            Self::Pid => "PID Controller (PID)",
+            Self::Scale => "Linear Scale (SCALE)",
+            Self::Limit => "Clamp Limit (LIMIT)",
             Self::RTrig => "R_TRIG (Rising Edge Detector)",
             Self::FTrig => "F_TRIG (Falling Edge Detector)",
-            Self::UartSend => "UART Send",
-            Self::UartRecv => "UART Recv",
+            Self::UartSend => "UART Send (TX)",
+            Self::UartRecv => "UART Recv (RX)",
             Self::Sr => "SR (Set-Dominant Bistable FB)",
             Self::Rs => "RS (Reset-Dominant Bistable FB)",
             Self::Jump => "JMP (Jump to Label)",
@@ -123,10 +143,17 @@ impl ActiveTool {
             Self::ShiftReg => Some(TypeTag::ShiftRegisters),
             Self::ShiftLeft => Some(TypeTag::ShiftLeft),
             Self::ShiftRight => Some(TypeTag::ShiftRight),
+            Self::ShiftVariable => Some(TypeTag::ShiftVariable),
+            Self::ShiftRegReset => Some(TypeTag::ShiftRegReset),
+            Self::ShiftRegInbit => Some(TypeTag::ShiftRegInbit),
             Self::Move => Some(TypeTag::Move),
             Self::Compare => Some(TypeTag::Compare),
             Self::Add | Self::Sub | Self::Mul | Self::Div | Self::Mod => Some(TypeTag::Math),
+            Self::BitAnd | Self::BitOr | Self::BitXor | Self::BitNot => Some(TypeTag::Bitwise),
             Self::Adc => Some(TypeTag::Adc),
+            Self::Pid => Some(TypeTag::Pid),
+            Self::Scale => Some(TypeTag::Scale),
+            Self::Limit => Some(TypeTag::Limit),
             Self::RTrig => Some(TypeTag::RTrig),
             Self::FTrig => Some(TypeTag::FTrig),
             Self::UartSend => Some(TypeTag::UartSend),
@@ -188,22 +215,58 @@ impl ActiveTool {
             Self::ShiftReg => Some(LadderElement {
                 id,
                 element_type: TypeTag::ShiftRegisters,
-                name: "%MW0".to_string(),
+                name: "%MW30".to_string(),
                 symbol: "SHIFT_REG".to_string(),
+                preset_value: 4,
+                fb: FbParams {
+                    in1: "%MW0".to_string(),
+                    ..Default::default()
+                },
                 ..Default::default()
             }),
             Self::ShiftLeft => Some(LadderElement {
                 id,
                 element_type: TypeTag::ShiftLeft,
-                name: "%MW0".to_string(),
+                name: "%MW30".to_string(),
                 symbol: "SHL".to_string(),
+                preset_value: 1,
                 ..Default::default()
             }),
             Self::ShiftRight => Some(LadderElement {
                 id,
                 element_type: TypeTag::ShiftRight,
-                name: "%MW0".to_string(),
+                name: "%MW30".to_string(),
                 symbol: "SHR".to_string(),
+                preset_value: 1,
+                ..Default::default()
+            }),
+            Self::ShiftVariable => Some(LadderElement {
+                id,
+                element_type: TypeTag::ShiftVariable,
+                name: "%MW30".to_string(),
+                symbol: "SHV".to_string(),
+                fb: FbParams {
+                    in1: "%MW31".to_string(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            Self::ShiftRegReset => Some(LadderElement {
+                id,
+                element_type: TypeTag::ShiftRegReset,
+                name: "%MW30".to_string(),
+                symbol: "SRST".to_string(),
+                ..Default::default()
+            }),
+            Self::ShiftRegInbit => Some(LadderElement {
+                id,
+                element_type: TypeTag::ShiftRegInbit,
+                name: "%MW30".to_string(),
+                symbol: "SFT_BIT".to_string(),
+                fb: FbParams {
+                    in1: "%IX0.0".to_string(),
+                    ..Default::default()
+                },
                 ..Default::default()
             }),
             Self::Move => Some(LadderElement {
@@ -244,11 +307,78 @@ impl ActiveTool {
                     ..Default::default()
                 })
             }
+            Self::BitAnd | Self::BitOr | Self::BitXor | Self::BitNot => {
+                let op = match self {
+                    Self::BitAnd => "AND",
+                    Self::BitOr => "OR",
+                    Self::BitXor => "XOR",
+                    Self::BitNot => "NOT",
+                    _ => "AND",
+                };
+                let in2 = if op == "NOT" { String::new() } else { "16#00FF".to_string() };
+                Some(LadderElement {
+                    id,
+                    element_type: TypeTag::Bitwise,
+                    name: "%MW1".to_string(),
+                    symbol: format!("BIT_{}", op),
+                    target_reg: "%MW1".to_string(),
+                    math_op: op.to_string(),
+                    fb: FbParams {
+                        in1: "%MW0".to_string(),
+                        in2,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
+            }
             Self::Adc => Some(LadderElement {
                 id,
                 element_type: TypeTag::Adc,
                 name: "%IW0".to_string(),
                 symbol: "ADC_IN".to_string(),
+                target_reg: "%MW0".to_string(),
+                ..Default::default()
+            }),
+            Self::Pid => Some(LadderElement {
+                id,
+                element_type: TypeTag::Pid,
+                name: "PID0".to_string(),
+                symbol: "PID_LOOP".to_string(),
+                target_reg: "%MW10".to_string(),
+                fb: FbParams {
+                    in1: "%IW0".to_string(),
+                    in2: "500".to_string(),
+                    k: [100, 10, 0, 1000],
+                    mode: 0,
+                },
+                ..Default::default()
+            }),
+            Self::Scale => Some(LadderElement {
+                id,
+                element_type: TypeTag::Scale,
+                name: "SCALE0".to_string(),
+                symbol: "SCALE_ANALOG".to_string(),
+                target_reg: "%MW20".to_string(),
+                fb: FbParams {
+                    in1: "%IW0".to_string(),
+                    in2: String::new(),
+                    k: [0, 4095, 0, 1000],
+                    mode: 0,
+                },
+                ..Default::default()
+            }),
+            Self::Limit => Some(LadderElement {
+                id,
+                element_type: TypeTag::Limit,
+                name: "LIMIT0".to_string(),
+                symbol: "CLAMP_VAL".to_string(),
+                target_reg: "%MW21".to_string(),
+                fb: FbParams {
+                    in1: "%MW20".to_string(),
+                    in2: String::new(),
+                    k: [0, 1000, 0, 0],
+                    mode: 0,
+                },
                 ..Default::default()
             }),
             Self::RTrig => Some(LadderElement {
@@ -268,15 +398,22 @@ impl ActiveTool {
             Self::UartSend => Some(LadderElement {
                 id,
                 element_type: TypeTag::UartSend,
-                name: "u_tx".to_string(),
+                name: "U_TX0".to_string(),
                 symbol: "UART_SEND".to_string(),
+                fb: FbParams {
+                    in1: "%MW0".to_string(),
+                    in2: String::new(),
+                    k: [0; 4],
+                    mode: 1,
+                },
                 ..Default::default()
             }),
             Self::UartRecv => Some(LadderElement {
                 id,
                 element_type: TypeTag::UartRecv,
-                name: "u_rx".to_string(),
+                name: "U_RX0".to_string(),
                 symbol: "UART_RECV".to_string(),
+                target_reg: "%MW1".to_string(),
                 ..Default::default()
             }),
             Self::Sr => Some(LadderElement {
@@ -320,5 +457,60 @@ impl ActiveTool {
             )),
             Self::Select | Self::Pan => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn phase_p4_tools_create_valid_default_elements() {
+        let tools = [
+            (ActiveTool::Pid, TypeTag::Pid),
+            (ActiveTool::Scale, TypeTag::Scale),
+            (ActiveTool::Limit, TypeTag::Limit),
+            (ActiveTool::BitAnd, TypeTag::Bitwise),
+            (ActiveTool::BitOr, TypeTag::Bitwise),
+            (ActiveTool::BitXor, TypeTag::Bitwise),
+            (ActiveTool::BitNot, TypeTag::Bitwise),
+            (ActiveTool::ShiftReg, TypeTag::ShiftRegisters),
+            (ActiveTool::ShiftLeft, TypeTag::ShiftLeft),
+            (ActiveTool::ShiftRight, TypeTag::ShiftRight),
+            (ActiveTool::ShiftVariable, TypeTag::ShiftVariable),
+            (ActiveTool::ShiftRegReset, TypeTag::ShiftRegReset),
+            (ActiveTool::ShiftRegInbit, TypeTag::ShiftRegInbit),
+            (ActiveTool::Adc, TypeTag::Adc),
+            (ActiveTool::UartSend, TypeTag::UartSend),
+            (ActiveTool::UartRecv, TypeTag::UartRecv),
+        ];
+        for (idx, (tool, expected_tag)) in tools.iter().enumerate() {
+            assert_eq!(tool.element_type(), Some(*expected_tag));
+            let el = tool
+                .create_default_element(100 + idx as u64)
+                .expect("tool should create default element");
+            assert_eq!(el.element_type, *expected_tag);
+            assert!(!el.name.is_empty());
+            assert!(
+                el.fb_value_summary().is_some(),
+                "Tool {:?} should produce an fb_value_summary",
+                tool
+            );
+        }
+
+        let pid = ActiveTool::Pid.create_default_element(1).unwrap();
+        assert_eq!(pid.fb.k, [100, 10, 0, 1000]);
+        assert_eq!(pid.fb.in1, "%IW0");
+        assert_eq!(pid.fb.in2, "500");
+        assert_eq!(pid.target_reg, "%MW10");
+
+        let scale = ActiveTool::Scale.create_default_element(2).unwrap();
+        assert_eq!(scale.fb.k, [0, 4095, 0, 1000]);
+        assert_eq!(scale.fb.in1, "%IW0");
+        assert_eq!(scale.target_reg, "%MW20");
+
+        let limit = ActiveTool::Limit.create_default_element(3).unwrap();
+        assert_eq!(limit.fb.k[0], 0);
+        assert_eq!(limit.fb.k[1], 1000);
     }
 }

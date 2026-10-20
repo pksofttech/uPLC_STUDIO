@@ -283,6 +283,32 @@ impl CanvasViewport {
         )
     }
 
+    /// World-space top Y of network `rung_idx` (same layout rules as [`Self::compute_content_size`]).
+    pub fn rung_world_top(doc: &Document, rung_idx: usize) -> f32 {
+        let cell_h = 88.0;
+        let mut cur_y = 24.0;
+        for (i, rung) in doc.program.rungs.iter().enumerate() {
+            if i == rung_idx {
+                return cur_y;
+            }
+            let has_header_bar = !rung.comment.is_empty()
+                || rung.elements.iter().any(|e| e.element_type == TypeTag::Label);
+            let rung_start_y = cur_y + if has_header_bar { 26.0 } else { 0.0 };
+            let mut max_y = rung_start_y + cell_h;
+            for elem in &rung.elements {
+                max_y = max_y.max(rung_start_y + Self::element_height(elem, cell_h));
+            }
+            cur_y = max_y + 18.0;
+        }
+        cur_y
+    }
+
+    /// Pan vertically so network `rung_idx` is near the top of the viewport (used by Find).
+    pub fn scroll_to_rung(&mut self, doc: &Document, rung_idx: usize) {
+        let y = Self::rung_world_top(doc, rung_idx);
+        self.pan_offset.y = 16.0 - (y - 24.0) * self.zoom;
+    }
+
     /// Renders the Ladder Canvas and returns `Some(elem_id)` if the user requested opening the Element Configuration Dialog
     pub fn show(
         &mut self,
@@ -3440,10 +3466,14 @@ impl CanvasViewport {
             | TypeTag::ShiftRegReset
             | TypeTag::ShiftRegInbit
             | TypeTag::UartSend
-            | TypeTag::UartRecv => {
-                // Compact Instruction Block Card
-                let card_w = w - 20.0 * self.zoom;
-                let card_h = h - 26.0 * self.zoom;
+            | TypeTag::UartRecv
+            | TypeTag::Pid
+            | TypeTag::Scale
+            | TypeTag::Limit
+            | TypeTag::Bitwise => {
+                // Function Block / Instruction Card
+                let card_w = w - 18.0 * self.zoom;
+                let card_h = h - 20.0 * self.zoom;
                 let card_rect = Rect::from_center_size(center, vec2(card_w, card_h));
 
                 self.draw_power_wire(
@@ -3462,6 +3492,202 @@ impl CanvasViewport {
                 );
 
                 painter.rect_filled(card_rect, 5.0 * self.zoom, palette.card_bg);
+
+                let (hdr, line1, line2) = match elem.element_type {
+                    TypeTag::Compare => (
+                        "CMP".to_string(),
+                        format!("{} {} {}", elem.name, elem.compare_op, elem.preset_value),
+                        if sim_active {
+                            format!("VAL: {}", elem.current_accum)
+                        } else {
+                            elem.symbol.clone()
+                        },
+                    ),
+                    TypeTag::Move => {
+                        let reg = elem.word_target();
+                        (
+                            "MOVE".to_string(),
+                            format!("{} := {}", reg, elem.preset_value),
+                            if sim_active {
+                                format!("OUT: {}", elem.current_accum)
+                            } else {
+                                elem.symbol.clone()
+                            },
+                        )
+                    }
+                    TypeTag::Math => {
+                        let reg = elem.word_target();
+                        (
+                            format!("MATH ({})", elem.math_op),
+                            format!("{} {}= {}", reg, elem.math_op, elem.preset_value),
+                            if sim_active {
+                                format!("OUT: {}", elem.current_accum)
+                            } else {
+                                elem.symbol.clone()
+                            },
+                        )
+                    }
+                    TypeTag::Adc => {
+                        let dst = if elem.target_reg.is_empty() {
+                            "ACC"
+                        } else {
+                            elem.target_reg.as_str()
+                        };
+                        (
+                            format!("ADC : {}", elem.name),
+                            format!("{} -> {}", elem.name, dst),
+                            if sim_active {
+                                format!("RAW: {}", elem.current_accum)
+                            } else {
+                                elem.symbol.clone()
+                            },
+                        )
+                    }
+                    TypeTag::MasterRelay => (
+                        "MCR".to_string(),
+                        "Master Relay".to_string(),
+                        elem.symbol.clone(),
+                    ),
+                    TypeTag::UartSend => {
+                        let crlf = if elem.fb.mode != 0 { "+CRLF" } else { "RAW" };
+                        (
+                            format!("UART TX : {}", elem.name),
+                            format!("IN:{} ({})", elem.fb.in1, crlf),
+                            if sim_active {
+                                format!("LAST: {}", elem.current_accum)
+                            } else {
+                                elem.symbol.clone()
+                            },
+                        )
+                    }
+                    TypeTag::UartRecv => (
+                        format!("UART RX : {}", elem.name),
+                        format!("OUT: {}", elem.target_reg),
+                        if sim_active {
+                            format!("RX: {}", elem.current_accum)
+                        } else {
+                            elem.symbol.clone()
+                        },
+                    ),
+                    TypeTag::Pid => {
+                        let [kp, ki, kd, _] = elem.fb.k;
+                        (
+                            format!("PID : {}", elem.name),
+                            format!("PV:{} SP:{}", elem.fb.in1, elem.fb.in2),
+                            if sim_active {
+                                format!("OUT({}): {}", elem.target_reg, elem.current_accum)
+                            } else {
+                                format!(
+                                    "OUT:{} P:{:.1} I:{:.1} D:{:.1}",
+                                    elem.target_reg,
+                                    kp as f32 / 100.0,
+                                    ki as f32 / 100.0,
+                                    kd as f32 / 100.0
+                                )
+                            },
+                        )
+                    }
+                    TypeTag::Scale => {
+                        let [imin, imax, omin, omax] = elem.fb.k;
+                        (
+                            format!("SCALE : {}", elem.name),
+                            format!("{} -> {}", elem.fb.in1, elem.target_reg),
+                            if sim_active {
+                                format!("OUT: {}", elem.current_accum)
+                            } else {
+                                format!("[{}..{}]->[{}..{}]", imin, imax, omin, omax)
+                            },
+                        )
+                    }
+                    TypeTag::Limit => {
+                        let [mn, mx, _, _] = elem.fb.k;
+                        (
+                            format!("LIMIT : {}", elem.name),
+                            format!("{} -> {}", elem.fb.in1, elem.target_reg),
+                            if sim_active {
+                                format!("OUT: {}", elem.current_accum)
+                            } else {
+                                format!("MIN:{} MAX:{}", mn, mx)
+                            },
+                        )
+                    }
+                    TypeTag::Bitwise => {
+                        let op = if elem.math_op.is_empty() {
+                            "AND"
+                        } else {
+                            elem.math_op.as_str()
+                        };
+                        let expr = if op.eq_ignore_ascii_case("NOT") {
+                            format!("~{} -> {}", elem.fb.in1, elem.target_reg)
+                        } else {
+                            format!("{} {} {}", elem.fb.in1, op, elem.fb.in2)
+                        };
+                        (
+                            format!("BIT {} : {}", op, elem.target_reg),
+                            expr,
+                            if sim_active {
+                                format!(
+                                    "0x{:04X} ({})",
+                                    (elem.current_accum as u16), elem.current_accum
+                                )
+                            } else {
+                                elem.symbol.clone()
+                            },
+                        )
+                    }
+                    TypeTag::ShiftRegisters => (
+                        format!("SFT : {}", elem.name),
+                        format!("LEN:{} IN:{}", elem.preset_value.max(1), elem.fb.in1),
+                        if sim_active {
+                            format!("HEAD: {}", elem.current_accum)
+                        } else {
+                            elem.symbol.clone()
+                        },
+                    ),
+                    TypeTag::ShiftRegInbit => (
+                        format!("SBIT : {}", elem.name),
+                        format!("BIT: {}", elem.fb.in1),
+                        if sim_active {
+                            format!("0x{:04X}", elem.current_accum as u16)
+                        } else {
+                            elem.symbol.clone()
+                        },
+                    ),
+                    TypeTag::ShiftRegReset => (
+                        format!("SRST : {}", elem.name),
+                        "CLR := 0".to_string(),
+                        elem.symbol.clone(),
+                    ),
+                    TypeTag::ShiftLeft => (
+                        format!("SHL : {}", elem.name),
+                        format!("<< {} bits", elem.preset_value),
+                        if sim_active {
+                            format!("0x{:04X}", elem.current_accum as u16)
+                        } else {
+                            elem.symbol.clone()
+                        },
+                    ),
+                    TypeTag::ShiftRight => (
+                        format!("SHR : {}", elem.name),
+                        format!(">> {} bits", elem.preset_value),
+                        if sim_active {
+                            format!("0x{:04X}", elem.current_accum as u16)
+                        } else {
+                            elem.symbol.clone()
+                        },
+                    ),
+                    TypeTag::ShiftVariable => (
+                        format!("SHV : {}", elem.name),
+                        format!("CNT: {}", elem.fb.in1),
+                        if sim_active {
+                            format!("0x{:04X}", elem.current_accum as u16)
+                        } else {
+                            elem.symbol.clone()
+                        },
+                    ),
+                    _ => ("BLOCK".to_string(), elem.name.clone(), elem.symbol.clone()),
+                };
+
                 painter.rect_stroke(
                     card_rect,
                     5.0 * self.zoom,
@@ -3478,54 +3704,47 @@ impl CanvasViewport {
 
                 // IEC 61131-3 Pin Labels: EN on left, ENO on right
                 painter.text(
-                    pos2(card_rect.min.x + 6.0 * self.zoom, mid_y),
+                    pos2(card_rect.min.x + 5.0 * self.zoom, mid_y),
                     Align2::LEFT_CENTER,
                     "EN",
-                    self.font_mono(7.5),
+                    self.font_mono(7.0),
                     if power_in && sim_active { palette.wire_energized } else { palette.rung_text_dim },
                 );
                 painter.text(
-                    pos2(card_rect.max.x - 6.0 * self.zoom, mid_y),
+                    pos2(card_rect.max.x - 5.0 * self.zoom, mid_y),
                     Align2::RIGHT_CENTER,
                     "ENO",
-                    self.font_mono(7.5),
+                    self.font_mono(7.0),
                     if elem.is_energized && sim_active { palette.wire_energized } else { palette.rung_text_dim },
                 );
 
-                let (hdr, expr) = match elem.element_type {
-                    TypeTag::Compare => (
-                        "CMP",
-                        format!("{} {} {}", elem.name, elem.compare_op, elem.preset_value),
-                    ),
-                    TypeTag::Move => {
-                        let reg = if !elem.target_reg.is_empty() { &elem.target_reg } else { &elem.name };
-                        ("MOVE", format!("{} := {}", reg, elem.preset_value))
-                    }
-                    TypeTag::Math => (
-                        "MATH",
-                        format!("{} {}= {}", elem.name, elem.math_op, elem.preset_value),
-                    ),
-                    TypeTag::Adc => ("ADC", format!("Read {}", elem.name)),
-                    TypeTag::MasterRelay => ("MCR", "Master Relay".to_string()),
-                    TypeTag::UartSend => ("UART TX", elem.name.clone()),
-                    TypeTag::UartRecv => ("UART RX", elem.name.clone()),
-                    _ => ("SHIFT", elem.name.clone()),
-                };
-
                 painter.text(
-                    pos2(center.x, card_rect.min.y + 13.0 * self.zoom),
+                    pos2(center.x, card_rect.min.y + 11.0 * self.zoom),
                     Align2::CENTER_CENTER,
                     hdr,
-                    self.font_mono(10.0),
+                    self.font_mono(9.5),
                     palette.accent_heading,
                 );
                 painter.text(
-                    pos2(center.x, card_rect.center().y + 6.0 * self.zoom),
+                    pos2(center.x, card_rect.center().y + 1.0 * self.zoom),
                     Align2::CENTER_CENTER,
-                    expr,
-                    self.font_mono(9.5),
+                    line1,
+                    self.font_mono(8.8),
                     palette.text_primary,
                 );
+                if !line2.is_empty() {
+                    painter.text(
+                        pos2(center.x, card_rect.max.y - 10.0 * self.zoom),
+                        Align2::CENTER_CENTER,
+                        line2,
+                        self.font_mono(8.2),
+                        if sim_active {
+                            palette.accent_ok
+                        } else {
+                            palette.symbol_subtext
+                        },
+                    );
+                }
             }
 
             TypeTag::Wire => {

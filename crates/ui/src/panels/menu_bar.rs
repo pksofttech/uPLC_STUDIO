@@ -15,6 +15,35 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 app.request_open_program();
                 ui.close();
             }
+            ui.menu_button("Open Recent", |ui| {
+                if app.recent_files.is_empty() {
+                    ui.label(RichText::new("(no recent files)").weak().italics());
+                } else {
+                    let mut chosen: Option<String> = None;
+                    for (i, path) in app.recent_files.iter().enumerate() {
+                        let name = std::path::Path::new(path)
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or(path);
+                        if ui
+                            .button(format!("{}. {}", i + 1, name))
+                            .on_hover_text(path.as_str())
+                            .clicked()
+                        {
+                            chosen = Some(path.clone());
+                        }
+                    }
+                    ui.separator();
+                    if ui.button("Clear Recent Files").clicked() {
+                        app.clear_recent_files();
+                        ui.close();
+                    }
+                    if let Some(path) = chosen {
+                        app.request_open_recent(path);
+                        ui.close();
+                    }
+                }
+            });
             ui.menu_button("Load Example (.il)", |ui| {
                 let examples = [
                     ("01 - Motor Start/Stop (Latching)", "example/01_motor_start_stop.il"),
@@ -80,19 +109,38 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 ui.close();
             }
             ui.separator();
+            let has_sel = !app.doc.selected_ids().is_empty();
+            if ui.add_enabled(has_sel, egui::Button::new("Cut Element (Ctrl+X)")).clicked() {
+                app.cut_selected_elements(ui.ctx());
+                ui.close();
+            }
+            if ui.add_enabled(has_sel, egui::Button::new("Copy Element (Ctrl+C)")).clicked() {
+                app.copy_selected_elements(ui.ctx());
+                ui.close();
+            }
+            if ui
+                .add_enabled(!app.clipboard.is_empty(), egui::Button::new("Paste Element (Ctrl+V)"))
+                .clicked()
+            {
+                app.paste_clipboard_elements(None);
+                ui.close();
+            }
+            ui.separator();
+            if ui.button("Find / Replace... (Ctrl+F)").clicked() {
+                app.open_find();
+                ui.close();
+            }
+            ui.separator();
             if ui.button("+ New Network").clicked() {
                 app.doc.add_rung();
                 ui.close();
             }
             if ui.button("Copy Network").clicked() {
-                app.copied_rung_idx = app.doc.selected_rung_idx;
+                app.copy_selected_network();
                 ui.close();
             }
             if ui.button("Paste Network Below").clicked() {
-                if let Some(idx) = app.doc.selected_rung_idx {
-                    let src = app.copied_rung_idx.unwrap_or(idx);
-                    app.doc.copy_rung_at(src, idx + 1);
-                }
+                app.paste_network_below();
                 ui.close();
             }
             ui.separator();
@@ -335,7 +383,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
 
         // --- HELP MENU ---
         ui.menu_button("Help", |ui| {
-            if ui.button("About uPLC Studio").clicked() {
+            if ui.button("About LaduinoPLC").clicked() {
                 app.show_about = true;
                 ui.close();
             }

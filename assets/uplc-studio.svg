@@ -93,7 +93,7 @@
     <line x1="163" y1="128" x2="188" y2="128" stroke="#00F0FF" stroke-width="4" stroke-linecap="round"/>
   </g>
 
-  <!-- Micro "uPLC" Laser Etching Brand Label -->
-  <text x="128" y="80" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="800" font-size="14" fill="#38BDF8" letter-spacing="3" opacity="0.85">µPLC STUDIO</text>
+  <!-- LaduinoPLC Laser Etching Brand Label -->
+  <text x="128" y="80" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="800" font-size="14" fill="#38BDF8" letter-spacing="3" opacity="0.85">LaduinoPLC</text>
   <text x="128" y="196" text-anchor="middle" font-family="monospace" font-weight="600" font-size="10" fill="#64748B" letter-spacing="1.5" opacity="0.75">IEC 61131-3</text>
 </svg>

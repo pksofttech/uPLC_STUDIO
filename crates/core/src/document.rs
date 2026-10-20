@@ -251,6 +251,8 @@ impl Document {
     pub fn copy_rung_at(&mut self, src_idx: usize, insert_idx: usize) -> usize {
         self.push_undo_snapshot();
         let idx = self.program.copy_rung_at(src_idx, insert_idx);
+        // `reassign_ids` leaves `next_element_id` on the last used id; keep alloc_id collision-free
+        self.sync_next_element_id();
         self.selected_rung_idx = Some(idx);
         self.is_dirty = true;
         idx
@@ -1017,6 +1019,433 @@ impl Document {
     /// Compile an IEC 61131-3 IL string into 32-bit Micro-VM Bytecode
     pub fn compile_il_to_bytecode(il_text: &str) -> Result<crate::bytecode::BytecodeProgram, String> {
         crate::bytecode::BytecodeCompiler::compile_il(il_text)
+    }
+
+    // ------------------------------------------------------------------
+    // Clipboard (element-level Copy / Cut / Paste, network paste)
+    // ------------------------------------------------------------------
+
+    /// Largest element id currently used anywhere in the program (0 if none).
+    fn max_element_id(&self) -> u64 {
+        fn walk(el: &LadderElement, max: &mut u64) {
+            *max = (*max).max(el.id);
+            for path in &el.branch_paths {
+                for sub in path {
+                    walk(sub, max);
+                }
+            }
+        }
+        let mut max = 0;
+        for rung in &self.program.rungs {
+            for el in &rung.elements {
+                walk(el, &mut max);
+            }
+        }
+        max
+    }
+
+    /// Make sure `next_element_id` is above every id in use, so `alloc_id` never hands out duplicates.
+    fn sync_next_element_id(&mut self) {
+        let min_next = self.max_element_id() + 1;
+        if self.program.next_element_id < min_next {
+            self.program.next_element_id = min_next;
+        }
+    }
+
+    /// Give `el` (and all nested branch elements) brand-new unique ids and clear runtime state.
+    fn assign_fresh_ids(&mut self, el: &mut LadderElement) {
+        el.id = self.program.alloc_id();
+        el.is_energized = false;
+        el.current_accum = 0;
+        el.is_done = false;
+        for path in &mut el.branch_paths {
+            for sub in path {
+                self.assign_fresh_ids(sub);
+            }
+        }
+    }
+
+    /// All currently selected element ids (multi-selection plus primary selection).
+    pub fn selected_ids(&self) -> Vec<u64> {
+        let mut ids = self.selected_element_ids.clone();
+        if let Some(id) = self.selected_element_id {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        ids
+    }
+
+    /// Clone the selected elements in program order (rung by rung, left to right).
+    pub fn copy_selected(&self) -> Vec<LadderElement> {
+        fn walk(el: &LadderElement, ids: &[u64], out: &mut Vec<LadderElement>) {
+            if ids.contains(&el.id) {
+                out.push(el.clone());
+                return;
+            }
+            for path in &el.branch_paths {
+                for sub in path {
+                    walk(sub, ids, out);
+                }
+            }
+        }
+        let ids = self.selected_ids();
+        let mut out = Vec::new();
+        if ids.is_empty() {
+            return out;
+        }
+        for rung in &self.program.rungs {
+            for el in &rung.elements {
+                walk(el, &ids, &mut out);
+            }
+        }
+        out
+    }
+
+    /// Copy the selection and then delete it (one undo step). Returns the cut elements.
+    pub fn cut_selected(&mut self) -> Vec<LadderElement> {
+        let els = self.copy_selected();
+        if !els.is_empty() {
+            self.delete_selected_element();
+        }
+        els
+    }
+
+    /// Paste clones of `els` relative to the current selection (or appended to the selected rung).
+    ///
+    /// Every pasted element (including nested branch elements) gets a fresh unique id.
+    /// The first element is placed at `pos`; the following ones are chained in series after it.
+    /// Pushes exactly one undo snapshot. Returns the new top-level element ids (also selected).
+    pub fn paste_elements(&mut self, els: &[LadderElement], pos: InsertPosition) -> Vec<u64> {
+        if els.is_empty() {
+            return Vec::new();
+        }
+        self.push_undo_snapshot();
+        self.sync_next_element_id();
+        if self.program.rungs.is_empty() {
+            let idx = self.program.add_rung();
+            self.selected_rung_idx = Some(idx);
+        }
+        if self.selected_rung_idx.map_or(true, |i| i >= self.program.rungs.len()) {
+            self.selected_rung_idx = Some(self.program.rungs.len() - 1);
+        }
+        let mut new_ids = Vec::with_capacity(els.len());
+        for (i, src) in els.iter().enumerate() {
+            let mut el = src.clone();
+            self.assign_fresh_ids(&mut el);
+            new_ids.push(el.id);
+            let this_pos = if i == 0 || pos == InsertPosition::AppendRung {
+                pos
+            } else {
+                InsertPosition::Right
+            };
+            self.insert_existing_element(el, this_pos);
+        }
+        self.selected_element_id = new_ids.first().copied();
+        self.selected_element_ids = new_ids.clone();
+        self.is_dirty = true;
+        new_ids
+    }
+
+    /// Insert a clone of `rung` (e.g. from a "Copy Network" clipboard) at `insert_idx`,
+    /// with fresh element ids. Pushes one undo snapshot and selects the new rung.
+    pub fn paste_rung(&mut self, rung: &Rung, insert_idx: usize) -> usize {
+        self.push_undo_snapshot();
+        self.sync_next_element_id();
+        let mut cloned = rung.clone();
+        cloned.is_energized = false;
+        for el in &mut cloned.elements {
+            self.assign_fresh_ids(el);
+        }
+        let target = insert_idx.min(self.program.rungs.len());
+        self.program.rungs.insert(target, cloned);
+        self.program.reindex_rungs();
+        self.selected_rung_idx = Some(target);
+        self.clear_element_selection();
+        self.is_dirty = true;
+        target
+    }
+
+    // ------------------------------------------------------------------
+    // Find / Replace
+    // ------------------------------------------------------------------
+
+    /// Search all elements' `name / symbol / comment / target_reg / fb.in1 / fb.in2`.
+    pub fn find_text(&self, query: &str, opts: FindOptions) -> Vec<FindHit> {
+        fn walk(el: &LadderElement, r_idx: usize, query: &str, opts: FindOptions, out: &mut Vec<FindHit>) {
+            if el.element_type != TypeTag::Branch {
+                for (field, text) in [
+                    (FindField::Name, &el.name),
+                    (FindField::Symbol, &el.symbol),
+                    (FindField::Comment, &el.comment),
+                    (FindField::TargetReg, &el.target_reg),
+                    (FindField::FbIn1, &el.fb.in1),
+                    (FindField::FbIn2, &el.fb.in2),
+                ] {
+                    if !find_matches(text, query, opts).is_empty() {
+                        out.push(FindHit {
+                            rung_idx: r_idx,
+                            elem_id: el.id,
+                            element_type: el.element_type,
+                            field,
+                            text: text.clone(),
+                        });
+                    }
+                }
+            }
+            for path in &el.branch_paths {
+                for sub in path {
+                    walk(sub, r_idx, query, opts, out);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        if query.is_empty() {
+            return out;
+        }
+        for (r_idx, rung) in self.program.rungs.iter().enumerate() {
+            for el in &rung.elements {
+                walk(el, r_idx, query, opts, &mut out);
+            }
+        }
+        out
+    }
+
+    /// Replace every occurrence of `query` with `replacement` in the searchable fields.
+    /// Pushes a single undo snapshot (only if something changed). Returns the number of replacements.
+    pub fn replace_all(&mut self, query: &str, replacement: &str, opts: FindOptions) -> usize {
+        fn replace_in(text: &mut String, query: &str, replacement: &str, opts: FindOptions) -> usize {
+            let matches = find_matches(text, query, opts);
+            if matches.is_empty() {
+                return 0;
+            }
+            let mut out = String::with_capacity(text.len());
+            let mut last = 0;
+            for &(start, end) in &matches {
+                out.push_str(&text[last..start]);
+                out.push_str(replacement);
+                last = end;
+            }
+            out.push_str(&text[last..]);
+            *text = out;
+            matches.len()
+        }
+        fn walk(el: &mut LadderElement, query: &str, replacement: &str, opts: FindOptions) -> usize {
+            let mut n = 0;
+            if el.element_type != TypeTag::Branch {
+                n += replace_in(&mut el.name, query, replacement, opts);
+                n += replace_in(&mut el.symbol, query, replacement, opts);
+                n += replace_in(&mut el.comment, query, replacement, opts);
+                n += replace_in(&mut el.target_reg, query, replacement, opts);
+                n += replace_in(&mut el.fb.in1, query, replacement, opts);
+                n += replace_in(&mut el.fb.in2, query, replacement, opts);
+            }
+            for path in &mut el.branch_paths {
+                for sub in path {
+                    n += walk(sub, query, replacement, opts);
+                }
+            }
+            n
+        }
+        if query.is_empty() || self.find_text(query, opts).is_empty() {
+            return 0;
+        }
+        self.push_undo_snapshot();
+        let mut total = 0;
+        for rung in &mut self.program.rungs {
+            for el in &mut rung.elements {
+                total += walk(el, query, replacement, opts);
+            }
+        }
+        if total > 0 {
+            self.is_dirty = true;
+        }
+        total
+    }
+}
+
+/// Options for [`Document::find_text`] / [`Document::replace_all`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FindOptions {
+    pub match_case: bool,
+    pub whole_word: bool,
+}
+
+/// Which element field a [`FindHit`] matched in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FindField {
+    Name,
+    Symbol,
+    Comment,
+    TargetReg,
+    FbIn1,
+    FbIn2,
+}
+
+impl FindField {
+    pub fn label(self) -> &'static str {
+        match self {
+            FindField::Name => "name",
+            FindField::Symbol => "symbol",
+            FindField::Comment => "comment",
+            FindField::TargetReg => "target_reg",
+            FindField::FbIn1 => "fb.in1",
+            FindField::FbIn2 => "fb.in2",
+        }
+    }
+}
+
+/// A single Find result.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FindHit {
+    pub rung_idx: usize,
+    pub elem_id: u64,
+    pub element_type: TypeTag,
+    pub field: FindField,
+    pub text: String,
+}
+
+fn is_word_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// Non-overlapping byte ranges of `needle` in `hay` honouring [`FindOptions`].
+/// Case-insensitive matching is ASCII-only (keeps byte offsets valid for replacement).
+pub fn find_matches(hay: &str, needle: &str, opts: FindOptions) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    if needle.is_empty() || needle.len() > hay.len() {
+        return out;
+    }
+    let (h, n): (std::borrow::Cow<str>, std::borrow::Cow<str>) = if opts.match_case {
+        (hay.into(), needle.into())
+    } else {
+        (hay.to_ascii_lowercase().into(), needle.to_ascii_lowercase().into())
+    };
+    let hb = h.as_bytes();
+    let mut from = 0;
+    while let Some(rel) = h[from..].find(n.as_ref()) {
+        let start = from + rel;
+        let end = start + n.len();
+        let ok = !opts.whole_word
+            || ((start == 0 || !is_word_byte(hb[start - 1])) && (end == hb.len() || !is_word_byte(hb[end])));
+        if ok {
+            out.push((start, end));
+            from = end;
+        } else {
+            // advance by one char to keep slicing on a char boundary
+            from = start + h[start..].chars().next().map_or(1, |c| c.len_utf8());
+        }
+        if from >= h.len() {
+            break;
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod clipboard_find_tests {
+    use super::*;
+    use crate::ladder::{CoilMode, ContactMode};
+
+    fn sample_doc() -> Document {
+        let mut doc = Document::new_empty();
+        let a = doc.program.alloc_id();
+        let b = doc.program.alloc_id();
+        doc.program.rungs[0].elements.push(LadderElement::new_contact(a, "%IX0.0", "START", ContactMode::NormallyOpen));
+        doc.program.rungs[0].elements.push(LadderElement::new_coil(b, "%QX0.0", "MOTOR", CoilMode::Normal));
+        doc
+    }
+
+    fn all_ids(doc: &Document) -> Vec<u64> {
+        fn walk(el: &LadderElement, out: &mut Vec<u64>) {
+            out.push(el.id);
+            for p in &el.branch_paths {
+                for s in p {
+                    walk(s, out);
+                }
+            }
+        }
+        let mut v = Vec::new();
+        for r in &doc.program.rungs {
+            for e in &r.elements {
+                walk(e, &mut v);
+            }
+        }
+        v
+    }
+
+    #[test]
+    fn find_matches_options() {
+        let cs = FindOptions { match_case: true, whole_word: false };
+        let ci = FindOptions::default();
+        let ww = FindOptions { match_case: false, whole_word: true };
+        assert_eq!(find_matches("%MW3 %mw30", "%MW3", cs), vec![(0, 4)]);
+        assert_eq!(find_matches("%MW3 %mw30", "%MW3", ci), vec![(0, 4), (5, 9)]);
+        assert_eq!(find_matches("%MW3 %mw30", "%MW3", ww), vec![(0, 4)]);
+        assert!(find_matches("abc", "", ci).is_empty());
+    }
+
+    #[test]
+    fn copy_paste_assigns_unique_ids_and_single_undo() {
+        let mut doc = sample_doc();
+        let first = doc.program.rungs[0].elements[0].id;
+        doc.set_single_selection(Some(0), first);
+        let clip = doc.copy_selected();
+        assert_eq!(clip.len(), 1);
+        let undo_before = doc.undo_stack.len();
+        let new_ids = doc.paste_elements(&clip, InsertPosition::Right);
+        assert_eq!(new_ids.len(), 1);
+        assert_eq!(doc.undo_stack.len(), undo_before + 1);
+        let ids = all_ids(&doc);
+        let mut dedup = ids.clone();
+        dedup.sort();
+        dedup.dedup();
+        assert_eq!(ids.len(), dedup.len(), "ids must be unique: {:?}", ids);
+        assert_eq!(doc.program.rungs[0].elements.len(), 3);
+        // A subsequently allocated id must not collide either
+        let next = doc.program.alloc_id();
+        assert!(!ids.contains(&next));
+        assert!(doc.undo());
+        assert_eq!(doc.program.rungs[0].elements.len(), 2);
+    }
+
+    #[test]
+    fn paste_rung_fresh_ids() {
+        let mut doc = sample_doc();
+        let rung = doc.program.rungs[0].clone();
+        doc.program.rungs[0].elements.clear(); // rung clone survives source edits
+        let idx = doc.paste_rung(&rung, 1);
+        assert_eq!(idx, 1);
+        assert_eq!(doc.program.rungs[1].elements.len(), 2);
+        let new_ids: Vec<u64> = doc.program.rungs[1].elements.iter().map(|e| e.id).collect();
+        for e in &rung.elements {
+            assert!(!new_ids.contains(&e.id));
+        }
+        // Pasting the same network twice still yields unique ids
+        doc.paste_rung(&rung, 2);
+        let ids = all_ids(&doc);
+        let mut dedup = ids.clone();
+        dedup.sort();
+        dedup.dedup();
+        assert_eq!(ids.len(), dedup.len());
+    }
+
+    #[test]
+    fn find_and_replace_all_single_undo() {
+        let mut doc = sample_doc();
+        let hits = doc.find_text("motor", FindOptions::default());
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].field, FindField::Symbol);
+        assert!(doc.find_text("motor", FindOptions { match_case: true, whole_word: false }).is_empty());
+        let undo_before = doc.undo_stack.len();
+        let n = doc.replace_all("%IX0.0", "%IX0.5", FindOptions { match_case: false, whole_word: true });
+        assert_eq!(n, 1);
+        assert_eq!(doc.undo_stack.len(), undo_before + 1);
+        assert_eq!(doc.program.rungs[0].elements[0].name, "%IX0.5");
+        assert_eq!(doc.replace_all("nothing", "x", FindOptions::default()), 0);
+        assert_eq!(doc.undo_stack.len(), undo_before + 1);
+        doc.undo();
+        assert_eq!(doc.program.rungs[0].elements[0].name, "%IX0.0");
     }
 }
 

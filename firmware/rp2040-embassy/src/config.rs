@@ -51,9 +51,12 @@ pub const FLASH_PERSISTENT_MAGIC: u32 = 0x5045_5253; // "PERS" in ASCII
 // 3. Serial & Modbus RTU Communication Configuration
 // =============================================================================
 
-/// UART0 baud rate for programming & telemetry (GP0 = TX, GP1 = RX) [Optional/Unused]
+/// User UART0 baud rate for `UART_SEND` / `UART_RECV` function blocks (GP0 = TX, GP1 = RX, 115200 8N1)
+pub const USER_UART_BAUD: u32 = 115_200;
+
+/// Alias for UART0 baud rate (GP0 = TX, GP1 = RX)
 #[allow(dead_code)]
-pub const UART_BAUD_RATE: u32 = 115_200;
+pub const UART_BAUD_RATE: u32 = USER_UART_BAUD;
 
 /// UART1 baud rate for Modbus RTU RS-485 (GP8 = TX, GP9 = RX, DE/RE = None)
 pub const MODBUS_BAUD_RATE: u32 = 9_600;
@@ -217,17 +220,23 @@ pub fn configure_hardware_io_degraded(
 
 // =============================================================================
 // 6. Memory Partitioning & Latch Retention Area Configuration
+//    RETAIN range: M64..M95 (bit_mem[0x80..0xA0]) & D96..D127 (%MW96..%MW127, word_mem[0x80..0xA0])
 // =============================================================================
 
+/// Start of retentive bit relays `M64..M95` (`%MX8.0..%MX11.7`) in `bit_mem`
 #[allow(dead_code)]
 pub const LATCH_BIT_START_ADDR: u8 = 0x80;
 #[allow(dead_code)]
 pub const LATCH_BIT_COUNT: u8 = 32;
 
+/// Start of retentive data registers `D96..D127` (`%MW96..%MW127`) in `word_mem`
 #[allow(dead_code)]
 pub const LATCH_WORD_START_ADDR: u8 = 0x80;
 #[allow(dead_code)]
 pub const LATCH_WORD_COUNT: u8 = 32;
+
+/// Minimum interval (in seconds) between automatic Flash saves when RETAIN memory is dirty (10 minutes)
+pub const RETAIN_AUTOSAVE_MIN_INTERVAL_S: u64 = 600;
 
 // =============================================================================
 // 7. Special System Markers Configuration (%SM / M8000 Series)
@@ -240,6 +249,7 @@ pub const ENABLE_SPECIAL_MARKERS: bool = true;
 pub const SM_ALWAYS_ON: u8 = 0xA0; // %SM0  (M96 / M8000) : Always ON (True) while PLC is in RUN
 pub const SM_ALWAYS_OFF: u8 = 0xA1; // %SM1  (M97 / M8001) : Always OFF (False)
 pub const SM_FIRST_SCAN: u8 = 0xA2; // %SM2  (M98 / M8002) : ON for first scan only after RUN/Boot
+pub const SM_RETAIN_DIRTY: u8 = 0xA7; // %SM7  (M103 / M8007): RETAIN memory dirty flag (1 when M64..M95 or D96..D127 differs from Flash)
 pub const SM_CLOCK_10MS: u8 = 0xAA; // %SM10 (M106 / M8011): 10ms clock pulse (5ms ON / 5ms OFF, 50 Hz)
 pub const SM_CLOCK_100MS: u8 = 0xAB; // %SM11 (M107 / M8012): 100ms clock pulse (50ms ON / 50ms OFF, 5 Hz)
 pub const SM_CLOCK_1S: u8 = 0xAC; // %SM12 (M108 / M8013): 1.0s clock pulse (500ms ON / 500ms OFF, 1 Hz)
@@ -262,6 +272,7 @@ pub const SD_MAX_SCAN_TIME_US: u8 = 0xA3; // %SD3  (D131 / D8012): Maximum scan 
 pub const SD_SCAN_COUNT_LOW: u8 = 0xA4; // %SD4  (D132): Scan counter lower 32-bit word
 pub const SD_SCAN_COUNT_HIGH: u8 = 0xA5; // %SD5  (D133): Scan counter upper 32-bit word
 pub const SD_CPU_TEMP_C01: u8 = 0xA6; // %SD6  (D134 / D8006): On-chip CPU Temperature in 0.1 °C units (e.g. 275 = 27.5 °C)
+pub const SD_RETAIN_SAVE_COUNT: u8 = 0xA7; // %SD7  (D135 / D8007): Total RETAIN Flash save count
 
 /// Watchdog timeout limit in milliseconds. Scans exceeding this trip the SM_SCAN_OVERRUN flag.
 pub const DEFAULT_WATCHDOG_TIMEOUT_MS: u32 = 100;

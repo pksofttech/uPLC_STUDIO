@@ -1,5 +1,5 @@
 [package]
-name = "uplc-studio"
+name = "laduino-plc"
 version.workspace = true
 edition.workspace = true
 

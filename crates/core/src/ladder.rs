@@ -35,6 +35,14 @@ pub enum TypeTag {
     UartSend,
     UartRecv,
     MbMaster,
+    /// PID controller FB (PV=fb.in1, SP=fb.in2, CV=target_reg, k=[Kp*100, Ki*100, Kd*100, out_max])
+    Pid,
+    /// Linear scaling FB (IN=fb.in1, OUT=target_reg, k=[in_min, in_max, out_min, out_max])
+    Scale,
+    /// Clamp FB (IN=fb.in1, OUT=target_reg, k=[min, max])
+    Limit,
+    /// Word bitwise FB (OUT=target_reg, A=fb.in1, B=fb.in2, op in `math_op`: AND|OR|XOR|NOT|SHL|SHR)
+    Bitwise,
     Wire,
     OpenCircuit,
     Branch,
@@ -81,6 +89,10 @@ impl TypeTag {
             TypeTag::UartSend => "UART Send",
             TypeTag::UartRecv => "UART Recv",
             TypeTag::MbMaster => "MB_MASTER (Modbus RTU Master FB)",
+            TypeTag::Pid => "PID (Process Controller)",
+            TypeTag::Scale => "SCALE (Linear Scaling)",
+            TypeTag::Limit => "LIMIT (Clamp Min/Max)",
+            TypeTag::Bitwise => "Bitwise (AND/OR/XOR/NOT/SHL/SHR)",
             TypeTag::Wire => "Short Circuit",
             TypeTag::OpenCircuit => "Open Circuit",
             TypeTag::Branch => "Parallel Branch",
@@ -106,6 +118,11 @@ impl TypeTag {
                 | TypeTag::ShiftRight
                 | TypeTag::ShiftRegReset
                 | TypeTag::ShiftRegInbit
+                | TypeTag::Scale
+                | TypeTag::Limit
+                | TypeTag::Pid
+                | TypeTag::Bitwise
+                | TypeTag::UartRecv
         )
     }
 }
@@ -336,6 +353,64 @@ pub enum InsertPosition {
     BottomParallel,
 }
 
+/// Generic parameters for function blocks added in feature level 2
+/// (PID / SCALE / LIMIT / Bitwise / Shift / UART).
+///
+/// * `in1` / `in2`: operand A / B — a register (`"%MW3"`, `"D3"`, `"%IW0"`, `"%IX0.1"`)
+///   or a literal (`"100"`, `"-5"`, `"16#FF"`).
+/// * `k`: block constants (SCALE: in_min,in_max,out_min,out_max; LIMIT: min,max;
+///   PID: Kp×100, Ki×100, Kd×100, out_max).
+/// * `mode`: sub-option (UartSend: 0 = low byte, 1 = ASCII decimal + CRLF).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct FbParams {
+    #[serde(default)]
+    pub in1: String,
+    #[serde(default)]
+    pub in2: String,
+    #[serde(default)]
+    pub k: [i32; 4],
+    #[serde(default)]
+    pub mode: u8,
+}
+
+/// Parse an integer literal used as a function-block operand.
+///
+/// Accepts decimal (`"100"`, `"-5"`, `"+7"`), IEC based literals (`"16#FF"`, `"2#1010"`, `"8#17"`),
+/// C-style hex (`"0x1F"`), FX-style `K` constants (`"K100"`) and `_` digit separators.
+/// Returns `None` for register names / symbols (e.g. `"D5"`, `"%MW3"`).
+pub fn parse_int_literal(s: &str) -> Option<i64> {
+    let t = s.trim().trim_end_matches(';').replace('_', "");
+    if t.is_empty() {
+        return None;
+    }
+    let (neg, body) = match t.as_bytes()[0] {
+        b'-' => (true, &t[1..]),
+        b'+' => (false, &t[1..]),
+        _ => (false, &t[..]),
+    };
+    let upper = body.to_ascii_uppercase();
+    let val = if let Some(h) = upper.strip_prefix("16#").or_else(|| upper.strip_prefix("0X")) {
+        i64::from_str_radix(h, 16).ok()?
+    } else if let Some(b) = upper.strip_prefix("2#").or_else(|| upper.strip_prefix("0B")) {
+        i64::from_str_radix(b, 2).ok()?
+    } else if let Some(o) = upper.strip_prefix("8#") {
+        i64::from_str_radix(o, 8).ok()?
+    } else if let Some(d) = upper.strip_prefix("10#") {
+        d.parse::<i64>().ok()?
+    } else if let Some(d) = upper.strip_prefix('K') {
+        if d.is_empty() || !d.chars().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        d.parse::<i64>().ok()?
+    } else {
+        if !upper.chars().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        upper.parse::<i64>().ok()?
+    };
+    Some(if neg { -val } else { val })
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LadderElement {
     pub id: u64,
@@ -365,6 +440,10 @@ pub struct LadderElement {
     pub mb_slave_id: u8,
     #[serde(default = "default_mb_function")]
     pub mb_function: u8,
+
+    /// Generic function-block parameters (PID / SCALE / LIMIT / Bitwise / Shift / UART).
+    #[serde(default)]
+    pub fb: FbParams,
     
     // Parallel branch sub-paths (each path is a sequence of elements in series)
     pub branch_paths: Vec<Vec<LadderElement>>,
@@ -406,6 +485,7 @@ impl Default for LadderElement {
             target_reg: "V00".to_string(),
             mb_slave_id: 1,
             mb_function: 3,
+            fb: FbParams::default(),
             branch_paths: Vec::new(),
             is_energized: false,
             current_accum: 0,
@@ -499,9 +579,61 @@ impl LadderElement {
         }
     }
 
+    /// Destination register of a `Math` / `Move` element.
+    ///
+    /// The element dialog edits `name` (the address field) while the IL parser fills both `name`
+    /// and `target_reg`, so `name` is authoritative and `target_reg` is the fallback. The Simulator,
+    /// the Bytecode compiler and the IL exporter all use this helper so they always agree.
+    pub fn word_target(&self) -> &str {
+        if !self.name.trim().is_empty() {
+            self.name.trim()
+        } else {
+            self.target_reg.trim()
+        }
+    }
+
+    /// Short human-readable parameter summary for the feature-level-2 function blocks
+    /// (used by the Elements list). Returns `None` for other element types.
+    pub fn fb_value_summary(&self) -> Option<String> {
+        let fb = &self.fb;
+        let s = match self.element_type {
+            TypeTag::Pid => format!(
+                "PV={} SP={} CV={} Kp={:.2} Ki={:.2} Kd={:.2} Max={}",
+                fb.in1, fb.in2, self.target_reg,
+                fb.k[0] as f64 / 100.0, fb.k[1] as f64 / 100.0, fb.k[2] as f64 / 100.0, fb.k[3]
+            ),
+            TypeTag::Scale => format!(
+                "{}[{}..{}] → {}[{}..{}]",
+                fb.in1, fb.k[0], fb.k[1], self.target_reg, fb.k[2], fb.k[3]
+            ),
+            TypeTag::Limit => format!("{} → {} [{}..{}]", fb.in1, self.target_reg, fb.k[0], fb.k[1]),
+            TypeTag::Bitwise => {
+                if self.math_op.eq_ignore_ascii_case("NOT") {
+                    format!("{} := NOT {}", self.target_reg, fb.in1)
+                } else {
+                    format!("{} := {} {} {}", self.target_reg, fb.in1, self.math_op.to_ascii_uppercase(), fb.in2)
+                }
+            }
+            TypeTag::Adc => format!("{} → {}", self.name, self.target_reg),
+            TypeTag::ShiftRegisters => format!("len={} in={}", self.preset_value, fb.in1),
+            TypeTag::ShiftRegInbit => format!("bit={}", fb.in1),
+            TypeTag::ShiftLeft => format!("<< {}", self.preset_value),
+            TypeTag::ShiftRight => format!(">> {}", self.preset_value),
+            TypeTag::ShiftVariable => format!("shift by {}", fb.in1),
+            TypeTag::ShiftRegReset => "reset".to_string(),
+            TypeTag::UartSend => format!("{} ({})", fb.in1, if fb.mode == 1 { "ASCII" } else { "byte" }),
+            TypeTag::UartRecv => format!("→ {}", self.target_reg),
+            _ => return None,
+        };
+        Some(s)
+    }
+
+    /// Give this element (and all nested branch elements) fresh ids taken from `next_id`.
+    /// Uses the same convention as `LadderProgram::alloc_id`: assign, then increment, so
+    /// `next_id` always points at an unused id afterwards.
     pub fn reassign_ids(&mut self, next_id: &mut u64) {
-        *next_id += 1;
         self.id = *next_id;
+        *next_id += 1;
         for path in &mut self.branch_paths {
             for sub in path {
                 sub.reassign_ids(next_id);
@@ -658,7 +790,7 @@ impl Default for LadderProgram {
 impl LadderProgram {
     pub fn new_empty() -> Self {
         Self {
-            title: "Ladder Program By uPLC Studio [PksofttecH]".to_string(),
+            title: "Ladder Program By LaduinoPLC [PksofttecH]".to_string(),
             hardware: "Arduino UNO R3".to_string(),
             rungs: vec![Rung::new(0)],
             io_mappings: Vec::new(),
@@ -830,7 +962,7 @@ impl LadderProgram {
         };
 
         Self {
-            title: "Ladder Program By uPLC Studio [PksofttecH]".to_string(),
+            title: "Ladder Program By LaduinoPLC [PksofttecH]".to_string(),
             hardware: "Arduino UNO R3".to_string(),
             rungs: vec![rung0, rung1, rung2],
             io_mappings: Self::default_arduino_io(),
@@ -1023,7 +1155,10 @@ impl LadderProgram {
                         TypeTag::Compare => format!("{} {}", el.compare_op, el.preset_value),
                         TypeTag::Math => format!("{} {}", el.math_op, el.preset_value),
                         TypeTag::Move => format!(":= {}", el.preset_value),
-                        _ => if el.is_energized { "1".to_string() } else { "0".to_string() },
+                        _ => match el.fb_value_summary() {
+                            Some(s) => s,
+                            None => if el.is_energized { "1".to_string() } else { "0".to_string() },
+                        },
                     };
                     list.push((el.name.clone(), el.symbol.clone(), el.element_type, val_str));
                 }
@@ -1050,7 +1185,10 @@ impl LadderProgram {
                         TypeTag::Compare => format!("{} {}", el.compare_op, el.preset_value),
                         TypeTag::Math => format!("{} {}", el.math_op, el.preset_value),
                         TypeTag::Move => format!(":= {}", el.preset_value),
-                        _ => if el.is_energized { "1".to_string() } else { "0".to_string() },
+                        _ => match el.fb_value_summary() {
+                            Some(s) => s,
+                            None => if el.is_energized { "1".to_string() } else { "0".to_string() },
+                        },
                     };
                     list.push((el.name.clone(), el.element_type, val_str));
                 }

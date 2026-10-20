@@ -7,13 +7,13 @@ pub mod shape;
 pub mod simulation;
 
 pub use bytecode::{
-    BytecodeCompiler, BytecodeInstruction, BytecodeProgram, MemoryMapEntry, MemoryRegion,
+    BytecodeCompiler, BytecodeInstruction, BytecodeProgram, CompileReport, MemoryMapEntry, MemoryRegion,
     PlcSerialCommand, PlcStatusSnapshot, VmOpcode, PACKET_SOF,
 };
 pub use document::Document;
 pub use ladder::{
-    CoilMode, CoilStyle, ContactMode, ContactStyle, IOPortMapping, IecVarEntry, InsertPosition, LadderElement, LadderProgram,
-    Rung, SchematicStyle, TypeTag,
+    parse_int_literal, CoilMode, CoilStyle, ContactMode, ContactStyle, FbParams, IOPortMapping, IecVarEntry, InsertPosition,
+    LadderElement, LadderProgram, Rung, SchematicStyle, TypeTag,
 };
 pub use il_format::{IlParser, LdParser};
 pub use shape::{ColorRgb, Point2D, Shape, ShapeKind};

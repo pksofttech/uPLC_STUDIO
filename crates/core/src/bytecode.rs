@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use crate::il_format::IlParser;
-use crate::ladder::{CoilMode, ContactMode, IOPortMapping, LadderElement, LadderProgram, Rung, TypeTag};
+use crate::ladder::{parse_int_literal, CoilMode, ContactMode, IOPortMapping, LadderElement, LadderProgram, Rung, TypeTag};
+use crate::simulation::bitwise_opcode;
+use uplc_vm::{OPND_KIND_BIT, OPND_KIND_CONST, OPND_KIND_WORD, SHIFT_EDGE_FLAG};
 
 /// Start of Frame byte for Serial Packet Protocol
 pub const PACKET_SOF: u8 = 0xAA;
@@ -24,6 +26,10 @@ pub enum PlcSerialCommand {
     ForceIo = 0x06,
     /// 0x07: Write Value into Word or Bit Memory
     WriteValue = 0x07,
+    /// 0x08: Save the RETAIN area (`M64..M95`, `D96..D127`) to Flash now
+    PersistSave = 0x08,
+    /// 0x09: Clear the RETAIN area in RAM and Flash
+    PersistClear = 0x09,
     /// 0x02 (Payload = 0x00): Stop / HALT PLC Scan Execution & Safe Output Shutdown
     StopPlc = 0x12,
 }
@@ -74,6 +80,10 @@ pub struct PlcStatusSnapshot {
     pub data_reg: [i32; 16],
     pub prog_len: u16,
     pub prog_crc: u16,
+    /// Firmware / VM feature level (high nibble of the `acc_bool` byte).
+    /// `0` = legacy firmware that does not report it (equivalent to level 1),
+    /// `2` = supports OPND / PID / SCALE / LIMIT / Bitwise / Shift / UART opcodes.
+    pub fw_feature_level: u8,
 }
 
 impl Default for PlcStatusSnapshot {
@@ -89,11 +99,18 @@ impl Default for PlcStatusSnapshot {
             data_reg: [0; 16],
             prog_len: 0,
             prog_crc: 0,
+            fw_feature_level: 0,
         }
     }
 }
 
 impl PlcStatusSnapshot {
+    /// `true` if the connected firmware can execute programs that require `level`
+    /// (see [`BytecodeProgram::required_feature_level`]).
+    pub fn firmware_supports(&self, level: u8) -> bool {
+        self.fw_feature_level.max(1) >= level
+    }
+
     pub const LEGACY_PAYLOAD_LEN: usize = 1 + 4 + 1 + 4 + 256 + 64 + 64 + 64; // 458 bytes
     pub const PAYLOAD_LEN: usize = Self::LEGACY_PAYLOAD_LEN + 2 + 2; // 462 bytes
     pub const PACKET_LEN: usize = 5 + Self::PAYLOAD_LEN; // 467 bytes
@@ -131,7 +148,8 @@ impl PlcStatusSnapshot {
         let p = &packet[4..4 + len];
         let running = p[0] != 0;
         let scan_count = u32::from_le_bytes([p[1], p[2], p[3], p[4]]);
-        let acc_bool = p[5] != 0;
+        let acc_bool = (p[5] & 0x01) != 0;
+        let fw_feature_level = p[5] >> 4;
         let acc_word = i32::from_le_bytes([p[6], p[7], p[8], p[9]]);
 
         let mut bit_mem = [0u8; 256];
@@ -175,6 +193,7 @@ impl PlcStatusSnapshot {
             data_reg,
             prog_len,
             prog_crc,
+            fw_feature_level,
         })
     }
 }
@@ -228,12 +247,38 @@ pub enum VmOpcode {
     Mul = 0x43,
     Div = 0x44,
     Mod = 0x45,
+    /// `MOVW dst, A` (+1 OPND)
+    Movw = 0x46,
+    /// `WAND dst, A, B` (+2 OPND)
+    Wand = 0x47,
+    Wor = 0x48,
+    Wxor = 0x49,
+    Wnot = 0x4A,
+    /// `SHL dst, A, B` (+2 OPND); imm bit 15 = rising-edge trigger on slot `imm & 0xFF`
+    Shl = 0x4B,
+    Shr = 0x4C,
     Jmpc = 0x50,
     Lbl = 0x51,
+    /// `SHREG base, imm = len | slot << 8` (+1 OPND: IN)
+    Shreg = 0x52,
+    /// `SHBIT word, imm = slot` (+1 OPND: BIT)
+    Shbit = 0x53,
     MbMaster = 0x60,
     MbParam1 = 0x61,
     MbParam2 = 0x62,
     MbStatus = 0x63,
+    /// Operand word `[0x6F, kind, imm_lo, imm_hi]` (kind 0 = word, 1 = const i16, 2 = bit)
+    Opnd = 0x6F,
+    /// `SCALE dst` (+5 OPND: IN, in_min, in_max, out_min, out_max)
+    Scale = 0x70,
+    /// `LIMIT dst` (+3 OPND: IN, MIN, MAX)
+    Limit = 0x71,
+    /// `PID dst(CV), imm = instance` (+6 OPND: PV, SP, Kp, Ki, Kd, OutMax)
+    Pid = 0x72,
+    /// `UTX instance, imm = mode` (+1 OPND: IN)
+    Utx = 0x74,
+    /// `URX dst`
+    Urx = 0x75,
     End = 0xFF,
 }
 
@@ -285,12 +330,27 @@ impl VmOpcode {
             0x43 => Some(Self::Mul),
             0x44 => Some(Self::Div),
             0x45 => Some(Self::Mod),
+            0x46 => Some(Self::Movw),
+            0x47 => Some(Self::Wand),
+            0x48 => Some(Self::Wor),
+            0x49 => Some(Self::Wxor),
+            0x4A => Some(Self::Wnot),
+            0x4B => Some(Self::Shl),
+            0x4C => Some(Self::Shr),
             0x50 => Some(Self::Jmpc),
             0x51 => Some(Self::Lbl),
+            0x52 => Some(Self::Shreg),
+            0x53 => Some(Self::Shbit),
             0x60 => Some(Self::MbMaster),
             0x61 => Some(Self::MbParam1),
             0x62 => Some(Self::MbParam2),
             0x63 => Some(Self::MbStatus),
+            0x6F => Some(Self::Opnd),
+            0x70 => Some(Self::Scale),
+            0x71 => Some(Self::Limit),
+            0x72 => Some(Self::Pid),
+            0x74 => Some(Self::Utx),
+            0x75 => Some(Self::Urx),
             0xFF => Some(Self::End),
             _ => None,
         }
@@ -343,12 +403,27 @@ impl VmOpcode {
             Self::Mul => "MUL",
             Self::Div => "DIV",
             Self::Mod => "MOD",
+            Self::Movw => "MOVW",
+            Self::Wand => "WAND",
+            Self::Wor => "WOR",
+            Self::Wxor => "WXOR",
+            Self::Wnot => "WNOT",
+            Self::Shl => "SHL",
+            Self::Shr => "SHR",
             Self::Jmpc => "JMPC",
             Self::Lbl => "LBL",
+            Self::Shreg => "SHREG",
+            Self::Shbit => "SHBIT",
             Self::MbMaster => "MB_MASTER",
             Self::MbParam1 => "MB_PARAM1",
             Self::MbParam2 => "MB_PARAM2",
             Self::MbStatus => "MB_STATUS",
+            Self::Opnd => "OPND",
+            Self::Scale => "SCALE",
+            Self::Limit => "LIMIT",
+            Self::Pid => "PID",
+            Self::Utx => "UTX",
+            Self::Urx => "URX",
             Self::End => "END",
         }
     }
@@ -400,14 +475,104 @@ impl VmOpcode {
             Self::Mul => "if (acc) word_mem[addr] *= imm",
             Self::Div => "if (acc) word_mem[addr] /= imm",
             Self::Mod => "if (acc) word_mem[addr] %= imm",
+            Self::Movw => "if (acc) word_mem[addr] = A",
+            Self::Wand => "if (acc) word_mem[addr] = A & B",
+            Self::Wor => "if (acc) word_mem[addr] = A | B",
+            Self::Wxor => "if (acc) word_mem[addr] = A ^ B",
+            Self::Wnot => "if (acc) word_mem[addr] = !A",
+            Self::Shl => "word_mem[addr] = A << B (level, or rising edge if imm bit15)",
+            Self::Shr => "word_mem[addr] = A >> B (level, or rising edge if imm bit15)",
             Self::Jmpc => "if (acc) pc = imm",
             Self::Lbl => "Jump Target Label",
+            Self::Shreg => "Word shift register on rising edge (len = imm lo, slot = imm hi)",
+            Self::Shbit => "word = (word << 1) | BIT on rising edge (slot = imm)",
+            Self::Opnd => "Operand word (kind 0 = word, 1 = const i16, 2 = bit)",
+            Self::Scale => "if (acc) word_mem[addr] = SCALE(IN, in_min, in_max, out_min, out_max)",
+            Self::Limit => "if (acc) word_mem[addr] = LIMIT(IN, MIN, MAX)",
+            Self::Pid => "PID controller (CV = word_mem[addr], instance = imm)",
+            Self::Utx => "UART send on rising edge (instance = addr, mode = imm)",
+            Self::Urx => "UART receive byte into word_mem[addr] (acc = received)",
             Self::MbMaster => "Modbus RTU Master Function Block (IEC 61131-3)",
             Self::MbParam1 => "Modbus Master Buffer & Register Address",
             Self::MbParam2 => "Modbus Master Mode Flags & Register Count",
             Self::MbStatus => "Query Modbus Function Block Status (DONE/BUSY/ERR/STATUS)",
             Self::End => "End of Scan Cycle (Return)",
         }
+    }
+
+    /// Number of `OPND` words following this (header) opcode
+    pub fn operand_words(&self) -> usize {
+        uplc_vm::opnd_word_count(*self as u8)
+    }
+
+    /// `true` for opcodes that need firmware feature level 2
+    pub fn is_feature_level_2(&self) -> bool {
+        (*self as u8) == 0x6F || self.operand_words() > 0 || *self == Self::Urx
+    }
+}
+
+/// Warnings / errors produced while compiling a `LadderProgram` into bytecode
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompileReport {
+    pub warnings: Vec<String>,
+    pub errors: Vec<String>,
+}
+
+impl CompileReport {
+    pub fn is_ok(&self) -> bool {
+        self.errors.is_empty()
+    }
+
+    pub fn has_messages(&self) -> bool {
+        !self.warnings.is_empty() || !self.errors.is_empty()
+    }
+
+    pub fn warn(&mut self, msg: impl Into<String>) {
+        self.warnings.push(msg.into());
+    }
+
+    pub fn error(&mut self, msg: impl Into<String>) {
+        self.errors.push(msg.into());
+    }
+}
+
+/// Mutable state shared while compiling one program
+#[derive(Default)]
+struct CompileCtx {
+    label_pcs: HashMap<String, u16>,
+    pending_jumps: Vec<(usize, String)>,
+    pid_instances: HashMap<String, u8>,
+    uart_instances: HashMap<String, u8>,
+    next_edge_slot: u16,
+    report: CompileReport,
+}
+
+impl CompileCtx {
+    fn alloc_edge_slot(&mut self, what: &str) -> u8 {
+        let slot = self.next_edge_slot;
+        if slot as usize >= uplc_vm::MAX_FB_EDGE_SLOTS {
+            self.report.error(format!(
+                "{}: too many edge-triggered blocks (max {})",
+                what,
+                uplc_vm::MAX_FB_EDGE_SLOTS
+            ));
+        }
+        self.next_edge_slot = self.next_edge_slot.saturating_add(1);
+        (slot % uplc_vm::MAX_FB_EDGE_SLOTS as u16) as u8
+    }
+
+    fn instance(map: &mut HashMap<String, u8>, report: &mut CompileReport, name: &str, kind: &str, max: usize) -> u8 {
+        let key = if name.trim().is_empty() { kind.to_string() } else { name.trim().to_ascii_uppercase() };
+        if let Some(&id) = map.get(&key) {
+            return id;
+        }
+        let id = map.len();
+        if id >= max {
+            report.error(format!("{} '{}': more than {} {} instances are not supported", kind, name, max, kind));
+        }
+        let id = id.min(max - 1) as u8;
+        map.insert(key, id);
+        id
     }
 }
 
@@ -503,6 +668,16 @@ impl BytecodeProgram {
         self.instructions.len() * 4
     }
 
+    /// Minimum firmware feature level needed to run this program
+    /// (`2` if any OPND-based opcode is used, otherwise `1`).
+    pub fn required_feature_level(&self) -> u8 {
+        if self.instructions.iter().any(|i| i.op.is_feature_level_2()) {
+            2
+        } else {
+            1
+        }
+    }
+
     /// Serialize all instructions into raw 32-bit aligned bytecode bytes (`4 * N` bytes)
     pub fn to_raw_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(self.payload_size_bytes());
@@ -562,6 +737,8 @@ impl BytecodeProgram {
             PlcSerialCommand::StepPlc => (0x05u8, Vec::new()),
             PlcSerialCommand::ForceIo => (0x06u8, Vec::new()),
             PlcSerialCommand::WriteValue => (0x07u8, Vec::new()),
+            PlcSerialCommand::PersistSave => (0x08u8, Vec::new()),
+            PlcSerialCommand::PersistClear => (0x09u8, Vec::new()),
         };
         let len = (payload.len() as u16).to_le_bytes();
         let mut packet = Vec::with_capacity(5 + payload.len());
@@ -615,11 +792,39 @@ impl BytecodeProgram {
                 | VmOpcode::Sub
                 | VmOpcode::Mul
                 | VmOpcode::Div
-                | VmOpcode::Mod => true,
+                | VmOpcode::Mod
+                | VmOpcode::Movw
+                | VmOpcode::Wand
+                | VmOpcode::Wor
+                | VmOpcode::Wxor
+                | VmOpcode::Wnot
+                | VmOpcode::Shl
+                | VmOpcode::Shr
+                | VmOpcode::Shreg
+                | VmOpcode::Shbit
+                | VmOpcode::Scale
+                | VmOpcode::Limit
+                | VmOpcode::Pid
+                | VmOpcode::Urx => true,
                 _ => false,
             };
 
-            let (canonical, iec_addr, region) = BytecodeCompiler::format_address(addr, for_word);
+            // OPND words describe their target in `imm` (addr = kind); UTX addr = UART instance
+            let (canonical, iec_addr, region, mem_addr, mem_word) = match op {
+                VmOpcode::Opnd => match addr {
+                    OPND_KIND_WORD | OPND_KIND_BIT => {
+                        let is_word = addr == OPND_KIND_WORD;
+                        let (_, iec, reg) = BytecodeCompiler::format_address(imm as u8, is_word);
+                        (BytecodeCompiler::opnd_text(addr, imm), iec, reg, imm as u8, is_word)
+                    }
+                    _ => (BytecodeCompiler::opnd_text(addr, imm), String::new(), MemoryRegion::None, 0, false),
+                },
+                VmOpcode::Utx => (format!("U{}", addr), String::new(), MemoryRegion::None, addr, false),
+                _ => {
+                    let (c, i, r) = BytecodeCompiler::format_address(addr, for_word);
+                    (c, i, r, addr, for_word)
+                }
+            };
 
             let il_source = match op {
                 VmOpcode::Nop => "NOP".to_string(),
@@ -655,12 +860,20 @@ impl BytecodeProgram {
                 VmOpcode::MbParam1 => format!("MB_PARAM1 Buf={}, Addr={}", canonical, imm),
                 VmOpcode::MbParam2 => format!("MB_PARAM2 Flags={}, Count={}", addr, imm),
                 VmOpcode::MbStatus => format!("MB_STATUS MB{}, Flag={}", addr, imm),
+                VmOpcode::Opnd => format!("  OPND {}", canonical),
+                VmOpcode::Shreg => format!("SHREG {}, LEN={}, SLOT={}", canonical, imm & 0xFF, imm >> 8),
+                VmOpcode::Shbit => format!("SHBIT {}, SLOT={}", canonical, imm & 0xFF),
+                VmOpcode::Shl | VmOpcode::Shr if imm & SHIFT_EDGE_FLAG != 0 => {
+                    format!("{} {}, EDGE SLOT={}", op.mnemonic(), canonical, imm & 0xFF)
+                }
+                VmOpcode::Pid => format!("PID {}, INST={}", canonical, imm),
+                VmOpcode::Utx => format!("UTX U{}, MODE={}", addr, imm),
                 _ => format!("{} {}", op.mnemonic(), canonical),
             };
 
             if region != MemoryRegion::None {
-                mem_table.entry((addr, for_word)).or_insert_with(|| MemoryMapEntry {
-                    addr,
+                mem_table.entry((mem_addr, mem_word)).or_insert_with(|| MemoryMapEntry {
+                    addr: mem_addr,
                     canonical_name: canonical.clone(),
                     iec_address: iec_addr,
                     symbol: String::new(),
@@ -731,7 +944,7 @@ impl BytecodeProgram {
         out.push_str("(* ==================================================================== *)\n");
         out.push_str("(* IEC 61131-3 IL Program (Decompiled from PLC Micro-VM Bytecode)        *)\n");
         out.push_str(&format!("(* Target Hardware: {:<51} *)\n", self.hardware));
-        out.push_str("(* Generated by uPLC Studio Bytecode Decompiler                         *)\n");
+        out.push_str("(* Generated by LaduinoPLC Bytecode Decompiler                         *)\n");
         out.push_str("(* ==================================================================== *)\n\n");
         out.push_str("PROGRAM MainProgram\n");
 
@@ -769,10 +982,37 @@ impl BytecodeProgram {
         let mut need_network_header = true;
         let mut paren_depth: usize = 0;
 
-        for ins in &self.instructions {
+        let mut scale_idx = 0usize;
+        let mut limit_idx = 0usize;
+        let mut urx_idx = 0usize;
+        let mut idx = 0usize;
+        while idx < self.instructions.len() {
+            let ins = &self.instructions[idx];
+            idx += 1;
             if ins.op == VmOpcode::End {
                 break;
             }
+            // Operand words following a header opcode (rendered as IL operand text)
+            let n_ops = ins.op.operand_words();
+            let ops: Vec<String> = (0..n_ops)
+                .map(|j| match self.instructions.get(idx + j) {
+                    Some(o) if o.op == VmOpcode::Opnd => BytecodeCompiler::opnd_text(o.addr, o.imm),
+                    _ => "0".to_string(),
+                })
+                .collect();
+            let op_is_const = |j: usize| {
+                self.instructions
+                    .get(idx + j)
+                    .map(|o| o.op == VmOpcode::Opnd && o.addr == OPND_KIND_CONST)
+                    .unwrap_or(true)
+            };
+            let op_word_addr = |j: usize| {
+                self.instructions
+                    .get(idx + j)
+                    .filter(|o| o.op == VmOpcode::Opnd && o.addr == OPND_KIND_WORD)
+                    .map(|o| o.imm as u8)
+            };
+            let dst = BytecodeCompiler::word_operand_text(ins.addr);
 
             let is_lead_load = matches!(
                 ins.op,
@@ -881,8 +1121,66 @@ impl BytecodeProgram {
                 VmOpcode::Lbl => {
                     out.push_str(&format!("LBL_{}:\n", ins.addr));
                 }
+                VmOpcode::Movw => {
+                    if op_is_const(0) {
+                        out.push_str(&format!("{}MOVE {} {}\n", indent, dst, ops[0]));
+                    } else {
+                        out.push_str(&format!("{}ADC  {} {}\n", indent, ops[0], dst));
+                    }
+                }
+                VmOpcode::Wand | VmOpcode::Wor | VmOpcode::Wxor | VmOpcode::Wnot | VmOpcode::Shl | VmOpcode::Shr => {
+                    let edge = matches!(ins.op, VmOpcode::Shl | VmOpcode::Shr) && (ins.imm & SHIFT_EDGE_FLAG) != 0;
+                    if edge && op_word_addr(0) == Some(ins.addr) {
+                        if op_is_const(1) {
+                            let m = if ins.op == VmOpcode::Shl { "SHIFT_L" } else { "SHIFT_R" };
+                            out.push_str(&format!("{}{} {} {}\n", indent, m, dst, ops[1]));
+                        } else if ins.op == VmOpcode::Shl {
+                            out.push_str(&format!("{}SHIFT_VAR {} {}\n", indent, dst, ops[1]));
+                        } else {
+                            out.push_str(&format!("{}SHR  {} {} {}\n", indent, dst, ops[0], ops[1]));
+                        }
+                    } else if ins.op == VmOpcode::Wnot {
+                        out.push_str(&format!("{}WNOT {} {}\n", indent, dst, ops[0]));
+                    } else {
+                        out.push_str(&format!("{}{} {} {} {}\n", indent, ins.op.mnemonic(), dst, ops[0], ops[1]));
+                    }
+                }
+                VmOpcode::Shreg => {
+                    out.push_str(&format!("{}SHIFT_REG {} {} {}\n", indent, dst, ins.imm & 0xFF, ops[0]));
+                }
+                VmOpcode::Shbit => {
+                    out.push_str(&format!("{}SHIFT_BIT {} {}\n", indent, dst, ops[0]));
+                }
+                VmOpcode::Scale => {
+                    scale_idx += 1;
+                    out.push_str(&format!(
+                        "{}CAL  SCALE_{}(IN := {}, OUT => {}, IN_MIN := {}, IN_MAX := {}, OUT_MIN := {}, OUT_MAX := {})\n",
+                        indent, scale_idx, ops[0], dst, ops[1], ops[2], ops[3], ops[4]
+                    ));
+                }
+                VmOpcode::Limit => {
+                    limit_idx += 1;
+                    out.push_str(&format!(
+                        "{}CAL  LIMIT_{}(IN := {}, OUT => {}, MN := {}, MX := {})\n",
+                        indent, limit_idx, ops[0], dst, ops[1], ops[2]
+                    ));
+                }
+                VmOpcode::Pid => {
+                    out.push_str(&format!(
+                        "{}CAL  PID{}(PV := {}, SP := {}, CV => {}, KP := {}, KI := {}, KD := {}, OUTMAX := {})\n",
+                        indent, ins.imm, ops[0], ops[1], dst, ops[2], ops[3], ops[4], ops[5]
+                    ));
+                }
+                VmOpcode::Utx => {
+                    out.push_str(&format!("{}UART_SEND U{}(IN := {}, MODE := {})\n", indent, ins.addr, ops[0], ins.imm));
+                }
+                VmOpcode::Urx => {
+                    urx_idx += 1;
+                    out.push_str(&format!("{}UART_RECV URX{}(OUT => {})\n", indent, urx_idx, dst));
+                }
                 _ => {}
             }
+            idx += n_ops;
         }
 
         out.push_str("\nEND_PROGRAM\n");
@@ -910,7 +1208,7 @@ impl BytecodeProgram {
     pub fn to_disassembly_text(&self) -> String {
         let mut out = String::new();
         out.push_str("// ============================================================================\n");
-        out.push_str("// uPLC Studio - Micro-VM 32-bit Bytecode Disassembly & Unified Memory Map\n");
+        out.push_str("// LaduinoPLC - Micro-VM 32-bit Bytecode Disassembly & Unified Memory Map\n");
         out.push_str(&format!("// Target Hardware : {}\n", self.hardware));
         out.push_str(&format!(
             "// Instructions    : {} ({} Bytes payload)\n",
@@ -953,6 +1251,34 @@ impl BytecodeProgram {
 pub struct BytecodeCompiler;
 
 impl BytecodeCompiler {
+    /// Readable IL text of a word address (`%MW10`, `%IW0`, `%QW1`, `T0`, `C3`)
+    pub fn word_operand_text(addr: u8) -> String {
+        let (canonical, iec, region) = Self::format_address(addr, true);
+        match region {
+            MemoryRegion::TimerT | MemoryRegion::CounterC => canonical,
+            _ => iec,
+        }
+    }
+
+    /// Readable IL text of a bit address (`%IX0.1`, `%QX0.0`, `%MX8.0`, `T0`, `C3`)
+    pub fn bit_operand_text(addr: u8) -> String {
+        let (canonical, iec, region) = Self::format_address(addr, false);
+        match region {
+            MemoryRegion::TimerT | MemoryRegion::CounterC => canonical,
+            _ => iec,
+        }
+    }
+
+    /// Readable IL text of an `OPND` word (`kind`, `imm`)
+    pub fn opnd_text(kind: u8, imm: u16) -> String {
+        match kind {
+            OPND_KIND_WORD => Self::word_operand_text(imm as u8),
+            OPND_KIND_CONST => (imm as i16).to_string(),
+            OPND_KIND_BIT => Self::bit_operand_text(imm as u8),
+            _ => format!("?{}", imm),
+        }
+    }
+
     /// Format raw memory address into standard canonical name, IEC 61131-3 address, and MemoryRegion
     pub fn format_address(addr: u8, for_word_op: bool) -> (String, String, MemoryRegion) {
         if for_word_op {
@@ -1186,10 +1512,16 @@ impl BytecodeCompiler {
 
     /// Compile a `LadderProgram` directly into a `BytecodeProgram`
     pub fn compile_program(prog: &LadderProgram) -> BytecodeProgram {
+        Self::compile_program_with_report(prog).0
+    }
+
+    /// Compile a `LadderProgram` into a `BytecodeProgram` and return the compile-time
+    /// diagnostics (out-of-range constants, PID/UART instance limits, unsupported elements,
+    /// program size limit, ...).
+    pub fn compile_program_with_report(prog: &LadderProgram) -> (BytecodeProgram, CompileReport) {
         let mut instructions: Vec<BytecodeInstruction> = Vec::new();
         let mut mem_table: HashMap<(u8, bool), MemoryMapEntry> = HashMap::new();
-        let mut label_pcs: HashMap<String, u16> = HashMap::new();
-        let mut pending_jumps: Vec<(usize, String)> = Vec::new();
+        let mut ctx = CompileCtx::default();
 
         // Pre-populate IO mappings in memory table
         for (idx, io) in prog.io_mappings.iter().enumerate() {
@@ -1213,8 +1545,7 @@ impl BytecodeCompiler {
                 &prog.io_mappings,
                 &mut instructions,
                 &mut mem_table,
-                &mut label_pcs,
-                &mut pending_jumps,
+                &mut ctx,
             );
         }
 
@@ -1232,28 +1563,47 @@ impl BytecodeCompiler {
         });
 
         // Resolve forward/backward jump targets
-        for (ins_idx, lbl_name) in pending_jumps {
-            if let Some(&target_pc) = label_pcs.get(&lbl_name.to_uppercase()) {
+        for (ins_idx, lbl_name) in std::mem::take(&mut ctx.pending_jumps) {
+            if let Some(&target_pc) = ctx.label_pcs.get(&lbl_name.to_uppercase()) {
                 if let Some(ins) = instructions.get_mut(ins_idx) {
                     ins.imm = target_pc;
                 }
+            } else {
+                ctx.report.warn(format!("JMP {}: label not found", lbl_name));
             }
+        }
+
+        if instructions.len() > uplc_vm::MAX_INSTRUCTIONS {
+            ctx.report.error(format!(
+                "Program too large: {} instructions (Micro-VM limit is {})",
+                instructions.len(),
+                uplc_vm::MAX_INSTRUCTIONS
+            ));
         }
 
         let mut memory_map: Vec<MemoryMapEntry> = mem_table.into_values().collect();
         memory_map.sort_by_key(|e| (Self::region_sort_order(e.region), e.addr));
 
-        BytecodeProgram {
-            hardware: prog.hardware.clone(),
-            instructions,
-            memory_map,
-        }
+        (
+            BytecodeProgram {
+                hardware: prog.hardware.clone(),
+                instructions,
+                memory_map,
+            },
+            ctx.report,
+        )
     }
 
     /// Compile an IEC 61131-3 IL text string into a `BytecodeProgram`
     pub fn compile_il(il_text: &str) -> Result<BytecodeProgram, String> {
         let prog = IlParser::parse(il_text)?;
         Ok(Self::compile_program(&prog))
+    }
+
+    /// Compile an IEC 61131-3 IL text string into a `BytecodeProgram` plus its `CompileReport`
+    pub fn compile_il_with_report(il_text: &str) -> Result<(BytecodeProgram, CompileReport), String> {
+        let prog = IlParser::parse(il_text)?;
+        Ok(Self::compile_program_with_report(&prog))
     }
 
     fn region_sort_order(region: MemoryRegion) -> u8 {
@@ -1343,6 +1693,157 @@ impl BytecodeCompiler {
         });
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn push_raw(
+        instructions: &mut Vec<BytecodeInstruction>,
+        op: VmOpcode,
+        addr: u8,
+        imm: u16,
+        region: MemoryRegion,
+        operand_name: String,
+        symbol: String,
+        il_source: String,
+    ) {
+        let pc = instructions.len() as u16;
+        instructions.push(BytecodeInstruction {
+            pc,
+            op,
+            addr,
+            imm,
+            region,
+            operand_name,
+            symbol,
+            il_source,
+        });
+    }
+
+    /// `true` if `raw` resolves to a real address (IO mapping or direct PLC/IEC address)
+    fn is_resolvable(raw: &str, io_mappings: &[IOPortMapping]) -> bool {
+        let t = raw.trim().trim_end_matches(';');
+        let base = if t.starts_with('%') { t } else { t.split('.').next().unwrap_or(t) };
+        Self::parse_direct_address(base, true).is_some()
+            || io_mappings.iter().enumerate().any(|(i, io)| {
+                io.plc_address.eq_ignore_ascii_case(base)
+                    || io.iec_address(i).eq_ignore_ascii_case(base)
+                    || (!io.symbol.is_empty() && io.symbol.eq_ignore_ascii_case(base))
+            })
+    }
+
+    /// Resolve a word destination register (OUT / CV / base), recording it in the memory map.
+    fn word_dst(
+        raw: &str,
+        what: &str,
+        io_mappings: &[IOPortMapping],
+        mem_table: &mut HashMap<(u8, bool), MemoryMapEntry>,
+        ctx: &mut CompileCtx,
+    ) -> (u8, String, MemoryRegion, String) {
+        if raw.trim().is_empty() {
+            ctx.report.warn(format!("{}: missing destination register (using %MW0)", what));
+        } else if !Self::is_resolvable(raw, io_mappings) {
+            ctx.report.warn(format!("{}: unknown register '{}' (using %MW0)", what, raw.trim()));
+        }
+        let (addr, canonical, region, sym, hw) = Self::resolve_address(raw, true, io_mappings);
+        let (addr, canonical, region) = match region {
+            MemoryRegion::DigitalInputX | MemoryRegion::DigitalOutputY | MemoryRegion::InternalRelayM => {
+                ctx.report.error(format!("{}: destination '{}' must be a word register", what, raw.trim()));
+                (addr, canonical, region)
+            }
+            MemoryRegion::None => (0x20, "D0".to_string(), MemoryRegion::DataRegisterD),
+            _ => (addr, canonical, region),
+        };
+        Self::record_mem_entry(addr, &canonical, raw.trim(), &sym, region, &hw, true, mem_table);
+        (addr, canonical, region, sym)
+    }
+
+    /// Push a constant `OPND` word, checking the i16 range
+    fn push_const_operand(instructions: &mut Vec<BytecodeInstruction>, v: i64, what: &str, ctx: &mut CompileCtx) {
+        let clamped = if v < i16::MIN as i64 || v > i16::MAX as i64 {
+            ctx.report.error(format!(
+                "{}: constant {} is out of the i16 range (-32768..32767)",
+                what, v
+            ));
+            v.clamp(i16::MIN as i64, i16::MAX as i64)
+        } else {
+            v
+        };
+        let imm = clamped as i16 as u16;
+        let text = (clamped as i16).to_string();
+        Self::push_raw(
+            instructions,
+            VmOpcode::Opnd,
+            OPND_KIND_CONST,
+            imm,
+            MemoryRegion::None,
+            text.clone(),
+            String::new(),
+            format!("  OPND {}", text),
+        );
+    }
+
+    /// Push an `OPND` word for `raw`: integer literal -> const, bit address -> bit, otherwise word
+    /// register. With `want_bit` the operand is resolved in the bit address space.
+    fn push_operand(
+        instructions: &mut Vec<BytecodeInstruction>,
+        raw: &str,
+        want_bit: bool,
+        what: &str,
+        io_mappings: &[IOPortMapping],
+        mem_table: &mut HashMap<(u8, bool), MemoryMapEntry>,
+        ctx: &mut CompileCtx,
+    ) {
+        let t = raw.trim();
+        if t.is_empty() {
+            ctx.report.warn(format!("{}: missing operand (using 0)", what));
+            Self::push_const_operand(instructions, 0, what, ctx);
+            return;
+        }
+        if let Some(v) = parse_int_literal(t) {
+            Self::push_const_operand(instructions, v, what, ctx);
+            return;
+        }
+        match t.to_ascii_uppercase().as_str() {
+            "TRUE" => return Self::push_const_operand(instructions, 1, what, ctx),
+            "FALSE" => return Self::push_const_operand(instructions, 0, what, ctx),
+            _ => {}
+        }
+        if !Self::is_resolvable(t, io_mappings) {
+            ctx.report.warn(format!("{}: unknown operand '{}'", what, t));
+        }
+        let (addr, canonical, region, sym, hw) = Self::resolve_address(t, !want_bit, io_mappings);
+        let is_bit = want_bit
+            || matches!(
+                region,
+                MemoryRegion::DigitalInputX | MemoryRegion::DigitalOutputY | MemoryRegion::InternalRelayM
+            );
+        Self::record_mem_entry(addr, &canonical, t, &sym, region, &hw, !is_bit, mem_table);
+        let kind = if is_bit { OPND_KIND_BIT } else { OPND_KIND_WORD };
+        let text = Self::opnd_text(kind, addr as u16);
+        Self::push_raw(
+            instructions,
+            VmOpcode::Opnd,
+            kind,
+            addr as u16,
+            region,
+            text.clone(),
+            sym,
+            format!("  OPND {}", text),
+        );
+    }
+
+    /// Feature-level-2 blocks placed at the start of a rung get an explicit `LD %SM0`
+    /// (always ON) so the VM matches the Simulator (power rail = TRUE).
+    fn ensure_rung_condition(
+        first: &mut bool,
+        instructions: &mut Vec<BytecodeInstruction>,
+        io_mappings: &[IOPortMapping],
+        mem_table: &mut HashMap<(u8, bool), MemoryMapEntry>,
+    ) {
+        if *first {
+            Self::push_bit_ins(instructions, VmOpcode::Ld, "%SM0", io_mappings, mem_table, 0, "LD %SM0".to_string());
+            *first = false;
+        }
+    }
+
     fn push_stack_ins(instructions: &mut Vec<BytecodeInstruction>, op: VmOpcode) {
         let pc = instructions.len() as u16;
         instructions.push(BytecodeInstruction {
@@ -1362,8 +1863,7 @@ impl BytecodeCompiler {
         io_mappings: &[IOPortMapping],
         instructions: &mut Vec<BytecodeInstruction>,
         mem_table: &mut HashMap<(u8, bool), MemoryMapEntry>,
-        label_pcs: &mut HashMap<String, u16>,
-        pending_jumps: &mut Vec<(usize, String)>,
+        ctx: &mut CompileCtx,
     ) {
         if rung.elements.is_empty() {
             return;
@@ -1377,8 +1877,7 @@ impl BytecodeCompiler {
                 io_mappings,
                 instructions,
                 mem_table,
-                label_pcs,
-                pending_jumps,
+                ctx,
             );
         }
     }
@@ -1389,8 +1888,7 @@ impl BytecodeCompiler {
         io_mappings: &[IOPortMapping],
         instructions: &mut Vec<BytecodeInstruction>,
         mem_table: &mut HashMap<(u8, bool), MemoryMapEntry>,
-        label_pcs: &mut HashMap<String, u16>,
-        pending_jumps: &mut Vec<(usize, String)>,
+        ctx: &mut CompileCtx,
     ) {
         match el.element_type {
             TypeTag::Contact => {
@@ -1435,8 +1933,7 @@ impl BytecodeCompiler {
                                 io_mappings,
                                 instructions,
                                 mem_table,
-                                label_pcs,
-                                pending_jumps,
+                                ctx,
                             );
                         }
                     }
@@ -1446,8 +1943,7 @@ impl BytecodeCompiler {
                             io_mappings,
                             instructions,
                             mem_table,
-                            label_pcs,
-                            pending_jumps,
+                            ctx,
                         );
                     }
                     *first = false;
@@ -1462,8 +1958,7 @@ impl BytecodeCompiler {
                                 io_mappings,
                                 instructions,
                                 mem_table,
-                                label_pcs,
-                                pending_jumps,
+                                ctx,
                             );
                         }
                     }
@@ -1473,8 +1968,7 @@ impl BytecodeCompiler {
                             io_mappings,
                             instructions,
                             mem_table,
-                            label_pcs,
-                            pending_jumps,
+                            ctx,
                         );
                     }
                     Self::push_stack_ins(instructions, VmOpcode::Rp);
@@ -1511,23 +2005,47 @@ impl BytecodeCompiler {
                     "<=" | "LE" => VmOpcode::Le,
                     _ => VmOpcode::Eq,
                 };
+                if !(0..=65535).contains(&el.preset_value) {
+                    ctx.report.warn(format!(
+                        "Compare {}: constant {} clamped to 0..65535",
+                        el.name, el.preset_value
+                    ));
+                }
                 let imm = el.preset_value.clamp(0, 65535) as u16;
                 let src = format!("{} {}, K{}", op.mnemonic(), el.name, imm);
                 Self::push_word_ins(instructions, op, &el.name, io_mappings, mem_table, imm, src);
                 *first = false;
             }
             TypeTag::Move => {
-                let imm = el.preset_value.clamp(0, 65535) as u16;
-                let src = format!("MOVE {}, K{}", el.name, imm);
-                Self::push_word_ins(
-                    instructions,
-                    VmOpcode::Move,
-                    &el.name,
-                    io_mappings,
-                    mem_table,
-                    imm,
-                    src,
-                );
+                let dest = el.word_target().to_string();
+                if (0..=65535).contains(&el.preset_value) {
+                    let imm = el.preset_value as u16;
+                    let src = format!("MOVE {}, K{}", dest, imm);
+                    Self::push_word_ins(
+                        instructions,
+                        VmOpcode::Move,
+                        &dest,
+                        io_mappings,
+                        mem_table,
+                        imm,
+                        src,
+                    );
+                } else {
+                    // Negative constants need the signed OPND form: MOVW dst, const
+                    let what = format!("MOVE {}", dest);
+                    let (addr, canonical, region, sym) = Self::word_dst(&dest, &what, io_mappings, mem_table, ctx);
+                    Self::push_raw(
+                        instructions,
+                        VmOpcode::Movw,
+                        addr,
+                        0,
+                        region,
+                        canonical,
+                        sym,
+                        format!("MOVW {}, K{}", dest, el.preset_value),
+                    );
+                    Self::push_const_operand(instructions, el.preset_value as i64, &what, ctx);
+                }
                 *first = false;
             }
             TypeTag::Math => {
@@ -1538,9 +2056,18 @@ impl BytecodeCompiler {
                     "%" | "MOD" => VmOpcode::Mod,
                     _ => VmOpcode::Add,
                 };
+                let dest = el.word_target().to_string();
+                if !(0..=65535).contains(&el.preset_value) {
+                    ctx.report.warn(format!(
+                        "{} {}: constant {} clamped to 0..65535",
+                        op.mnemonic(),
+                        dest,
+                        el.preset_value
+                    ));
+                }
                 let imm = el.preset_value.clamp(0, 65535) as u16;
-                let src = format!("{} {}, K{}", op.mnemonic(), el.name, imm);
-                Self::push_word_ins(instructions, op, &el.name, io_mappings, mem_table, imm, src);
+                let src = format!("{} {}, K{}", op.mnemonic(), dest, imm);
+                Self::push_word_ins(instructions, op, &dest, io_mappings, mem_table, imm, src);
                 *first = false;
             }
             TypeTag::RTrig => {
@@ -1611,7 +2138,7 @@ impl BytecodeCompiler {
             }
             TypeTag::Label => {
                 let pc = instructions.len() as u16;
-                label_pcs.insert(el.name.to_uppercase(), pc);
+                ctx.label_pcs.insert(el.name.to_uppercase(), pc);
                 instructions.push(BytecodeInstruction {
                     pc,
                     op: VmOpcode::Lbl,
@@ -1626,7 +2153,7 @@ impl BytecodeCompiler {
             TypeTag::Jump => {
                 let idx = instructions.len();
                 let pc = idx as u16;
-                pending_jumps.push((idx, el.name.clone()));
+                ctx.pending_jumps.push((idx, el.name.clone()));
                 instructions.push(BytecodeInstruction {
                     pc,
                     op: VmOpcode::Jmpc,
@@ -1695,6 +2222,260 @@ impl BytecodeCompiler {
 
                 *first = false;
             }
+            TypeTag::Adc
+            | TypeTag::Bitwise
+            | TypeTag::Scale
+            | TypeTag::Limit
+            | TypeTag::Pid
+            | TypeTag::ShiftRegisters
+            | TypeTag::ShiftRegInbit
+            | TypeTag::ShiftRegReset
+            | TypeTag::ShiftLeft
+            | TypeTag::ShiftRight
+            | TypeTag::ShiftVariable
+            | TypeTag::UartSend
+            | TypeTag::UartRecv => {
+                Self::ensure_rung_condition(first, instructions, io_mappings, mem_table);
+                Self::compile_fb_element(el, io_mappings, instructions, mem_table, ctx);
+                *first = false;
+            }
+            TypeTag::OpenCircuit => {
+                ctx.report.warn("Open Circuit element is not supported by the bytecode compiler (ignored)");
+            }
+            _ => {}
+        }
+    }
+
+    /// Compile the feature-level-2 function blocks (OPND-based opcodes)
+    fn compile_fb_element(
+        el: &LadderElement,
+        io_mappings: &[IOPortMapping],
+        instructions: &mut Vec<BytecodeInstruction>,
+        mem_table: &mut HashMap<(u8, bool), MemoryMapEntry>,
+        ctx: &mut CompileCtx,
+    ) {
+        let fb = &el.fb;
+        let label = format!("{} '{}'", el.element_type.display_name(), el.name);
+        match el.element_type {
+            TypeTag::Adc => {
+                let (addr, canonical, region, sym) = Self::word_dst(&el.target_reg, &label, io_mappings, mem_table, ctx);
+                Self::push_raw(
+                    instructions,
+                    VmOpcode::Movw,
+                    addr,
+                    0,
+                    region,
+                    canonical,
+                    sym,
+                    format!("ADC {} -> {}", el.name, el.target_reg),
+                );
+                Self::push_operand(instructions, &el.name, false, &label, io_mappings, mem_table, ctx);
+            }
+            TypeTag::Bitwise => {
+                let op = VmOpcode::from_u8(bitwise_opcode(&el.math_op)).unwrap_or(VmOpcode::Wand);
+                let (addr, canonical, region, sym) = Self::word_dst(&el.target_reg, &label, io_mappings, mem_table, ctx);
+                Self::push_raw(
+                    instructions,
+                    op,
+                    addr,
+                    0,
+                    region,
+                    canonical,
+                    sym,
+                    format!("{} {} := {}, {}", op.mnemonic(), el.target_reg, fb.in1, fb.in2),
+                );
+                Self::push_operand(instructions, &fb.in1, false, &label, io_mappings, mem_table, ctx);
+                if op == VmOpcode::Wnot && fb.in2.trim().is_empty() {
+                    Self::push_const_operand(instructions, 0, &label, ctx);
+                } else {
+                    Self::push_operand(instructions, &fb.in2, false, &label, io_mappings, mem_table, ctx);
+                }
+            }
+            TypeTag::Scale => {
+                let (addr, canonical, region, sym) = Self::word_dst(&el.target_reg, &label, io_mappings, mem_table, ctx);
+                Self::push_raw(
+                    instructions,
+                    VmOpcode::Scale,
+                    addr,
+                    0,
+                    region,
+                    canonical,
+                    sym,
+                    format!("SCALE {} := {} [{}..{}] -> [{}..{}]", el.target_reg, fb.in1, fb.k[0], fb.k[1], fb.k[2], fb.k[3]),
+                );
+                Self::push_operand(instructions, &fb.in1, false, &label, io_mappings, mem_table, ctx);
+                if fb.k[0] == fb.k[1] {
+                    ctx.report.warn(format!("{}: IN_MIN == IN_MAX (output is always OUT_MIN)", label));
+                }
+                for k in fb.k {
+                    Self::push_const_operand(instructions, k as i64, &label, ctx);
+                }
+            }
+            TypeTag::Limit => {
+                let (addr, canonical, region, sym) = Self::word_dst(&el.target_reg, &label, io_mappings, mem_table, ctx);
+                Self::push_raw(
+                    instructions,
+                    VmOpcode::Limit,
+                    addr,
+                    0,
+                    region,
+                    canonical,
+                    sym,
+                    format!("LIMIT {} := {} [{}..{}]", el.target_reg, fb.in1, fb.k[0], fb.k[1]),
+                );
+                Self::push_operand(instructions, &fb.in1, false, &label, io_mappings, mem_table, ctx);
+                if fb.k[0] > fb.k[1] {
+                    ctx.report.warn(format!("{}: MIN > MAX", label));
+                }
+                Self::push_const_operand(instructions, fb.k[0] as i64, &label, ctx);
+                Self::push_const_operand(instructions, fb.k[1] as i64, &label, ctx);
+            }
+            TypeTag::Pid => {
+                let inst = CompileCtx::instance(
+                    &mut ctx.pid_instances,
+                    &mut ctx.report,
+                    &el.name,
+                    "PID",
+                    uplc_vm::MAX_PID_INSTANCES,
+                );
+                let (addr, canonical, region, sym) = Self::word_dst(&el.target_reg, &label, io_mappings, mem_table, ctx);
+                Self::push_raw(
+                    instructions,
+                    VmOpcode::Pid,
+                    addr,
+                    inst as u16,
+                    region,
+                    canonical,
+                    sym,
+                    format!("PID#{} CV={} PV={} SP={}", inst, el.target_reg, fb.in1, fb.in2),
+                );
+                Self::push_operand(instructions, &fb.in1, false, &label, io_mappings, mem_table, ctx);
+                Self::push_operand(instructions, &fb.in2, false, &label, io_mappings, mem_table, ctx);
+                if fb.k[3] <= 0 {
+                    ctx.report.warn(format!("{}: OutMax <= 0 (CV is always 0)", label));
+                }
+                for k in fb.k {
+                    Self::push_const_operand(instructions, k as i64, &label, ctx);
+                }
+            }
+            TypeTag::ShiftRegisters => {
+                let len = el.preset_value.clamp(1, 32);
+                if len != el.preset_value {
+                    ctx.report.warn(format!("{}: length {} clamped to 1..32", label, el.preset_value));
+                }
+                let slot = ctx.alloc_edge_slot(&label);
+                let (addr, canonical, region, sym) = Self::word_dst(&el.name, &label, io_mappings, mem_table, ctx);
+                if addr as usize + len as usize > 0x100 {
+                    ctx.report.warn(format!("{}: register range exceeds word memory", label));
+                }
+                Self::push_raw(
+                    instructions,
+                    VmOpcode::Shreg,
+                    addr,
+                    (len as u16) | ((slot as u16) << 8),
+                    region,
+                    canonical,
+                    sym,
+                    format!("SHREG {} LEN={} <- {}", el.name, len, fb.in1),
+                );
+                Self::push_operand(instructions, &fb.in1, false, &label, io_mappings, mem_table, ctx);
+            }
+            TypeTag::ShiftRegInbit => {
+                let slot = ctx.alloc_edge_slot(&label);
+                let (addr, canonical, region, sym) = Self::word_dst(&el.name, &label, io_mappings, mem_table, ctx);
+                Self::push_raw(
+                    instructions,
+                    VmOpcode::Shbit,
+                    addr,
+                    slot as u16,
+                    region,
+                    canonical,
+                    sym,
+                    format!("SHBIT {} <- {}", el.name, fb.in1),
+                );
+                Self::push_operand(instructions, &fb.in1, true, &label, io_mappings, mem_table, ctx);
+            }
+            TypeTag::ShiftRegReset => {
+                let (addr, canonical, region, sym) = Self::word_dst(&el.name, &label, io_mappings, mem_table, ctx);
+                Self::push_raw(
+                    instructions,
+                    VmOpcode::Move,
+                    addr,
+                    0,
+                    region,
+                    canonical,
+                    sym,
+                    format!("MOVE {}, K0 (SHIFT_RST)", el.name),
+                );
+            }
+            TypeTag::ShiftLeft | TypeTag::ShiftRight | TypeTag::ShiftVariable => {
+                let op = if el.element_type == TypeTag::ShiftRight { VmOpcode::Shr } else { VmOpcode::Shl };
+                let slot = ctx.alloc_edge_slot(&label);
+                let (addr, canonical, region, sym) = Self::word_dst(&el.name, &label, io_mappings, mem_table, ctx);
+                Self::push_raw(
+                    instructions,
+                    op,
+                    addr,
+                    SHIFT_EDGE_FLAG | slot as u16,
+                    region,
+                    canonical.clone(),
+                    sym.clone(),
+                    format!("{} {} (rising edge)", op.mnemonic(), el.name),
+                );
+                let text = Self::opnd_text(OPND_KIND_WORD, addr as u16);
+                Self::push_raw(
+                    instructions,
+                    VmOpcode::Opnd,
+                    OPND_KIND_WORD,
+                    addr as u16,
+                    region,
+                    text.clone(),
+                    sym,
+                    format!("  OPND {}", text),
+                );
+                if el.element_type == TypeTag::ShiftVariable {
+                    Self::push_operand(instructions, &fb.in1, false, &label, io_mappings, mem_table, ctx);
+                } else {
+                    Self::push_const_operand(instructions, el.preset_value as i64, &label, ctx);
+                }
+            }
+            TypeTag::UartSend => {
+                let inst = CompileCtx::instance(
+                    &mut ctx.uart_instances,
+                    &mut ctx.report,
+                    &el.name,
+                    "UART_SEND",
+                    uplc_vm::MAX_UART_INSTANCES,
+                );
+                if fb.mode > 1 {
+                    ctx.report.warn(format!("{}: unknown mode {} (using ASCII)", label, fb.mode));
+                }
+                let mode = fb.mode.min(1);
+                Self::push_raw(
+                    instructions,
+                    VmOpcode::Utx,
+                    inst,
+                    mode as u16,
+                    MemoryRegion::None,
+                    format!("U{}", inst),
+                    el.symbol.clone(),
+                    format!("UTX U{} <- {} ({})", inst, fb.in1, if mode == 1 { "ASCII" } else { "byte" }),
+                );
+                Self::push_operand(instructions, &fb.in1, false, &label, io_mappings, mem_table, ctx);
+            }
+            TypeTag::UartRecv => {
+                let (addr, canonical, region, sym) = Self::word_dst(&el.target_reg, &label, io_mappings, mem_table, ctx);
+                Self::push_raw(
+                    instructions,
+                    VmOpcode::Urx,
+                    addr,
+                    0,
+                    region,
+                    canonical,
+                    sym,
+                    format!("URX {}", el.target_reg),
+                );
+            }
             _ => {}
         }
     }
@@ -1704,8 +2485,7 @@ impl BytecodeCompiler {
         io_mappings: &[IOPortMapping],
         instructions: &mut Vec<BytecodeInstruction>,
         mem_table: &mut HashMap<(u8, bool), MemoryMapEntry>,
-        label_pcs: &mut HashMap<String, u16>,
-        pending_jumps: &mut Vec<(usize, String)>,
+        ctx: &mut CompileCtx,
     ) {
         if path.is_empty() {
             return;
@@ -1730,8 +2510,7 @@ impl BytecodeCompiler {
                     io_mappings,
                     instructions,
                     mem_table,
-                    label_pcs,
-                    pending_jumps,
+                    ctx,
                 );
             }
             Self::push_stack_ins(instructions, VmOpcode::Rp);
@@ -1862,6 +2641,7 @@ END_PROGRAM
             data_reg,
             prog_len: expected_prog_len,
             prog_crc: expected_prog_crc,
+            fw_feature_level: 0,
         };
 
         // Round-trip serialize + parse 467-byte packet (462-byte payload with prog_len + prog_crc)
@@ -2008,6 +2788,230 @@ END_PROGRAM
         let decompiled_uploaded = uploaded_bc.decompile_to_ladder().unwrap();
         let recompiled_uploaded_bc = BytecodeCompiler::compile_program(&decompiled_uploaded);
         assert_eq!(recompiled_uploaded_bc.program_signature(), (16, 0xD7F1));
+    }
+
+    const FB_IL: &str = r#"
+PROGRAM FbDemo
+VAR
+    TEMP_PID : PID;
+END_VAR
+(* Network 01: analog *)
+    LD   %IX0.0
+    ADC  %IW0 %MW1
+    CAL  SC1(IN := %MW1, OUT => %MW2, IN_MIN := 0, IN_MAX := 4095, OUT_MIN := -500, OUT_MAX := 1500)
+    CAL  LIM1(IN := %MW2, OUT => %MW3, MN := 0, MX := 1000)
+(* Network 02: bitwise *)
+    LD   %IX0.1
+    WAND %MW4 %MW1 16#0F0F
+    WOR  %MW5 %MW4 %MW3
+    WXOR %MW6 %MW5 -1
+    WNOT %MW7 %MW6
+    SHL  %MW8 %MW4 3
+    SHR  %MW9 %MW1 2
+    ST   %QX0.0
+(* Network 03: shift *)
+    LD   %IX0.2
+    SHIFT_REG %MW20 5 %MW3
+    SHIFT_BIT %MW30 %IX0.3
+    SHIFT_L %MW31 1
+    SHIFT_R %MW32 2
+    SHIFT_VAR %MW33 %MW34
+(* Network 04: reset *)
+    LD   %IX0.3
+    SHIFT_RST %MW30
+    MOVE %MW34 -2
+(* Network 05: pid *)
+    LD   %IX0.2
+    CAL  TEMP_PID(PV := %MW40, SP := %MW41, CV => %MW42, KP := 150, KI := 50, KD := 10, OUTMAX := 1000)
+(* Network 06: uart *)
+    LD   %IX0.0
+    UART_SEND U1(IN := %MW3, MODE := 1)
+(* Network 07: uart rx *)
+    LD   %IX0.1
+    UART_RECV U2(OUT => %MW50)
+    ST   %QX0.1
+END_PROGRAM
+"#;
+
+    fn flatten(prog: &LadderProgram) -> Vec<LadderElement> {
+        fn walk(els: &[LadderElement], out: &mut Vec<LadderElement>) {
+            for e in els {
+                if e.element_type == TypeTag::Branch {
+                    for p in &e.branch_paths {
+                        walk(p, out);
+                    }
+                } else {
+                    out.push(e.clone());
+                }
+            }
+        }
+        let mut out = Vec::new();
+        for r in &prog.rungs {
+            walk(&r.elements, &mut out);
+        }
+        out
+    }
+
+    #[test]
+    fn test_new_opcodes_encode_decode_roundtrip() {
+        let (bc, report) = BytecodeCompiler::compile_il_with_report(FB_IL).unwrap();
+        assert!(report.is_ok(), "unexpected errors: {:?}", report.errors);
+        assert!(report.warnings.is_empty(), "unexpected warnings: {:?}", report.warnings);
+        assert_eq!(bc.required_feature_level(), 2);
+
+        // Every header opcode is followed by exactly operand_words() OPND words
+        let mut i = 0;
+        while i < bc.instructions.len() {
+            let n = bc.instructions[i].op.operand_words();
+            for j in 1..=n {
+                assert_eq!(bc.instructions[i + j].op, VmOpcode::Opnd, "operand {} of {:?}", j, bc.instructions[i].op);
+            }
+            i += n + 1;
+        }
+
+        // Spot-check encodings
+        let find = |op: VmOpcode| bc.instructions.iter().position(|x| x.op == op).unwrap();
+        let movw = find(VmOpcode::Movw);
+        assert_eq!(bc.instructions[movw].to_bytes(), [0x46, 0x21, 0, 0]); // dst %MW1 = 0x21
+        assert_eq!(bc.instructions[movw + 1].to_bytes(), [0x6F, 0, 0x00, 0]); // %IW0
+        let scale = find(VmOpcode::Scale);
+        assert_eq!(bc.instructions[scale + 4].to_bytes(), [0x6F, 1, 0x0C, 0xFE]); // -500
+        let wxor = find(VmOpcode::Wxor);
+        assert_eq!(bc.instructions[wxor + 2].to_bytes(), [0x6F, 1, 0xFF, 0xFF]); // -1
+        let shreg = find(VmOpcode::Shreg);
+        assert_eq!(bc.instructions[shreg].imm & 0xFF, 5);
+        let shbit = find(VmOpcode::Shbit);
+        assert_eq!(bc.instructions[shbit + 1].to_bytes(), [0x6F, 2, 0x03, 0]); // %IX0.3 bit
+        let pid = find(VmOpcode::Pid);
+        assert_eq!(bc.instructions[pid].addr, 0x20 + 42);
+        let movw_neg = bc.instructions.iter().rposition(|x| x.op == VmOpcode::Movw).unwrap();
+        assert_eq!(bc.instructions[movw_neg + 1].to_bytes(), [0x6F, 1, 0xFE, 0xFF]); // MOVE %MW34 -2
+        let utx = find(VmOpcode::Utx);
+        assert_eq!(bc.instructions[utx].to_bytes(), [0x74, 0, 1, 0]);
+
+        // Raw bytes -> BytecodeProgram -> raw bytes is lossless
+        let raw = bc.to_raw_bytes();
+        let decoded = BytecodeProgram::from_raw_bytes(&raw, &bc.hardware).unwrap();
+        assert_eq!(decoded.to_raw_bytes(), raw);
+        assert!(decoded.to_disassembly_text().contains("OPND"));
+
+        // Decompile -> ladder -> recompile gives the identical program
+        let ladder = decoded.decompile_to_ladder().unwrap();
+        let recompiled = BytecodeCompiler::compile_program(&ladder);
+        assert_eq!(recompiled.to_raw_bytes(), raw, "decompiled IL:\n{}", decoded.decompile_to_il());
+    }
+
+    #[test]
+    fn test_decompile_to_ladder_restores_fb_elements() {
+        let original = IlParser::parse(FB_IL).unwrap();
+        let bc = BytecodeCompiler::compile_program(&original);
+        let uploaded = BytecodeProgram::from_raw_bytes(&bc.to_raw_bytes(), "Raspberry Pi Pico (RP2040)").unwrap();
+        let ladder = uploaded.decompile_to_ladder().unwrap();
+
+        let orig: Vec<_> = flatten(&original).into_iter().filter(|e| e.element_type != TypeTag::Contact && e.element_type != TypeTag::Coil).collect();
+        let back: Vec<_> = flatten(&ladder).into_iter().filter(|e| e.element_type != TypeTag::Contact && e.element_type != TypeTag::Coil).collect();
+        assert_eq!(orig.len(), back.len());
+        for (a, b) in orig.iter().zip(back.iter()) {
+            if a.element_type == TypeTag::ShiftRegReset {
+                // ShiftRegReset compiles to `MOVE w 0` per spec, so decompilation yields Move(0)
+                assert_eq!(b.element_type, TypeTag::Move);
+                assert_eq!(b.preset_value, 0);
+                continue;
+            }
+            assert_eq!(a.element_type, b.element_type);
+            assert_eq!(a.fb.k, b.fb.k, "{:?}", a.element_type);
+            assert_eq!(a.fb.mode, b.fb.mode);
+            assert_eq!(a.preset_value, b.preset_value, "{:?}", a.element_type);
+            if a.element_type == TypeTag::Bitwise {
+                assert_eq!(a.math_op, b.math_op);
+            }
+        }
+    }
+
+    #[test]
+    fn test_compile_report_const_range_and_pid_limit() {
+        let mut prog = LadderProgram::new_empty();
+        prog.rungs.clear();
+        let mut rung = Rung::new(0);
+        rung.elements.push(LadderElement::new_contact(1, "%IX0.0", "IN", ContactMode::NormallyOpen));
+        let mut sc = LadderElement {
+            id: 2,
+            element_type: TypeTag::Scale,
+            name: "SC".into(),
+            target_reg: "%MW1".into(),
+            ..Default::default()
+        };
+        sc.fb.in1 = "%IW0".into();
+        sc.fb.k = [0, 40000, 0, 1000]; // 40000 > i16::MAX
+        rung.elements.push(sc);
+        prog.rungs.push(rung);
+        for i in 0..9 {
+            let mut r = Rung::new(i + 1);
+            r.elements.push(LadderElement::new_contact(100 + i as u64, "%IX0.1", "EN", ContactMode::NormallyOpen));
+            let mut pid = LadderElement {
+                id: 200 + i as u64,
+                element_type: TypeTag::Pid,
+                name: format!("PID_{}", i),
+                target_reg: format!("%MW{}", 10 + i),
+                ..Default::default()
+            };
+            pid.fb.in1 = "%MW0".into();
+            pid.fb.in2 = "500".into();
+            pid.fb.k = [100, 10, 0, 1000];
+            r.elements.push(pid);
+            prog.rungs.push(r);
+        }
+        let (_, report) = BytecodeCompiler::compile_program_with_report(&prog);
+        assert!(!report.is_ok());
+        assert!(report.errors.iter().any(|e| e.contains("40000") && e.contains("i16")), "{:?}", report.errors);
+        assert!(report.errors.iter().any(|e| e.contains("more than 8 PID")), "{:?}", report.errors);
+
+        // Legacy-only programs need feature level 1
+        let legacy = BytecodeCompiler::compile_program(&LadderProgram::new_demo_program());
+        assert_eq!(legacy.required_feature_level(), 1);
+    }
+
+    #[test]
+    fn test_fb_at_rung_start_gets_always_on_condition() {
+        let il = "PROGRAM P\n(* Network 01: x *)\n    CAL  SC1(IN := %IW0, OUT => %MW2, IN_MIN := 0, IN_MAX := 100, OUT_MIN := 0, OUT_MAX := 10)\nEND_PROGRAM\n";
+        let bc = BytecodeCompiler::compile_il(il).unwrap();
+        assert_eq!(bc.instructions[0].op, VmOpcode::Ld);
+        assert_eq!(bc.instructions[0].addr, 0xA0, "LD %SM0 (always ON)");
+        assert_eq!(bc.instructions[1].op, VmOpcode::Scale);
+    }
+
+    #[test]
+    fn test_persist_commands_and_feature_level_snapshot() {
+        let bc = BytecodeProgram { hardware: String::new(), instructions: Vec::new(), memory_map: Vec::new() };
+        let save = bc.to_serial_packet(PlcSerialCommand::PersistSave);
+        assert_eq!(&save[..4], &[0xAA, 0x08, 0x00, 0x00]);
+        assert_eq!(save[4], BytecodeProgram::compute_crc8(&save[1..4]));
+        let clear = bc.to_serial_packet(PlcSerialCommand::PersistClear);
+        assert_eq!(&clear[..4], &[0xAA, 0x09, 0x00, 0x00]);
+
+        // New VM status packet: acc byte carries the feature level in the high nibble
+        let mut vm = uplc_vm::MicroVm::new();
+        vm.acc_bool = true;
+        let mut buf = [0u8; uplc_vm::STATUS_PACKET_LEN];
+        let n = vm.write_status_packet(&mut buf).unwrap();
+        let snap = PlcStatusSnapshot::parse_from_packet(&buf[..n]).unwrap();
+        assert!(snap.acc_bool);
+        assert_eq!(snap.fw_feature_level, uplc_vm::FW_FEATURE_LEVEL);
+        assert!(snap.firmware_supports(2));
+
+        // Legacy firmware (acc byte 0/1, 458-byte payload) -> level 0, supports only level 1
+        let mut legacy = vec![0xAA, 0x83];
+        legacy.extend_from_slice(&(PlcStatusSnapshot::LEGACY_PAYLOAD_LEN as u16).to_le_bytes());
+        let mut payload = vec![0u8; PlcStatusSnapshot::LEGACY_PAYLOAD_LEN];
+        payload[5] = 1;
+        legacy.extend_from_slice(&payload);
+        let crc = BytecodeProgram::compute_crc8(&legacy[1..]);
+        legacy.push(crc);
+        let snap = PlcStatusSnapshot::parse_from_packet(&legacy).unwrap();
+        assert!(snap.acc_bool);
+        assert_eq!(snap.fw_feature_level, 0);
+        assert!(snap.firmware_supports(1));
+        assert!(!snap.firmware_supports(2));
     }
 }
 

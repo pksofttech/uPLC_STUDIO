@@ -579,6 +579,10 @@ fn test_load_all_example_il_files() {
         "07_all_iec_components",
         "08_rp2040_demo_led_blink",
         "09_modbus_rtu_master",
+        "10_auto_io_test",
+        "11_drum_rhythm_demo",
+        "12_pid_scale_process",
+        "13_bitwise_shift_uart",
     ];
 
     for base in files {
@@ -1690,8 +1694,8 @@ fn test_special_system_markers_and_registers() {
 
 #[test]
 fn test_iec_var_retain_persistent_export() {
-    // Ladder with non-retain M0, retain bit M64, and retain word D128
-    let il = "LD M0\nST M64\nLD %MW128\n";
+    // Ladder with non-retain M0, retain bit M64, retain word D100 and non-retain %SD area D128
+    let il = "LD M0\nST M64\nLD %MW100\nLD %MW128\n";
     let prog = IlParser::parse(il).expect("Parse IL failed");
     let table = prog.map_io_to_iec_var_table();
 
@@ -1701,7 +1705,8 @@ fn test_iec_var_retain_persistent_export() {
     // Verify VAR RETAIN PERSISTENT block exists and contains M64 and D128
     assert!(table.contains("VAR RETAIN PERSISTENT\n"), "Table must contain VAR RETAIN PERSISTENT");
     assert!(table.contains("M64 AT %MX8.0 : BOOL := FALSE;"), "Table must declare M64 with %MX8.0");
-    assert!(table.contains("D128 AT %MW128 : INT := 0;"), "Table must declare D128 with %MW128");
+    assert!(table.contains("D100 AT %MW100 : INT := 0;"), "Table must declare D100 with %MW100");
+    assert!(!table.contains("D128 AT %MW128"), "D128 (= %SD0, rewritten every scan) is not RETAIN");
 }
 
 #[test]
@@ -1728,6 +1733,7 @@ fn test_analog_inputs_and_cpu_temperature_snapshot() {
         data_reg: [0i32; 16],
         prog_len: 10,
         prog_crc: 0x1234,
+        fw_feature_level: 2,
     };
     snap.data_reg[0] = 1000;
     snap.data_reg[1] = 2048;
@@ -1787,3 +1793,803 @@ fn test_online_mode_stop_clears_ladder_conduction() {
     assert!(!doc.program.rungs[0].elements[0].is_energized, "Contact conduction must be cleared on STOP");
     assert!(!doc.program.rungs[0].elements[1].is_energized, "Coil conduction must be cleared on STOP");
 }
+
+#[test]
+fn test_word_register_aliases_d_v_mw() {
+    let mut sim = my_canvas_core::PlcSimulator::new();
+
+    // Writing to D5 updates V5, %MW5, D05, V05
+    sim.write_word("D5", 4242);
+    assert_eq!(sim.read_word("D5"), 4242);
+    assert_eq!(sim.read_word("V5"), 4242);
+    assert_eq!(sim.read_word("%MW5"), 4242);
+    assert_eq!(sim.read_word("D05"), 4242);
+    assert_eq!(sim.read_word("V05"), 4242);
+
+    // Writing to V5 updates D5 and %MW5
+    sim.write_word("V5", -1234);
+    assert_eq!(sim.read_word("D5"), -1234);
+    assert_eq!(sim.read_word("V5"), -1234);
+    assert_eq!(sim.read_word("%MW5"), -1234);
+
+    // Writing to %MW5 updates D5 and V5
+    sim.write_word("%MW5", 9999);
+    assert_eq!(sim.read_word("D5"), 9999);
+    assert_eq!(sim.read_word("V5"), 9999);
+    assert_eq!(sim.read_word("%MW5"), 9999);
+
+    // Canonical word key is identical across D5, V5, %MW5
+    assert_eq!(
+        my_canvas_core::PlcSimulator::canonical_word_key("D5"),
+        my_canvas_core::PlcSimulator::canonical_word_key("V5")
+    );
+    assert_eq!(
+        my_canvas_core::PlcSimulator::canonical_word_key("D5"),
+        my_canvas_core::PlcSimulator::canonical_word_key("%MW5")
+    );
+}
+
+#[test]
+fn test_retain_range_m64_m95_and_d96_d127_preserved_on_stop_run_and_reset() {
+    // 1. Verify check_persistent_address covers M64..M95 and D96..D127 (%MW96..%MW127), NOT D128..D159
+    assert!(IlParser::check_persistent_address("M63").is_none());
+    assert!(IlParser::check_persistent_address("M64").is_some());
+    assert!(IlParser::check_persistent_address("M95").is_some());
+    assert!(IlParser::check_persistent_address("M96").is_none());
+    assert!(IlParser::check_persistent_address("%MX8.0").is_some());
+    assert!(IlParser::check_persistent_address("%MX11.7").is_some());
+    assert!(IlParser::check_persistent_address("%MX12.0").is_none());
+
+    assert!(IlParser::check_persistent_address("D95").is_none());
+    assert!(IlParser::check_persistent_address("D96").is_some());
+    assert!(IlParser::check_persistent_address("D127").is_some());
+    assert!(IlParser::check_persistent_address("D128").is_none());
+    assert!(IlParser::check_persistent_address("D159").is_none());
+    assert!(IlParser::check_persistent_address("%MW95").is_none());
+    assert!(IlParser::check_persistent_address("%MW96").is_some());
+    assert!(IlParser::check_persistent_address("%MW127").is_some());
+    assert!(IlParser::check_persistent_address("%MW128").is_none());
+
+    // 2. Verify Simulator Stop -> Run and Reset preserve M64..M95 and D96..D127 while clearing non-retain
+    let mut doc = Document::new_empty();
+    doc.start_simulation();
+
+    // Set non-retain and retain bits/words
+    doc.simulator.set_var_value("M10", true);
+    doc.simulator.set_var_value("M64", true);
+    doc.simulator.set_var_value("M95", true);
+    doc.simulator.write_word("%MW10", 111);
+    doc.simulator.write_word("%MW96", 7777);
+    doc.simulator.write_word("D127", -8888);
+
+    // Stop -> Run transition preserves retain memory
+    doc.stop_simulation();
+    doc.start_simulation();
+    assert!(doc.simulator.get_var_value("M64"));
+    assert!(doc.simulator.get_var_value("M95"));
+    assert_eq!(doc.simulator.read_word("%MW96"), 7777);
+    assert_eq!(doc.simulator.read_word("%MW127"), -8888);
+
+    // Full Simulator reset (power-cycle simulation) clears non-retain M10 and %MW10,
+    // but preserves RETAIN M64..M95 and D96..D127 (%MW96..%MW127)!
+    doc.reset_simulation();
+    assert!(!doc.simulator.get_var_value("M10"), "Non-retain M10 must be cleared on reset");
+    assert_eq!(doc.simulator.read_word("%MW10"), 0, "Non-retain %MW10 must be cleared on reset");
+    assert!(doc.simulator.get_var_value("M64"), "Retain M64 must be preserved on reset");
+    assert!(doc.simulator.get_var_value("M95"), "Retain M95 must be preserved on reset");
+    assert_eq!(doc.simulator.read_word("%MW96"), 7777, "Retain %MW96 must be preserved on reset");
+    assert_eq!(doc.simulator.read_word("D127"), -8888, "Retain D127 must be preserved on reset");
+
+    // reset_including_retain wipes retain area as well
+    doc.simulator.reset_including_retain(&mut doc.program);
+    assert!(!doc.simulator.get_var_value("M64"));
+    assert_eq!(doc.simulator.read_word("%MW96"), 0);
+}
+
+#[test]
+fn test_temp_pid_not_parsed_as_timer() {
+    let il = r#"
+PROGRAM MainProgram
+VAR
+    TEMP_PID : PID; (* Kp=1.50 Ki=0.25 Kd=0.05 OutMax=1000 *)
+    T_SCALE : SCALE;
+    T_LIMIT : LIMIT;
+    T0 : TON; (* Preset: 500ms *)
+END_VAR
+
+(* Network 01: FB names starting with T must use their declared FB type *)
+    LD   %IX0.0
+    CAL  TEMP_PID(PV := %MW10, SP := %MW11, CV => %MW12, KP := 150, KI := 25, KD := 5, OUTMAX := 1000)
+    CAL  T_SCALE(IN := %IW0, OUT => %MW10, IN_MIN := 0, IN_MAX := 4095, OUT_MIN := 0, OUT_MAX := 1000)
+    CAL  T_LIMIT(IN := %MW10, OUT => %MW13, MN := 50, MX := 950)
+    CAL  T0(IN := TRUE, PT := T#500ms)
+END_PROGRAM
+"#;
+
+    let prog = IlParser::parse(il).expect("Failed to parse IL with TEMP_PID");
+    assert_eq!(prog.rungs.len(), 1);
+    let els = &prog.rungs[0].elements;
+    assert_eq!(els.len(), 5);
+    assert_eq!(els[1].element_type, TypeTag::Pid, "TEMP_PID must be parsed as TypeTag::Pid, not Ton");
+    assert_eq!(els[1].name, "TEMP_PID");
+    assert_eq!(els[1].fb.in1, "%MW10");
+    assert_eq!(els[1].fb.in2, "%MW11");
+    assert_eq!(els[1].target_reg, "%MW12");
+    assert_eq!(els[1].fb.k, [150, 25, 5, 1000]);
+
+    assert_eq!(els[2].element_type, TypeTag::Scale);
+    assert_eq!(els[3].element_type, TypeTag::Limit);
+    assert_eq!(els[4].element_type, TypeTag::Ton);
+}
+
+#[test]
+fn test_simulator_all_new_and_wired_elements() {
+    use my_canvas_core::{FbParams, PlcSimulator, Rung};
+
+    let mut prog = LadderProgram::new_empty();
+    prog.rungs.clear();
+
+    // Rung 0: ADC (%IW0 -> %MW0), SCALE (%MW0 0..4000 -> -200..200 -> %MW1),
+    //         SCALE zero-span guard (%MW0 100..100 -> 42..999 -> %MW2),
+    //         LIMIT (%MW1 clamped to -100..100 -> %MW3)
+    let mut r0 = Rung::new(0);
+    r0.elements.push(LadderElement::new_contact(1, "%IX0.0", "EN", ContactMode::NormallyOpen));
+    r0.elements.push(LadderElement {
+        id: 2,
+        element_type: TypeTag::Adc,
+        name: "%IW0".to_string(),
+        target_reg: "%MW0".to_string(),
+        ..Default::default()
+    });
+    r0.elements.push(LadderElement {
+        id: 3,
+        element_type: TypeTag::Scale,
+        name: "SC1".to_string(),
+        target_reg: "%MW1".to_string(),
+        fb: FbParams {
+            in1: "%MW0".to_string(),
+            in2: String::new(),
+            k: [0, 4000, -200, 200],
+            mode: 0,
+        },
+        ..Default::default()
+    });
+    r0.elements.push(LadderElement {
+        id: 4,
+        element_type: TypeTag::Scale,
+        name: "SC_ZERO".to_string(),
+        target_reg: "%MW2".to_string(),
+        fb: FbParams {
+            in1: "%MW0".to_string(),
+            in2: String::new(),
+            k: [100, 100, 42, 999],
+            mode: 0,
+        },
+        ..Default::default()
+    });
+    r0.elements.push(LadderElement {
+        id: 5,
+        element_type: TypeTag::Limit,
+        name: "LIM1".to_string(),
+        target_reg: "%MW3".to_string(),
+        fb: FbParams {
+            in1: "%MW1".to_string(),
+            in2: String::new(),
+            k: [-100, 100, 0, 0],
+            mode: 0,
+        },
+        ..Default::default()
+    });
+    prog.rungs.push(r0);
+
+    // Rung 1: Bitwise AND, OR, XOR, NOT, SHL, SHR
+    let mut r1 = Rung::new(1);
+    r1.elements.push(LadderElement::new_contact(10, "%IX0.0", "EN", ContactMode::NormallyOpen));
+    for (idx, (op, in1, in2, dst)) in [
+        ("AND", "%MW10", "16#00FF", "%MW11"),
+        ("OR", "%MW11", "16#0100", "%MW12"),
+        ("XOR", "%MW12", "%MW10", "%MW13"),
+        ("NOT", "%MW11", "", "%MW14"),
+        ("SHL", "%MW11", "3", "%MW15"),
+        ("SHR", "%MW10", "4", "%MW16"),
+    ]
+    .iter()
+    .enumerate()
+    {
+        r1.elements.push(LadderElement {
+            id: 11 + idx as u64,
+            element_type: TypeTag::Bitwise,
+            name: format!("BW_{}", op),
+            math_op: op.to_string(),
+            target_reg: dst.to_string(),
+            fb: FbParams {
+                in1: in1.to_string(),
+                in2: in2.to_string(),
+                k: [0; 4],
+                mode: 0,
+            },
+            ..Default::default()
+        });
+    }
+    prog.rungs.push(r1);
+
+    // Rung 2: ShiftRegisters (len 3 at %MW20 <- %MW19), ShiftRegInbit (%MW25 <- %IX0.2),
+    //         ShiftLeft (%MW26 << 2), ShiftRight (%MW27 >> 2), ShiftVariable (%MW28 by %MW29)
+    let mut r2 = Rung::new(2);
+    r2.elements.push(LadderElement::new_contact(20, "%IX0.1", "CLK", ContactMode::NormallyOpen));
+    r2.elements.push(LadderElement {
+        id: 21,
+        element_type: TypeTag::ShiftRegisters,
+        name: "%MW20".to_string(),
+        preset_value: 3,
+        fb: FbParams {
+            in1: "%MW19".to_string(),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    r2.elements.push(LadderElement {
+        id: 22,
+        element_type: TypeTag::ShiftRegInbit,
+        name: "%MW25".to_string(),
+        fb: FbParams {
+            in1: "%IX0.2".to_string(),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    r2.elements.push(LadderElement {
+        id: 23,
+        element_type: TypeTag::ShiftLeft,
+        name: "%MW26".to_string(),
+        preset_value: 2,
+        ..Default::default()
+    });
+    r2.elements.push(LadderElement {
+        id: 24,
+        element_type: TypeTag::ShiftRight,
+        name: "%MW27".to_string(),
+        preset_value: 2,
+        ..Default::default()
+    });
+    r2.elements.push(LadderElement {
+        id: 25,
+        element_type: TypeTag::ShiftVariable,
+        name: "%MW28".to_string(),
+        fb: FbParams {
+            in1: "%MW29".to_string(),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    prog.rungs.push(r2);
+
+    // Rung 3: ShiftRegReset (%MW25 = 0 on %IX0.3)
+    let mut r3 = Rung::new(3);
+    r3.elements.push(LadderElement::new_contact(30, "%IX0.3", "RST", ContactMode::NormallyOpen));
+    r3.elements.push(LadderElement {
+        id: 31,
+        element_type: TypeTag::ShiftRegReset,
+        name: "%MW25".to_string(),
+        ..Default::default()
+    });
+    prog.rungs.push(r3);
+
+    // Rung 4: UartSend mode 0 (byte) on %IX0.4, UartSend mode 1 (ASCII + CRLF) on %IX0.5
+    let mut r4 = Rung::new(4);
+    r4.elements.push(LadderElement::new_contact(40, "%IX0.4", "TX0", ContactMode::NormallyOpen));
+    r4.elements.push(LadderElement {
+        id: 41,
+        element_type: TypeTag::UartSend,
+        name: "U_BYTE".to_string(),
+        fb: FbParams {
+            in1: "%MW30".to_string(),
+            mode: 0,
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    prog.rungs.push(r4);
+
+    let mut r5 = Rung::new(5);
+    r5.elements.push(LadderElement::new_contact(42, "%IX0.5", "TX1", ContactMode::NormallyOpen));
+    r5.elements.push(LadderElement {
+        id: 43,
+        element_type: TypeTag::UartSend,
+        name: "U_ASCII".to_string(),
+        fb: FbParams {
+            in1: "%MW31".to_string(),
+            mode: 1,
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    prog.rungs.push(r5);
+
+    // Rung 6: UartRecv into %MW32 -> Coil %QX0.0 (ENO conducts only when byte received)
+    let mut r6 = Rung::new(6);
+    r6.elements.push(LadderElement::new_contact(44, "%IX0.0", "EN", ContactMode::NormallyOpen));
+    r6.elements.push(LadderElement {
+        id: 45,
+        element_type: TypeTag::UartRecv,
+        name: "U_RX".to_string(),
+        target_reg: "%MW32".to_string(),
+        ..Default::default()
+    });
+    r6.elements.push(LadderElement::new_coil(46, "%QX0.0", "RX_PULSE", CoilMode::Normal));
+    prog.rungs.push(r6);
+
+    let mut sim = PlcSimulator::new();
+    sim.set_input("%IX0.0", true);
+
+    // 1. Test ADC, SCALE (below min, within range, above max, zero-span), and LIMIT
+    sim.write_word("%IW0", 0); // -> SCALE = -200, LIMIT = -100
+    sim.write_word("%MW10", 0x1234);
+    sim.step_scan(&mut prog, 10);
+    assert_eq!(sim.read_word("%MW0"), 0);
+    assert_eq!(sim.read_word("%MW1"), -200);
+    assert_eq!(sim.read_word("%MW2"), 42, "Zero-span SCALE must return out_min (42)");
+    assert_eq!(sim.read_word("%MW3"), -100, "LIMIT must clamp below min to -100");
+
+    sim.write_word("%IW0", 2500); // -> SCALE = 50, LIMIT = 50 (within range)
+    sim.step_scan(&mut prog, 10);
+    assert_eq!(sim.read_word("%MW0"), 2500);
+    assert_eq!(sim.read_word("%MW1"), 50);
+    assert_eq!(sim.read_word("%MW3"), 50, "LIMIT must pass value within range");
+
+    sim.write_word("%IW0", 4000); // -> SCALE = 200, LIMIT = 100 (clamped above max)
+    sim.step_scan(&mut prog, 10);
+    assert_eq!(sim.read_word("%MW1"), 200);
+    assert_eq!(sim.read_word("%MW3"), 100, "LIMIT must clamp above max to 100");
+
+    // 2. Verify Bitwise results
+    assert_eq!(sim.read_word("%MW11"), 0x34); // 0x1234 & 0x00FF
+    assert_eq!(sim.read_word("%MW12"), 0x0134); // 0x34 | 0x0100
+    assert_eq!(sim.read_word("%MW13"), 0x0134 ^ 0x1234);
+    assert_eq!(sim.read_word("%MW14"), !0x34);
+    assert_eq!(sim.read_word("%MW15"), 0x34 << 3);
+    assert_eq!(sim.read_word("%MW16"), 0x1234 >> 4);
+
+    // 3. Test Shift blocks (rising-edge triggered)
+    sim.write_word("%MW19", 101);
+    sim.write_word("%MW26", 3);
+    sim.write_word("%MW27", 64);
+    sim.write_word("%MW28", 5);
+    sim.write_word("%MW29", 3); // positive shift = left by 3
+    sim.set_input("%IX0.2", true);
+    sim.set_input("%IX0.1", true); // Rising edge #1
+    sim.step_scan(&mut prog, 10);
+    assert_eq!(sim.read_word("%MW20"), 101);
+    assert_eq!(sim.read_word("%MW21"), 0);
+    assert_eq!(sim.read_word("%MW25"), 1);
+    assert_eq!(sim.read_word("%MW26"), 12); // 3 << 2
+    assert_eq!(sim.read_word("%MW27"), 16); // 64 >> 2
+    assert_eq!(sim.read_word("%MW28"), 40); // 5 << 3
+
+    // Holding %IX0.1 = true for another scan MUST NOT shift again (rising-edge only!)
+    sim.write_word("%MW19", 202);
+    sim.step_scan(&mut prog, 10);
+    assert_eq!(sim.read_word("%MW20"), 101, "Must not shift while clock remains high");
+    assert_eq!(sim.read_word("%MW26"), 12);
+
+    // Pulse %IX0.1 low then high -> Rising edge #2, with negative ShiftVariable (-2 = right by 2)
+    sim.set_input("%IX0.1", false);
+    sim.step_scan(&mut prog, 10);
+    sim.write_word("%MW29", -2);
+    sim.set_input("%IX0.2", false);
+    sim.set_input("%IX0.1", true);
+    sim.step_scan(&mut prog, 10);
+    assert_eq!(sim.read_word("%MW20"), 202);
+    assert_eq!(sim.read_word("%MW21"), 101);
+    assert_eq!(sim.read_word("%MW25"), 0b10);
+    assert_eq!(sim.read_word("%MW26"), 48); // 12 << 2
+    assert_eq!(sim.read_word("%MW27"), 4);  // 16 >> 2
+    assert_eq!(sim.read_word("%MW28"), 10); // 40 >> 2
+
+    // ShiftRegReset clears %MW25 when %IX0.3 = true
+    sim.set_input("%IX0.3", true);
+    sim.step_scan(&mut prog, 10);
+    assert_eq!(sim.read_word("%MW25"), 0);
+    sim.set_input("%IX0.3", false);
+
+    // 4. Test UartSend mode 0 (byte) and mode 1 (ASCII decimal + CRLF)
+    sim.write_word("%MW30", 0x1241); // low byte = 0x41 ('A')
+    sim.write_word("%MW31", -42);
+    sim.set_input("%IX0.4", true);
+    sim.set_input("%IX0.5", true);
+    sim.step_scan(&mut prog, 10);
+    assert_eq!(sim.take_uart_tx(), b"A-42\r\n");
+    // Holding %IX0.4 / %IX0.5 high does not re-send
+    sim.step_scan(&mut prog, 10);
+    assert!(sim.take_uart_tx().is_empty());
+
+    // 5. Test UartRecv: ENO=0 when RX queue is empty, ENO=1 for 1 scan per byte received
+    assert!(!sim.get_var_value("%QX0.0"));
+    sim.push_uart_rx(&[0x55, 0x7A]);
+    sim.step_scan(&mut prog, 10);
+    assert_eq!(sim.read_word("%MW32"), 0x55);
+    assert!(sim.get_var_value("%QX0.0"), "ENO must conduct when first byte is received");
+    sim.step_scan(&mut prog, 10);
+    assert_eq!(sim.read_word("%MW32"), 0x7A);
+    assert!(sim.get_var_value("%QX0.0"), "ENO must conduct when second byte is received");
+    sim.step_scan(&mut prog, 10);
+    assert!(!sim.get_var_value("%QX0.0"), "ENO must drop to false when RX queue is empty");
+}
+
+#[test]
+fn test_simulator_pid_convergence_and_reset() {
+    use my_canvas_core::{FbParams, PlcSimulator, Rung};
+
+    let mut prog = LadderProgram::new_empty();
+    prog.rungs.clear();
+
+    let mut r0 = Rung::new(0);
+    r0.elements.push(LadderElement::new_contact(1, "%IX0.0", "EN", ContactMode::NormallyOpen));
+    r0.elements.push(LadderElement {
+        id: 2,
+        element_type: TypeTag::Pid,
+        name: "TEMP_PID".to_string(),
+        target_reg: "%MW12".to_string(),
+        fb: FbParams {
+            in1: "%MW10".to_string(), // PV
+            in2: "%MW11".to_string(), // SP
+            k: [100, 200, 5, 1000],   // Kp=1.00, Ki=2.00/s, Kd=0.05s, OutMax=1000
+            mode: 0,
+        },
+        ..Default::default()
+    });
+    prog.rungs.push(r0);
+
+    let mut sim = PlcSimulator::new();
+    sim.set_input("%IX0.0", true);
+    sim.write_word("%MW11", 500); // SP = 500
+
+    let mut pv = 0.0f64;
+    for _ in 0..1500 {
+        sim.write_word("%MW10", pv as i32);
+        sim.step_scan(&mut prog, 10);
+        let cv = sim.read_word("%MW12") as f64;
+        assert!((0.0..=1000.0).contains(&cv));
+        pv += (cv - pv) * (10.0 / 500.0);
+    }
+    assert!(
+        (pv - 500.0).abs() <= 10.0,
+        "Simulator PID should converge PV to SP +/-2% (got pv={})",
+        pv
+    );
+    assert!(sim.pid_states.get("TEMP_PID").unwrap().integral > 0);
+
+    // Disabling EN (%IX0.0 = false) resets the PID integral
+    sim.set_input("%IX0.0", false);
+    sim.step_scan(&mut prog, 10);
+    let st = sim.pid_states.get("TEMP_PID").unwrap();
+    assert_eq!(st.integral, 0);
+    assert!(!st.active);
+}
+
+#[test]
+fn test_il_roundtrip_preserves_new_elements_and_fb_params() {
+    use my_canvas_core::{FbParams, Rung};
+
+    let mut prog = LadderProgram::new_empty();
+    prog.rungs.clear();
+
+    let mut r0 = Rung::new(0);
+    r0.comment = "All P1/P2 function blocks roundtrip".to_string();
+    r0.elements.push(LadderElement::new_contact(1, "%IX0.0", "EN", ContactMode::NormallyOpen));
+    r0.elements.push(LadderElement {
+        id: 2,
+        element_type: TypeTag::Adc,
+        name: "%IW2".to_string(),
+        target_reg: "%MW50".to_string(),
+        ..Default::default()
+    });
+    r0.elements.push(LadderElement {
+        id: 3,
+        element_type: TypeTag::Scale,
+        name: "SC1".to_string(),
+        target_reg: "%MW20".to_string(),
+        fb: FbParams {
+            in1: "%IW0".to_string(),
+            in2: String::new(),
+            k: [-100, 4095, -500, 1500],
+            mode: 0,
+        },
+        ..Default::default()
+    });
+    r0.elements.push(LadderElement {
+        id: 4,
+        element_type: TypeTag::Limit,
+        name: "LIM1".to_string(),
+        target_reg: "%MW21".to_string(),
+        fb: FbParams {
+            in1: "%MW20".to_string(),
+            in2: String::new(),
+            k: [-250, 900, 0, 0],
+            mode: 0,
+        },
+        ..Default::default()
+    });
+    r0.elements.push(LadderElement {
+        id: 5,
+        element_type: TypeTag::Pid,
+        name: "TEMP_PID".to_string(),
+        target_reg: "%MW12".to_string(),
+        fb: FbParams {
+            in1: "%MW10".to_string(),
+            in2: "%MW11".to_string(),
+            k: [125, 10, 3, 1000],
+            mode: 0,
+        },
+        ..Default::default()
+    });
+    for (idx, (op, in1, in2, dst)) in [
+        ("AND", "%MW31", "16#00FF", "%MW30"),
+        ("OR", "%MW30", "16#0100", "%MW32"),
+        ("XOR", "%MW32", "%MW31", "%MW33"),
+        ("NOT", "%MW30", "", "%MW34"),
+        ("SHL", "%MW30", "2", "%MW35"),
+        ("SHR", "%MW31", "4", "%MW36"),
+    ]
+    .iter()
+    .enumerate()
+    {
+        r0.elements.push(LadderElement {
+            id: 6 + idx as u64,
+            element_type: TypeTag::Bitwise,
+            name: format!("W_{}", op),
+            math_op: op.to_string(),
+            target_reg: dst.to_string(),
+            fb: FbParams {
+                in1: in1.to_string(),
+                in2: in2.to_string(),
+                k: [0; 4],
+                mode: 0,
+            },
+            ..Default::default()
+        });
+    }
+    r0.elements.push(LadderElement {
+        id: 20,
+        element_type: TypeTag::ShiftRegisters,
+        name: "%MW60".to_string(),
+        target_reg: String::new(),
+        preset_value: 8,
+        fb: FbParams {
+            in1: "%MW59".to_string(),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    r0.elements.push(LadderElement {
+        id: 21,
+        element_type: TypeTag::ShiftRegInbit,
+        name: "%MW70".to_string(),
+        target_reg: String::new(),
+        fb: FbParams {
+            in1: "%IX0.1".to_string(),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    r0.elements.push(LadderElement {
+        id: 22,
+        element_type: TypeTag::ShiftRegReset,
+        name: "%MW70".to_string(),
+        target_reg: String::new(),
+        ..Default::default()
+    });
+    r0.elements.push(LadderElement {
+        id: 23,
+        element_type: TypeTag::ShiftLeft,
+        name: "%MW71".to_string(),
+        target_reg: String::new(),
+        preset_value: 3,
+        ..Default::default()
+    });
+    r0.elements.push(LadderElement {
+        id: 24,
+        element_type: TypeTag::ShiftRight,
+        name: "%MW72".to_string(),
+        target_reg: String::new(),
+        preset_value: 2,
+        ..Default::default()
+    });
+    r0.elements.push(LadderElement {
+        id: 25,
+        element_type: TypeTag::ShiftVariable,
+        name: "%MW73".to_string(),
+        target_reg: String::new(),
+        fb: FbParams {
+            in1: "%MW74".to_string(),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    r0.elements.push(LadderElement {
+        id: 26,
+        element_type: TypeTag::UartSend,
+        name: "U_TX".to_string(),
+        target_reg: String::new(),
+        fb: FbParams {
+            in1: "%MW80".to_string(),
+            mode: 1,
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    r0.elements.push(LadderElement {
+        id: 27,
+        element_type: TypeTag::UartRecv,
+        name: "U_RX".to_string(),
+        target_reg: "%MW81".to_string(),
+        ..Default::default()
+    });
+    prog.rungs.push(r0);
+
+    let il_text = IlParser::export_il(&prog);
+    let parsed = IlParser::parse(&il_text).expect("Failed to parse exported IL");
+    assert_eq!(parsed.rungs.len(), 1);
+    let orig_els = &prog.rungs[0].elements;
+    let new_els = &parsed.rungs[0].elements;
+    assert_eq!(new_els.len(), orig_els.len());
+
+    for (o, n) in orig_els.iter().zip(new_els.iter()) {
+        assert_eq!(n.element_type, o.element_type, "Element type mismatch for {}", o.name);
+        if o.element_type != TypeTag::Contact {
+            assert_eq!(n.target_reg, o.target_reg, "target_reg mismatch for {:?}", o.element_type);
+        }
+        if matches!(
+            o.element_type,
+            TypeTag::ShiftRegisters | TypeTag::ShiftLeft | TypeTag::ShiftRight
+        ) {
+            assert_eq!(n.preset_value, o.preset_value, "preset_value mismatch for {:?}", o.element_type);
+        }
+        if o.element_type == TypeTag::Bitwise {
+            assert_eq!(n.math_op, o.math_op, "math_op mismatch for {:?}", o.element_type);
+        }
+        assert_eq!(n.fb.in1, o.fb.in1, "fb.in1 mismatch for {:?}", o.element_type);
+        assert_eq!(n.fb.in2, o.fb.in2, "fb.in2 mismatch for {:?}", o.element_type);
+        assert_eq!(n.fb.k, o.fb.k, "fb.k mismatch for {:?}", o.element_type);
+        assert_eq!(n.fb.mode, o.fb.mode, "fb.mode mismatch for {:?}", o.element_type);
+    }
+}
+
+#[test]
+fn test_differential_simulator_matches_micro_vm() {
+    use my_canvas_core::bytecode::BytecodeCompiler;
+    use my_canvas_core::PlcSimulator;
+    use uplc_vm::MicroVm;
+
+    let il = r#"
+PROGRAM MainProgram
+VAR
+    SC1 : SCALE;
+    LIM1 : LIMIT;
+    TEMP_PID : PID;
+    U_TX_ASCII : UART_SEND;
+    U_TX_BYTE : UART_SEND;
+    U_RX : UART_RECV;
+END_VAR
+
+(* Network 01: SCALE + LIMIT + MOVE negative constant + Bitwise *)
+    LD   %IX0.0
+    CAL  SC1(IN := %IW0, OUT => %MW0, IN_MIN := 0, IN_MAX := 4095, OUT_MIN := -500, OUT_MAX := 1500)
+    CAL  LIM1(IN := %MW0, OUT => %MW1, MN := -200, MX := 1000)
+    MOVE %MW2 -45
+    WAND %MW3 %MW1 16#03FF
+    WOR  %MW4 %MW3 16#0100
+    WXOR %MW5 %MW4 %MW1
+    WNOT %MW6 %MW3
+    SHL  %MW7 %MW3 2
+    SHR  %MW8 %MW4 1
+    ST   %QX0.0
+
+(* Network 02: Edge-triggered ShiftRegisters, ShiftLeft, ShiftRight *)
+    LD   %IX0.1
+    SHIFT_REG %MW10 3 %MW1
+    SHIFT_L %MW14 2
+    SHIFT_R %MW15 1
+
+(* Network 03: PID controller *)
+    LD   %IX0.2
+    CAL  TEMP_PID(PV := %MW1, SP := %MW20, CV => %MW21, KP := 125, KI := 50, KD := 5, OUTMAX := 1000)
+
+(* Network 04: UART Send ASCII on rising edge of %IX0.3 *)
+    LD   %IX0.3
+    UART_SEND U_TX_ASCII(IN := %MW2, MODE := 1)
+
+(* Network 05: UART Send raw byte on rising edge of %IX0.4 *)
+    LD   %IX0.4
+    UART_SEND U_TX_BYTE(IN := %MW3, MODE := 0)
+
+(* Network 06: UART Recv into %MW30 -> Coil %QX0.1 *)
+    LD   %IX0.0
+    UART_RECV U_RX(OUT => %MW30)
+    ST   %QX0.1
+
+END_PROGRAM
+"#;
+
+    let mut prog = IlParser::parse(il).expect("Failed to parse differential test IL");
+    let (bc, report) = BytecodeCompiler::compile_program_with_report(&prog);
+    assert!(report.errors.is_empty(), "Unexpected compile errors: {:?}", report.errors);
+
+    let mut sim = PlcSimulator::new();
+    let mut vm = MicroVm::new();
+    vm.load_bytecode(&bc.to_raw_bytes()).expect("VM load_bytecode failed");
+
+    // Seed initial register values identically in Simulator and VM
+    sim.write_word("%MW14", 3);
+    vm.word_mem[0x20 + 14] = 3;
+    sim.write_word("%MW15", 64);
+    vm.word_mem[0x20 + 15] = 64;
+    sim.write_word("%MW20", 600); // PID SP
+    vm.word_mem[0x20 + 20] = 600;
+
+    let mut vm_uart_tx: Vec<u8> = Vec::new();
+
+    // Multi-scan test script: (ix0, ix1, ix2, ix3, ix4, iw0, rx_byte)
+    let steps: &[(bool, bool, bool, bool, bool, i32, Option<u8>)] = &[
+        (true, false, true, false, false, 0, None),
+        (true, true, true, true, false, 1024, Some(b'K')),
+        (true, true, true, true, false, 2048, None),
+        (true, false, true, false, true, 3000, Some(b'Z')),
+        (true, true, true, true, false, 4095, None),
+        (true, false, false, false, false, 2500, None), // PID EN=0 reset
+        (true, true, true, false, false, 1800, Some(0x7F)),
+    ];
+
+    for (step_idx, &(ix0, ix1, ix2, ix3, ix4, iw0, rx_opt)) in steps.iter().enumerate() {
+        for (bit, val) in [(0, ix0), (1, ix1), (2, ix2), (3, ix3), (4, ix4)] {
+            sim.set_input(&format!("%IX0.{}", bit), val);
+            vm.set_digital_input(bit, val);
+        }
+        sim.write_word("%IW0", iw0);
+        vm.word_mem[0] = iw0;
+
+        if let Some(b) = rx_opt {
+            sim.push_uart_rx(&[b]);
+            vm.uart_rx_in = Some(b);
+        }
+
+        sim.step_scan(&mut prog, 10);
+        vm.step_scan(10);
+
+        // Drain VM outgoing UART slot just like the RP2040 uart_task does
+        if let Some(job) = vm.uart_tx_out.take() {
+            let mut buf = [0u8; 16];
+            let n = job.encode(&mut buf);
+            vm_uart_tx.extend_from_slice(&buf[..n]);
+            vm.uart_tx_busy = false;
+        }
+
+        // Compare %MW0..=%MW30 between Simulator and MicroVm
+        for reg in 0..=30 {
+            let sim_v = sim.read_word(&format!("%MW{}", reg));
+            let vm_v = vm.word_mem[0x20 + reg];
+            assert_eq!(
+                sim_v, vm_v,
+                "Step {}: %MW{} mismatch (Simulator={} vs VM={})",
+                step_idx, reg, sim_v, vm_v
+            );
+        }
+
+        // Compare %QX0.0..%QX0.7 between Simulator and MicroVm
+        for q in 0..8 {
+            let sim_q = sim.get_var_value(&format!("%QX0.{}", q));
+            let vm_q = vm.get_digital_output(q);
+            assert_eq!(
+                sim_q, vm_q,
+                "Step {}: %QX0.{} mismatch (Simulator={} vs VM={})",
+                step_idx, q, sim_q, vm_q
+            );
+        }
+    }
+
+    // Verify accumulated UART TX bytes are identical between Simulator and VM
+    let sim_uart_tx = sim.take_uart_tx();
+    assert_eq!(sim_uart_tx, vm_uart_tx, "UART TX stream mismatch between Simulator and VM");
+    assert!(!sim_uart_tx.is_empty());
+}
+

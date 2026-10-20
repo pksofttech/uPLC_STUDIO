@@ -19,10 +19,11 @@ use embassy_executor::Spawner;
 use embassy_rp::bind_interrupts;
 use embassy_rp::flash::{Async, Flash, ERASE_SIZE};
 use embassy_rp::gpio::{Input, Output};
-use embassy_rp::peripherals::{FLASH, UART1, USB};
+use embassy_rp::peripherals::{FLASH, UART0, UART1, USB};
 use embassy_rp::uart::{self, BufferedInterruptHandler, BufferedUart};
 use embassy_rp::usb::{Driver as UsbDriver, InterruptHandler as UsbInterruptHandler};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::channel::Channel;
 use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Instant, Ticker};
 use embassy_usb::class::cdc_acm::{CdcAcmClass, State as CdcAcmState};
@@ -38,10 +39,23 @@ use panic_halt as _;
 
 mod config;
 use config::*;
-use portable_atomic::{AtomicBool, Ordering};
+use portable_atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
 
 /// Global PLC Error Flag for LED and system diagnostics
 static PLC_HAS_ERROR: AtomicBool = AtomicBool::new(false);
+
+/// CRC16 of the RETAIN region (`M64..M95`, `D96..D127`) as last saved in Flash
+static RETAIN_SAVED_CRC: AtomicU16 = AtomicU16::new(0);
+
+/// Total number of RETAIN Flash saves (`%SD7` / `D135`)
+static RETAIN_SAVE_COUNT: AtomicU32 = AtomicU32::new(0);
+
+/// Whether the RETAIN region in RAM differs from Flash (`%SM7` / `M103`)
+static RETAIN_DIRTY: AtomicBool = AtomicBool::new(false);
+
+/// Async channel for triggering background Flash saves of RETAIN memory without holding the VM mutex
+static FLASH_CMD_CHANNEL: Channel<CriticalSectionRawMutex, ([u8; 32], [i32; 32]), 2> =
+    Channel::new();
 
 /// Global Shared Micro-VM protected by an Embassy async-friendly Mutex
 static SHARED_VM: Mutex<CriticalSectionRawMutex, MicroVm> = Mutex::new(MicroVm::new());
@@ -53,6 +67,7 @@ static SHARED_FLASH: Mutex<
 > = Mutex::new(None);
 
 bind_interrupts!(struct Irqs {
+    UART0_IRQ => BufferedInterruptHandler<UART0>;
     UART1_IRQ => BufferedInterruptHandler<UART1>;
     USBCTRL_IRQ => UsbInterruptHandler<USB>;
 });
@@ -95,14 +110,22 @@ async fn main(spawner: Spawner) {
             let mut vm = SHARED_VM.lock().await;
             vm.bit_mem[LATCH_BIT_START_ADDR as usize..LATCH_BIT_START_ADDR as usize + 32]
                 .copy_from_slice(&bit_latch);
+            vm.prev_bit_mem[LATCH_BIT_START_ADDR as usize..LATCH_BIT_START_ADDR as usize + 32]
+                .copy_from_slice(&bit_latch);
             vm.word_mem[LATCH_WORD_START_ADDR as usize..LATCH_WORD_START_ADDR as usize + 32]
                 .copy_from_slice(&word_latch);
         }
+        RETAIN_SAVED_CRC.store(
+            compute_retain_crc16(&bit_latch, &word_latch),
+            Ordering::Relaxed,
+        );
+        RETAIN_DIRTY.store(false, Ordering::Relaxed);
     }
     {
         let mut guard = SHARED_FLASH.lock().await;
         *guard = Some(flash);
     }
+    spawner.spawn(flash_retain_task()).unwrap();
 
     // -------------------------------------------------------------------------
     // 4. Configure Native USB CDC-ACM Virtual Serial Port (/dev/ttyACM*)
@@ -156,6 +179,26 @@ async fn main(spawner: Spawner) {
 
     // Spawn Modbus RTU Master Task (DE/RE = None)
     spawner.spawn(modbus_master_task(mb_uart, None)).unwrap();
+
+    // -------------------------------------------------------------------------
+    // 5b. Configure Buffered UART0 for User UART_SEND / UART_RECV Function Blocks
+    //     GP0 = TX, GP1 = RX @ 115200 8N1
+    // -------------------------------------------------------------------------
+    static USER_UART_TX_BUF: StaticCell<[u8; 64]> = StaticCell::new();
+    static USER_UART_RX_BUF: StaticCell<[u8; 64]> = StaticCell::new();
+    let mut user_uart_cfg = uart::Config::default();
+    user_uart_cfg.baudrate = USER_UART_BAUD;
+
+    let user_uart = BufferedUart::new(
+        p.UART0,
+        Irqs,
+        p.PIN_0,
+        p.PIN_1,
+        USER_UART_TX_BUF.init([0; 64]),
+        USER_UART_RX_BUF.init([0; 64]),
+        user_uart_cfg,
+    );
+    spawner.spawn(uart_task(user_uart)).unwrap();
 
     // -------------------------------------------------------------------------
     // 6. Configure Hardware ADC for Analog Inputs AI0..AI3 (%IW0..%IW3)
@@ -270,7 +313,16 @@ async fn usb_cdc_comm_task(mut class: CdcAcmClass<'static, UsbDriver<'static, US
                                     };
                                     let mut fl_guard = SHARED_FLASH.lock().await;
                                     if let Some(flash) = fl_guard.as_mut() {
-                                        let _ = save_persistent_data_to_flash(flash, &bit_latch, &word_latch);
+                                        if save_persistent_data_to_flash(flash, &bit_latch, &word_latch) {
+                                            let mut vm = SHARED_VM.lock().await;
+                                            if ENABLE_SPECIAL_MARKERS {
+                                                vm.bit_mem[SM_RETAIN_DIRTY as usize] = 0;
+                                            }
+                                            if ENABLE_SPECIAL_REGISTERS {
+                                                vm.word_mem[SD_RETAIN_SAVE_COUNT as usize] =
+                                                    RETAIN_SAVE_COUNT.load(Ordering::Relaxed) as i32;
+                                            }
+                                        }
                                     }
                                 }
                                 let _ = class.write_packet(&[PACKET_SOF, 0x82, 0x00]).await;
@@ -338,6 +390,16 @@ async fn usb_cdc_comm_task(mut class: CdcAcmClass<'static, UsbDriver<'static, US
                                     }
                                 };
                                 if ok {
+                                    {
+                                        let mut vm = SHARED_VM.lock().await;
+                                        if ENABLE_SPECIAL_MARKERS {
+                                            vm.bit_mem[SM_RETAIN_DIRTY as usize] = 0;
+                                        }
+                                        if ENABLE_SPECIAL_REGISTERS {
+                                            vm.word_mem[SD_RETAIN_SAVE_COUNT as usize] =
+                                                RETAIN_SAVE_COUNT.load(Ordering::Relaxed) as i32;
+                                        }
+                                    }
                                     let _ = class.write_packet(&[PACKET_SOF, CMD_PERSIST_SAVE_RESPONSE, 0x00]).await;
                                 } else {
                                     let _ = class.write_packet(&[PACKET_SOF, 0xFF, 0x08]).await;
@@ -359,6 +421,9 @@ async fn usb_cdc_comm_task(mut class: CdcAcmClass<'static, UsbDriver<'static, US
                                     for i in 0..32 {
                                         vm.bit_mem[LATCH_BIT_START_ADDR as usize + i] = 0;
                                         vm.word_mem[LATCH_WORD_START_ADDR as usize + i] = 0;
+                                    }
+                                    if ENABLE_SPECIAL_MARKERS {
+                                        vm.bit_mem[SM_RETAIN_DIRTY as usize] = 0;
                                     }
                                 }
                                 if ok {
@@ -398,6 +463,7 @@ async fn plc_scan_task(
     let mut total_ms: u64 = 0;
     let mut min_scan_us: u32 = 0;
     let mut max_scan_us: u32 = 0;
+    let mut last_retain_save_ms: u64 = 0;
 
     loop {
         ticker.next().await;
@@ -451,6 +517,7 @@ async fn plc_scan_task(
             vm.bit_mem[SM_ALWAYS_ON as usize] = 1;
             vm.bit_mem[SM_ALWAYS_OFF as usize] = 0;
             vm.bit_mem[SM_FIRST_SCAN as usize] = if vm.scan_count == 0 { 1 } else { 0 };
+            vm.bit_mem[SM_RETAIN_DIRTY as usize] = if RETAIN_DIRTY.load(Ordering::Relaxed) { 1 } else { 0 };
             vm.bit_mem[SM_CLOCK_10MS as usize] = if (total_ms % 20) < 10 { 1 } else { 0 };
             vm.bit_mem[SM_CLOCK_100MS as usize] = if (total_ms % 200) < 100 { 1 } else { 0 };
             vm.bit_mem[SM_CLOCK_1S as usize] = if (total_ms % 2000) < 1000 { 1 } else { 0 };
@@ -461,6 +528,7 @@ async fn plc_scan_task(
             vm.word_mem[SD_WATCHDOG_PRESET as usize] = DEFAULT_WATCHDOG_TIMEOUT_MS as i32;
             vm.word_mem[SD_SCAN_COUNT_LOW as usize] = (vm.scan_count & 0xFFFF) as i32;
             vm.word_mem[SD_SCAN_COUNT_HIGH as usize] = ((vm.scan_count >> 16) & 0xFFFF) as i32;
+            vm.word_mem[SD_RETAIN_SAVE_COUNT as usize] = RETAIN_SAVE_COUNT.load(Ordering::Relaxed) as i32;
         }
 
         // 2. Execute 1 PLC Scan Cycle with Precise Microsecond Execution Measurement
@@ -487,6 +555,7 @@ async fn plc_scan_task(
             vm.word_mem[SD_MAX_SCAN_TIME_US as usize] = max_scan_us as i32;
             vm.word_mem[SD_SCAN_COUNT_LOW as usize] = (vm.scan_count & 0xFFFF) as i32;
             vm.word_mem[SD_SCAN_COUNT_HIGH as usize] = ((vm.scan_count >> 16) & 0xFFFF) as i32;
+            vm.word_mem[SD_RETAIN_SAVE_COUNT as usize] = RETAIN_SAVE_COUNT.load(Ordering::Relaxed) as i32;
         }
 
         // 3. Update Physical Outputs Y0..Y7 from Unified Bit Memory (0x20..0x27)
@@ -533,6 +602,31 @@ async fn plc_scan_task(
 
         if vm.running && vm.prog_len > 0 {
             scan_div = scan_div.wrapping_add(1);
+            // Check RETAIN area (M64..M95, D96..D127) every 1 second (100 scans at 10ms)
+            if scan_div % 100 == 0 {
+                let mut bit_latch = [0u8; 32];
+                let mut word_latch = [0i32; 32];
+                bit_latch.copy_from_slice(
+                    &vm.bit_mem[LATCH_BIT_START_ADDR as usize..LATCH_BIT_START_ADDR as usize + 32],
+                );
+                word_latch.copy_from_slice(
+                    &vm.word_mem[LATCH_WORD_START_ADDR as usize..LATCH_WORD_START_ADDR as usize + 32],
+                );
+                let current_crc = compute_retain_crc16(&bit_latch, &word_latch);
+                let saved_crc = RETAIN_SAVED_CRC.load(Ordering::Relaxed);
+                let dirty = current_crc != saved_crc;
+                RETAIN_DIRTY.store(dirty, Ordering::Relaxed);
+                if ENABLE_SPECIAL_MARKERS {
+                    vm.bit_mem[SM_RETAIN_DIRTY as usize] = if dirty { 1 } else { 0 };
+                }
+                if dirty
+                    && total_ms.saturating_sub(last_retain_save_ms)
+                        >= RETAIN_AUTOSAVE_MIN_INTERVAL_S * 1000
+                {
+                    last_retain_save_ms = total_ms;
+                    let _ = FLASH_CMD_CHANNEL.try_send((bit_latch, word_latch));
+                }
+            }
             if scan_div % 25 == 0 {
                 info!(
                     "PLC Scan #{} | Status: {:?} | Prog: {} inst | ScanTime: {}us | Y0(GP15)={} Y1(GP14)={} | T0={}ms",
@@ -657,7 +751,17 @@ fn save_program_to_flash(
     true
 }
 
-/// Load persistent Latch data (M64..M95, D128..D159) from RP2040 Flash Sector 511
+/// Compute CRC16 over the RETAIN region (`M64..M95` = 32B + `D96..D127` = 128B LE)
+fn compute_retain_crc16(bit_latch: &[u8; 32], word_latch: &[i32; 32]) -> u16 {
+    let mut data_payload = [0u8; 160];
+    data_payload[0..32].copy_from_slice(bit_latch);
+    for (i, &w) in word_latch.iter().enumerate() {
+        data_payload[32 + i * 4..32 + (i + 1) * 4].copy_from_slice(&w.to_le_bytes());
+    }
+    MicroVm::compute_crc16(&data_payload)
+}
+
+/// Load persistent Latch data (`M64..M95`, `D96..D127` / `%MW96..%MW127`) from RP2040 Flash Sector 511
 fn load_persistent_data_from_flash(
     flash: &mut Flash<'static, FLASH, Async, FLASH_SIZE_BYTES>,
     bit_latch: &mut [u8; 32],
@@ -690,7 +794,7 @@ fn load_persistent_data_from_flash(
     false
 }
 
-/// Save persistent Latch data (M64..M95, D128..D159) to RP2040 Flash Sector 511
+/// Save persistent Latch data (`M64..M95`, `D96..D127` / `%MW96..%MW127`) to RP2040 Flash Sector 511
 fn save_persistent_data_to_flash(
     flash: &mut Flash<'static, FLASH, Async, FLASH_SIZE_BYTES>,
     bit_latch: &[u8; 32],
@@ -717,6 +821,9 @@ fn save_persistent_data_to_flash(
     if flash.blocking_write(FLASH_PERSISTENT_OFFSET, &page_buf).is_err() {
         return false;
     }
+    RETAIN_SAVED_CRC.store(crc16, Ordering::Relaxed);
+    RETAIN_DIRTY.store(false, Ordering::Relaxed);
+    RETAIN_SAVE_COUNT.fetch_add(1, Ordering::Relaxed);
     info!("Saved persistent Latch data to Flash with CRC16: 0x{:04X}", crc16);
     true
 }
@@ -728,8 +835,85 @@ fn clear_persistent_data_in_flash(
     if flash.blocking_erase(FLASH_PERSISTENT_OFFSET, FLASH_PERSISTENT_OFFSET + ERASE_SIZE as u32).is_err() {
         return false;
     }
+    RETAIN_SAVED_CRC.store(
+        compute_retain_crc16(&[0u8; 32], &[0i32; 32]),
+        Ordering::Relaxed,
+    );
+    RETAIN_DIRTY.store(false, Ordering::Relaxed);
     info!("Cleared persistent Latch data in Flash (Sector 511 erased)");
     true
+}
+
+/// Background Flash Persistence Task for RETAIN auto-save (`M64..M95`, `D96..D127`)
+#[embassy_executor::task]
+async fn flash_retain_task() {
+    loop {
+        let (bit_latch, word_latch) = FLASH_CMD_CHANNEL.receive().await;
+        let mut fl_guard = SHARED_FLASH.lock().await;
+        if let Some(flash) = fl_guard.as_mut() {
+            let _ = save_persistent_data_to_flash(flash, &bit_latch, &word_latch);
+        }
+    }
+}
+
+/// User UART0 Task (`GP0` TX / `GP1` RX @ 115200 8N1) for `UART_SEND` and `UART_RECV`
+#[embassy_executor::task]
+async fn uart_task(mut uart: BufferedUart<'static, UART0>) {
+    use embedded_io_async::{Read, Write};
+
+    info!(
+        "User UART0 Task Ready (GP0=TX, GP1=RX @ {} baud 8N1)...",
+        USER_UART_BAUD
+    );
+
+    let mut rx_ring = [0u8; 64];
+    let mut ring_head: usize = 0;
+    let mut ring_tail: usize = 0;
+    let mut ring_len: usize = 0;
+    let mut rx_chunk = [0u8; 16];
+
+    loop {
+        // 1. Transmit any pending UartSend job from MicroVm (without holding VM mutex across UART I/O)
+        let pending_tx = {
+            let mut vm = SHARED_VM.lock().await;
+            vm.uart_tx_out.take()
+        };
+        if let Some(job) = pending_tx {
+            let mut tx_buf = [0u8; 16];
+            let n = job.encode(&mut tx_buf);
+            let _ = uart.write_all(&tx_buf[..n]).await;
+            let _ = uart.flush().await;
+            let mut vm = SHARED_VM.lock().await;
+            vm.uart_tx_busy = false;
+        }
+
+        // 2. Non-blocking / 2ms-window poll of incoming bytes on UART0 into 64-byte ring buffer
+        let tick = embassy_time::Timer::after(Duration::from_millis(2));
+        if let embassy_futures::select::Either::First(Ok(n)) =
+            embassy_futures::select::select(uart.read(&mut rx_chunk), tick).await
+        {
+            for &b in &rx_chunk[..n] {
+                if ring_len < rx_ring.len() {
+                    rx_ring[ring_head] = b;
+                    ring_head = (ring_head + 1) % rx_ring.len();
+                    ring_len += 1;
+                }
+            }
+            // Yield remainder of the 2ms slot if read resolved immediately
+            embassy_time::Timer::after(Duration::from_millis(2)).await;
+        }
+
+        // 3. Feed 1 byte from the ring buffer into vm.uart_rx_in if the slot is empty
+        if ring_len > 0 {
+            let mut vm = SHARED_VM.lock().await;
+            if vm.uart_rx_in.is_none() {
+                let b = rx_ring[ring_tail];
+                ring_tail = (ring_tail + 1) % rx_ring.len();
+                ring_len -= 1;
+                vm.uart_rx_in = Some(b);
+            }
+        }
+    }
 }
 
 /// Asynchronous Modbus RTU RS-485 Master Engine Task

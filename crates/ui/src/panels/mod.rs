@@ -1,4 +1,5 @@
 pub mod element_dialog;
+pub mod find_dialog;
 pub mod left_panel;
 pub mod menu_bar;
 pub mod right_panel;

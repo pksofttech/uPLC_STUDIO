@@ -87,7 +87,7 @@ pub fn render(ui: &mut Ui, app: &CanvasApp) {
 
         // 3. COM Port & Target Info
         let target_str = if app.online_target_hw { "RP2040" } else { "Simulator" };
-        ui.label(format!("Target: {} | Port: {} @ {} bps", target_str, app.com_port, app.baud_rate));
+        ui.label(format!("Target: {} | Port: {} @ {} bps", target_str, app.com_port_display(), app.baud_rate));
         ui.separator();
 
         let (scan_cnt, cycle_ms) = if app.online_mode && app.online_target_hw {

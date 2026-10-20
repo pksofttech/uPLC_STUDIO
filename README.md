@@ -1,4 +1,4 @@
-# uPLC Studio
+# LaduinoPLC
 
 A modern, high-performance Rust Ladder Diagram (PLC) editor and real-time simulator inspired by **MICROPLC** and **LDMICRO**.
 
@@ -33,7 +33,7 @@ A modern, high-performance Rust Ladder Diagram (PLC) editor and real-time simula
 ## How to Run
 
 ```bash
-cargo run -p uplc-studio
+cargo run -p laduino-plc
 ```
 
 ## Run Tests
@@ -44,15 +44,23 @@ cargo test
 
 ## Build Release
 
+### Linux Binary
 ```bash
-cargo build --release -p uplc-studio
+cargo build --release -p laduino-plc
 ```
+
+### Windows (.exe)
+```bash
+cross build --target x86_64-pc-windows-gnu --release -p laduino-plc
+```
+The output executable will be located at `target/x86_64-pc-windows-gnu/release/laduino-plc.exe`.
+
 
 ---
 
 ## ⚡ RP2040 Firmware (Micro-VM & Hardware PLC)
 
-uPLC Studio can flash and communicate directly with a physical **Raspberry Pi Pico (RP2040)** running our async Embassy runtime.
+LaduinoPLC can flash and communicate directly with a physical **Raspberry Pi Pico (RP2040)** running our async Embassy runtime.
 
 - **Source & Full Documentation**: See [firmware/rp2040-embassy/README.md](firmware/rp2040-embassy/README.md).
 
@@ -71,5 +79,5 @@ cargo run --release
 elf2uf2-rs -d -s target/thumbv6m-none-eabi/release/uplc-rp2040-embassy
 ```
 
-Once flashed, connect the Pico's micro-USB to your PC and use **"⚡ Update to PLC"** or **"Online Monitor"** in uPLC Studio to download ladder programs and monitor I/O live!
+Once flashed, connect the Pico's micro-USB to your PC and use **"⚡ Update to PLC"** or **"Online Monitor"** in LaduinoPLC to download ladder programs and monitor I/O live!
 

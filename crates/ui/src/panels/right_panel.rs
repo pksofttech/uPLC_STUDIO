@@ -225,13 +225,21 @@ fn render_element_inspector(
                             Color32::from_rgb(180, 110, 240)
                         };
                         let (type_color, type_title) = match elem.element_type {
-                            TypeTag::Contact => (palette.accent_heading, "CONTACT"),
+                            TypeTag::Contact | TypeTag::RTrig | TypeTag::FTrig => (palette.accent_heading, "CONTACT"),
                             TypeTag::Coil => (palette.accent_ok, "COIL"),
                             TypeTag::Ton | TypeTag::Tof | TypeTag::Tp => (palette.accent_warn, "TIMER"),
                             TypeTag::Ctu | TypeTag::Ctd | TypeTag::Ctud => (palette.accent_warn, "COUNTER"),
                             TypeTag::Sr | TypeTag::Rs => (palette.accent_warn, "BISTABLE FB"),
                             TypeTag::Jump | TypeTag::Label => (palette.accent_heading, "FLOW"),
-                            TypeTag::Compare | TypeTag::Math | TypeTag::Move => (func_col, "FUNCTION"),
+                            TypeTag::Compare | TypeTag::Math | TypeTag::Move | TypeTag::Bitwise => (func_col, "FUNCTION"),
+                            TypeTag::Pid | TypeTag::Scale | TypeTag::Limit | TypeTag::Adc => (palette.accent_ok, "PROCESS FB"),
+                            TypeTag::ShiftRegisters
+                            | TypeTag::ShiftRegInbit
+                            | TypeTag::ShiftRegReset
+                            | TypeTag::ShiftLeft
+                            | TypeTag::ShiftRight
+                            | TypeTag::ShiftVariable => (palette.accent_warn, "SHIFT FB"),
+                            TypeTag::UartSend | TypeTag::UartRecv => (palette.accent_heading, "SERIAL FB"),
                             _ => (palette.rung_text_dim, "ELEMENT"),
                         };
 
@@ -682,6 +690,258 @@ fn render_element_inspector(
                             ui.add_space(4.0);
                             ui.label(RichText::new("Designates landing destination for JMP instructions.").small().color(palette.rung_text_dim));
                         }
+                        TypeTag::Adc => {
+                            ui.label(RichText::new("A/D Converter Read (ADC)").strong().size(11.5).color(palette.accent_heading));
+                            ui.separator();
+                            egui::Grid::new("insp_adc_grid")
+                                .num_columns(2)
+                                .spacing([8.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.label(RichText::new("ADC Channel:").color(palette.text_primary));
+                                    ui.text_edit_singleline(&mut elem.name);
+                                    ui.end_row();
+                                    ui.label(RichText::new("Dest Reg (OUT):").color(palette.text_primary));
+                                    ui.text_edit_singleline(&mut elem.target_reg);
+                                    ui.end_row();
+                                });
+                            if sim_active {
+                                ui.add_space(4.0);
+                                ui.label(
+                                    RichText::new(format!("Live ADC Value: {} (0..4095)", elem.current_accum))
+                                        .monospace()
+                                        .strong()
+                                        .color(palette.accent_ok),
+                                );
+                            }
+                        }
+                        TypeTag::Pid => {
+                            ui.label(RichText::new("PID Controller (PID)").strong().size(11.5).color(palette.accent_heading));
+                            ui.separator();
+                            egui::Grid::new("insp_pid_grid")
+                                .num_columns(2)
+                                .spacing([8.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.label(RichText::new("PV Input:").color(palette.text_primary));
+                                    ui.text_edit_singleline(&mut elem.fb.in1);
+                                    ui.end_row();
+                                    ui.label(RichText::new("Setpoint (SP):").color(palette.text_primary));
+                                    ui.text_edit_singleline(&mut elem.fb.in2);
+                                    ui.end_row();
+                                    ui.label(RichText::new("Output (OUT):").color(palette.text_primary));
+                                    ui.text_edit_singleline(&mut elem.target_reg);
+                                    ui.end_row();
+                                    ui.label(RichText::new("Kp (×100):").color(palette.text_primary));
+                                    ui.add(egui::DragValue::new(&mut elem.fb.k[0]).range(0..=100_000));
+                                    ui.end_row();
+                                    ui.label(RichText::new("Ki (×100):").color(palette.text_primary));
+                                    ui.add(egui::DragValue::new(&mut elem.fb.k[1]).range(0..=100_000));
+                                    ui.end_row();
+                                    ui.label(RichText::new("Kd (×100):").color(palette.text_primary));
+                                    ui.add(egui::DragValue::new(&mut elem.fb.k[2]).range(0..=100_000));
+                                    ui.end_row();
+                                    ui.label(RichText::new("Out Max:").color(palette.text_primary));
+                                    ui.add(egui::DragValue::new(&mut elem.fb.k[3]).range(1..=100_000));
+                                    ui.end_row();
+                                });
+                            if sim_active {
+                                ui.add_space(4.0);
+                                ui.label(
+                                    RichText::new(format!("Live PID OUT: {}", elem.current_accum))
+                                        .monospace()
+                                        .strong()
+                                        .color(palette.accent_ok),
+                                );
+                            }
+                        }
+                        TypeTag::Scale => {
+                            ui.label(RichText::new("Linear Scale (SCALE)").strong().size(11.5).color(palette.accent_heading));
+                            ui.separator();
+                            egui::Grid::new("insp_scale_grid")
+                                .num_columns(2)
+                                .spacing([8.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.label(RichText::new("Input (IN):").color(palette.text_primary));
+                                    ui.text_edit_singleline(&mut elem.fb.in1);
+                                    ui.end_row();
+                                    ui.label(RichText::new("Output (OUT):").color(palette.text_primary));
+                                    ui.text_edit_singleline(&mut elem.target_reg);
+                                    ui.end_row();
+                                    ui.label(RichText::new("In Min..Max:").color(palette.text_primary));
+                                    ui.horizontal(|ui| {
+                                        ui.add(egui::DragValue::new(&mut elem.fb.k[0]));
+                                        ui.add(egui::DragValue::new(&mut elem.fb.k[1]));
+                                    });
+                                    ui.end_row();
+                                    ui.label(RichText::new("Out Min..Max:").color(palette.text_primary));
+                                    ui.horizontal(|ui| {
+                                        ui.add(egui::DragValue::new(&mut elem.fb.k[2]));
+                                        ui.add(egui::DragValue::new(&mut elem.fb.k[3]));
+                                    });
+                                    ui.end_row();
+                                });
+                            if sim_active {
+                                ui.add_space(4.0);
+                                ui.label(
+                                    RichText::new(format!("Live Scaled OUT: {}", elem.current_accum))
+                                        .monospace()
+                                        .strong()
+                                        .color(palette.accent_ok),
+                                );
+                            }
+                        }
+                        TypeTag::Limit => {
+                            ui.label(RichText::new("Clamp Limit (LIMIT)").strong().size(11.5).color(palette.accent_heading));
+                            ui.separator();
+                            egui::Grid::new("insp_limit_grid")
+                                .num_columns(2)
+                                .spacing([8.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.label(RichText::new("Input (IN):").color(palette.text_primary));
+                                    ui.text_edit_singleline(&mut elem.fb.in1);
+                                    ui.end_row();
+                                    ui.label(RichText::new("Output (OUT):").color(palette.text_primary));
+                                    ui.text_edit_singleline(&mut elem.target_reg);
+                                    ui.end_row();
+                                    ui.label(RichText::new("Min..Max:").color(palette.text_primary));
+                                    ui.horizontal(|ui| {
+                                        ui.add(egui::DragValue::new(&mut elem.fb.k[0]));
+                                        ui.add(egui::DragValue::new(&mut elem.fb.k[1]));
+                                    });
+                                    ui.end_row();
+                                });
+                            if sim_active {
+                                ui.add_space(4.0);
+                                ui.label(
+                                    RichText::new(format!("Live Clamped OUT: {}", elem.current_accum))
+                                        .monospace()
+                                        .strong()
+                                        .color(palette.accent_ok),
+                                );
+                            }
+                        }
+                        TypeTag::Bitwise => {
+                            ui.label(RichText::new("Bitwise Logic").strong().size(11.5).color(palette.accent_heading));
+                            ui.separator();
+                            egui::Grid::new("insp_bitwise_grid")
+                                .num_columns(2)
+                                .spacing([8.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.label(RichText::new("Operator:").color(palette.text_primary));
+                                    egui::ComboBox::from_id_salt("insp_bitwise_op")
+                                        .width(70.0)
+                                        .selected_text(&elem.math_op)
+                                        .show_ui(ui, |ui| {
+                                            for op in ["AND", "OR", "XOR", "NOT"] {
+                                                ui.selectable_value(&mut elem.math_op, op.to_string(), op);
+                                            }
+                                        });
+                                    ui.end_row();
+                                    ui.label(RichText::new("IN1:").color(palette.text_primary));
+                                    ui.text_edit_singleline(&mut elem.fb.in1);
+                                    ui.end_row();
+                                    if !elem.math_op.eq_ignore_ascii_case("NOT") {
+                                        ui.label(RichText::new("IN2 / Mask:").color(palette.text_primary));
+                                        ui.text_edit_singleline(&mut elem.fb.in2);
+                                        ui.end_row();
+                                    }
+                                    ui.label(RichText::new("OUT:").color(palette.text_primary));
+                                    if ui.text_edit_singleline(&mut elem.target_reg).changed() {
+                                        elem.name = elem.target_reg.clone();
+                                    }
+                                    ui.end_row();
+                                });
+                            if sim_active {
+                                ui.add_space(4.0);
+                                ui.label(
+                                    RichText::new(format!("Live OUT: 0x{:04X} ({})", elem.current_accum as u16, elem.current_accum))
+                                        .monospace()
+                                        .strong()
+                                        .color(palette.accent_ok),
+                                );
+                            }
+                        }
+                        TypeTag::ShiftRegisters
+                        | TypeTag::ShiftRegInbit
+                        | TypeTag::ShiftRegReset
+                        | TypeTag::ShiftLeft
+                        | TypeTag::ShiftRight
+                        | TypeTag::ShiftVariable => {
+                            ui.label(RichText::new(elem.element_type.display_name()).strong().size(11.5).color(palette.accent_heading));
+                            ui.separator();
+                            egui::Grid::new("insp_shift_grid")
+                                .num_columns(2)
+                                .spacing([8.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.label(RichText::new("Target Word:").color(palette.text_primary));
+                                    ui.text_edit_singleline(&mut elem.name);
+                                    ui.end_row();
+                                    match elem.element_type {
+                                        TypeTag::ShiftRegisters => {
+                                            ui.label(RichText::new("Stages (LEN):").color(palette.text_primary));
+                                            ui.add(egui::DragValue::new(&mut elem.preset_value).range(1..=16));
+                                            ui.end_row();
+                                            ui.label(RichText::new("Source (IN):").color(palette.text_primary));
+                                            ui.text_edit_singleline(&mut elem.fb.in1);
+                                            ui.end_row();
+                                        }
+                                        TypeTag::ShiftRegInbit => {
+                                            ui.label(RichText::new("Bit In:").color(palette.text_primary));
+                                            ui.text_edit_singleline(&mut elem.fb.in1);
+                                            ui.end_row();
+                                        }
+                                        TypeTag::ShiftLeft | TypeTag::ShiftRight => {
+                                            ui.label(RichText::new("Bits (0..15):").color(palette.text_primary));
+                                            ui.add(egui::DragValue::new(&mut elem.preset_value).range(0..=15));
+                                            ui.end_row();
+                                        }
+                                        TypeTag::ShiftVariable => {
+                                            ui.label(RichText::new("Count Reg:").color(palette.text_primary));
+                                            ui.text_edit_singleline(&mut elem.fb.in1);
+                                            ui.end_row();
+                                        }
+                                        _ => {}
+                                    }
+                                });
+                            if sim_active {
+                                ui.add_space(4.0);
+                                ui.label(
+                                    RichText::new(format!("Live Value: 0x{:04X} ({})", elem.current_accum as u16, elem.current_accum))
+                                        .monospace()
+                                        .strong()
+                                        .color(palette.accent_ok),
+                                );
+                            }
+                        }
+                        TypeTag::UartSend => {
+                            ui.label(RichText::new("UART Send (TX)").strong().size(11.5).color(palette.accent_heading));
+                            ui.separator();
+                            egui::Grid::new("insp_uart_tx_grid")
+                                .num_columns(2)
+                                .spacing([8.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.label(RichText::new("Byte Source:").color(palette.text_primary));
+                                    ui.text_edit_singleline(&mut elem.fb.in1);
+                                    ui.end_row();
+                                    ui.label(RichText::new("CRLF:").color(palette.text_primary));
+                                    let mut crlf = elem.fb.mode != 0;
+                                    if ui.checkbox(&mut crlf, "Append \\r\\n").changed() {
+                                        elem.fb.mode = u8::from(crlf);
+                                    }
+                                    ui.end_row();
+                                });
+                        }
+                        TypeTag::UartRecv => {
+                            ui.label(RichText::new("UART Receive (RX)").strong().size(11.5).color(palette.accent_heading));
+                            ui.separator();
+                            egui::Grid::new("insp_uart_rx_grid")
+                                .num_columns(2)
+                                .spacing([8.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.label(RichText::new("Dest Reg (OUT):").color(palette.text_primary));
+                                    ui.text_edit_singleline(&mut elem.target_reg);
+                                    ui.end_row();
+                                });
+                        }
                         _ => {
                             ui.label(RichText::new("No special parameters").small().color(palette.rung_text_dim));
                         }
@@ -1078,12 +1338,24 @@ fn render_elements_explorer(
                                     (val_str.clone(), palette.text_primary)
                                 }
                             }
-                            TypeTag::Compare | TypeTag::Move | TypeTag::Math if sim_active => {
-                                if let Some(&reg_v) = app.doc.simulator.registers.get(&raw_name.to_uppercase()) {
-                                    (format!("={} ({})", reg_v, val_str), palette.accent_heading)
-                                } else {
-                                    (val_str.clone(), palette.text_primary)
-                                }
+                            TypeTag::Compare
+                            | TypeTag::Move
+                            | TypeTag::Math
+                            | TypeTag::Adc
+                            | TypeTag::Bitwise
+                            | TypeTag::ShiftRegisters
+                            | TypeTag::ShiftRegInbit
+                            | TypeTag::ShiftRegReset
+                            | TypeTag::ShiftLeft
+                            | TypeTag::ShiftRight
+                            | TypeTag::ShiftVariable
+                                if sim_active =>
+                            {
+                                let reg_v = app.doc.simulator.read_word(raw_name);
+                                (format!("={} ({})", reg_v, val_str), palette.accent_heading)
+                            }
+                            TypeTag::Pid | TypeTag::Scale | TypeTag::Limit if sim_active => {
+                                (val_str.clone(), palette.accent_ok)
                             }
                             _ => (val_str.clone(), palette.text_primary),
                         };
@@ -1119,7 +1391,7 @@ fn render_elements_explorer(
 // =============================================================================
 // TAB 2: I/O PORTS & HARDWARE MONITOR
 // =============================================================================
-fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette, sim_active: bool) {
+fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette, _sim_active: bool) {
     let mut toggle_port_var: Option<String> = None;
     let mut add_input_port = false;
     let mut add_output_port = false;
@@ -1426,7 +1698,7 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette, sim_
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new("Analog Inputs (%IW / ADC)")
+                        RichText::new("🎚 Analog Inputs (%IW0..%IW3)")
                             .strong()
                             .color(palette.accent_heading),
                     );
@@ -1455,18 +1727,11 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette, sim_
                         ui.label(RichText::new("CHAN").strong().small().color(palette.rung_text_dim));
                         ui.label(RichText::new("RAW").strong().small().color(palette.rung_text_dim));
                         ui.label(RichText::new("VOLTS / TEMP").strong().small().color(palette.rung_text_dim));
-                        ui.label(RichText::new("LEVEL").strong().small().color(palette.rung_text_dim));
+                        ui.label(RichText::new("SLIDER / LEVEL").strong().small().color(palette.rung_text_dim));
                         ui.end_row();
 
                         for (idx, &(iec_addr, canon_name, hw_desc)) in ANALOG_CHANNELS.iter().enumerate() {
-                            let val = app
-                                .doc
-                                .simulator
-                                .registers
-                                .get(iec_addr)
-                                .copied()
-                                .or_else(|| app.doc.simulator.registers.get(canon_name).copied())
-                                .unwrap_or(0);
+                            let val = app.doc.simulator.read_word(iec_addr);
 
                             ui.horizontal(|ui| {
                                 ui.label(
@@ -1480,14 +1745,12 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette, sim_
                             .response
                             .on_hover_text(format!("{} [{}] — {}", canon_name, iec_addr, hw_desc));
 
-                            // In simulation mode (not hardware), allow adjusting slider
-                            let sim_allow_drag = sim_active && !app.online_target_hw;
+                            // In local / simulator mode (not live hardware online), allow adjusting via DragValue + Slider
+                            let sim_allow_drag = !(app.online_mode && app.online_target_hw);
                             if sim_allow_drag {
                                 let mut edit_raw = val.clamp(0, 4095);
                                 if ui.add(egui::DragValue::new(&mut edit_raw).range(0..=4095).speed(5.0)).changed() {
-                                    app.doc.simulator.registers.insert(iec_addr.to_string(), edit_raw);
-                                    app.doc.simulator.registers.insert(canon_name.to_string(), edit_raw);
-                                    app.doc.simulator.registers.insert(format!("AI{:02}", idx), edit_raw);
+                                    app.doc.simulator.write_word(iec_addr, edit_raw);
                                 }
                             } else {
                                 ui.label(
@@ -1526,14 +1789,30 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette, sim_
                                 );
                             }
 
-                            // Level Bar
-                            let frac = (val.clamp(0, 4095) as f32 / 4095.0).clamp(0.0, 1.0);
-                            let bar_w = (ui.available_width() - 8.0).max(60.0);
-                            ui.add_sized(
-                                egui::vec2(bar_w, 14.0),
-                                egui::ProgressBar::new(frac)
-                                    .text(format!("{:.0}%", frac * 100.0)),
-                            );
+                            // Interactive Slider in Simulator mode, or Level Bar in Hardware Online mode
+                            if sim_allow_drag {
+                                let mut edit_raw = val.clamp(0, 4095);
+                                let slider_w = (ui.available_width() - 8.0).max(60.0);
+                                ui.spacing_mut().slider_width = slider_w;
+                                if ui
+                                    .add(
+                                        egui::Slider::new(&mut edit_raw, 0..=4095)
+                                            .show_value(false),
+                                    )
+                                    .on_hover_text("Drag to simulate 12-bit ADC input (0..4095)")
+                                    .changed()
+                                {
+                                    app.doc.simulator.write_word(iec_addr, edit_raw);
+                                }
+                            } else {
+                                let frac = (val.clamp(0, 4095) as f32 / 4095.0).clamp(0.0, 1.0);
+                                let bar_w = (ui.available_width() - 8.0).max(60.0);
+                                ui.add_sized(
+                                    egui::vec2(bar_w, 14.0),
+                                    egui::ProgressBar::new(frac)
+                                        .text(format!("{:.0}%", frac * 100.0)),
+                                );
+                            }
 
                             ui.end_row();
                         }
@@ -1720,6 +1999,132 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette, sim_
                             ui.end_row();
                         }
                     });
+            });
+
+            // UART Terminal Card (Simulator TX / RX)
+            ui.add_space(6.0);
+            ui.group(|ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("📡 UART Terminal")
+                            .strong()
+                            .color(palette.accent_heading),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("🗑 Clear").on_hover_text("Clear UART TX log").clicked() {
+                            app.uart_tx_history.clear();
+                            app.doc.simulator.uart_tx_log.clear();
+                        }
+                        ui.checkbox(&mut app.uart_hex_view, "Hex");
+                        let rx_q = app.doc.simulator.uart_rx_queue.len();
+                        ui.label(
+                            RichText::new(format!("RX FIFO: {}B", rx_q))
+                                .monospace()
+                                .size(10.0)
+                                .color(if rx_q > 0 { palette.accent_ok } else { palette.rung_text_dim }),
+                        );
+                    });
+                });
+                ui.separator();
+
+                let mut tx_display = if app.uart_tx_history.is_empty() {
+                    String::from("(No UART TX bytes transmitted yet)")
+                } else if app.uart_hex_view {
+                    app.uart_tx_history
+                        .iter()
+                        .map(|b| format!("{:02X}", b))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                } else {
+                    let mut s = String::with_capacity(app.uart_tx_history.len());
+                    for &b in &app.uart_tx_history {
+                        if b == b'\r' {
+                            continue;
+                        } else if b == b'\n' || b == b'\t' || (0x20..=0x7E).contains(&b) {
+                            s.push(b as char);
+                        } else {
+                            s.push_str(&format!("\\x{:02X}", b));
+                        }
+                    }
+                    s
+                };
+
+                ui.add(
+                    egui::TextEdit::multiline(&mut tx_display)
+                        .font(egui::TextStyle::Monospace)
+                        .desired_width(ui.available_width())
+                        .desired_rows(3)
+                        .interactive(false),
+                );
+
+                ui.add_space(3.0);
+                let mut do_send_rx = false;
+                ui.horizontal(|ui| {
+                    egui::ComboBox::from_id_salt("uart_rx_mode_combo")
+                        .width(88.0)
+                        .selected_text(match app.uart_rx_mode {
+                            0 => "Text+CRLF",
+                            1 => "Raw Text",
+                            _ => "Hex Bytes",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut app.uart_rx_mode, 0, "Text+CRLF (\\r\\n)");
+                            ui.selectable_value(&mut app.uart_rx_mode, 1, "Raw Text");
+                            ui.selectable_value(&mut app.uart_rx_mode, 2, "Hex Bytes (e.g. 41 0A)");
+                        });
+
+                    let input_w = (ui.available_width() - 68.0).max(60.0);
+                    let resp = ui.add(
+                        egui::TextEdit::singleline(&mut app.uart_rx_input)
+                            .font(egui::TextStyle::Monospace)
+                            .hint_text(if app.uart_rx_mode == 2 {
+                                "e.g. 41 42 0D 0A"
+                            } else {
+                                "Type RX data..."
+                            })
+                            .desired_width(input_w),
+                    );
+                    if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        do_send_rx = true;
+                    }
+                    if ui
+                        .button(RichText::new("Send RX").small().strong().color(palette.accent_ok))
+                        .on_hover_text("Push bytes into simulator UART RX queue for UartRecv blocks")
+                        .clicked()
+                    {
+                        do_send_rx = true;
+                    }
+                });
+
+                if do_send_rx && !app.uart_rx_input.is_empty() {
+                    let bytes: Vec<u8> = match app.uart_rx_mode {
+                        0 => {
+                            let mut v = app.uart_rx_input.as_bytes().to_vec();
+                            v.extend_from_slice(b"\r\n");
+                            v
+                        }
+                        1 => app.uart_rx_input.as_bytes().to_vec(),
+                        _ => app
+                            .uart_rx_input
+                            .split(|c: char| c.is_whitespace() || c == ',')
+                            .filter(|s| !s.is_empty())
+                            .filter_map(|tok| {
+                                let clean = tok
+                                    .trim_start_matches("0x")
+                                    .trim_start_matches("0X")
+                                    .trim_start_matches("16#");
+                                u8::from_str_radix(clean, 16)
+                                    .ok()
+                                    .or_else(|| tok.parse::<u8>().ok())
+                            })
+                            .collect(),
+                    };
+                    if !bytes.is_empty() {
+                        app.doc.simulator.push_uart_rx(&bytes);
+                        app.uart_rx_input.clear();
+                    }
+                }
             });
 
             ui.add_space(6.0);
@@ -1966,26 +2371,82 @@ const SPECIAL_REGISTERS: &[SpecialRegisterDef] = &[
         is_bit: false,
         default_hint: "0.1 °C (D134)",
     },
+    SpecialRegisterDef {
+        iec: "%SD7",
+        legacy: "D8007",
+        name: "RETAIN Flash Save Count",
+        category_id: 5,
+        desc: "Number of times the RETAIN area (M64..M95, %MW96..%MW127) has been written to Flash (D135)",
+        is_bit: false,
+        default_hint: "Saves (D135)",
+    },
     // Retentive Memory Ranges
     SpecialRegisterDef {
         iec: "%MX8.0..%MX11.7",
         legacy: "M64..M95",
         name: "Latch Bit Relays",
         category_id: 5,
-        desc: "32 Retentive Bit Relays preserved in RP2040 Flash across power outages",
+        desc: "32 RETAIN Bit Relays preserved in RP2040 Flash across power outages",
         is_bit: true,
         default_hint: "Flash Retentive",
     },
     SpecialRegisterDef {
-        iec: "%MW128..%MW159",
-        legacy: "D128..D159",
+        iec: "%MW96..%MW127",
+        legacy: "D96..D127",
         name: "Latch Word Registers",
         category_id: 5,
-        desc: "32 Retentive Word Registers preserved in RP2040 Flash across power outages",
+        desc: "32 RETAIN Word Registers preserved in RP2040 Flash across power outages",
         is_bit: false,
         default_hint: "Flash Retentive",
     },
 ];
+
+/// Live value of `%SD7` (RETAIN Flash save count) if the simulator / online snapshot provides it.
+fn retain_save_count(app: &CanvasApp) -> Option<i32> {
+    ["%SD7", "SD7", "D8007", "D135"]
+        .iter()
+        .find_map(|k| app.doc.simulator.registers.get(*k).copied())
+}
+
+/// Info card describing the RETAIN area and showing `SD7` (Flash save count).
+fn render_retain_info(ui: &mut Ui, app: &CanvasApp, palette: ThemePalette) {
+    egui::Frame::new()
+        .fill(palette.accent_ok.gamma_multiply(0.08))
+        .stroke(Stroke::new(1.0, palette.accent_ok.gamma_multiply(0.45)))
+        .corner_radius(CornerRadius::same(5))
+        .inner_margin(egui::Margin::symmetric(6, 5))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("🔒 RETAIN Memory (Flash)").small().strong().color(palette.accent_ok));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let live = app.online_mode || app.doc.simulator.is_active();
+                    let txt = match retain_save_count(app) {
+                        Some(v) if live => format!("SD7 = {} saves ● LIVE", v),
+                        Some(v) => format!("SD7 = {} saves", v),
+                        None => "SD7 = — (connect Online)".to_string(),
+                    };
+                    ui.label(RichText::new(txt).monospace().small().strong().color(palette.accent_heading))
+                        .on_hover_text("%SD7 / D8007: number of RETAIN saves written to Flash");
+                });
+            });
+            ui.label(
+                RichText::new("Bits M64..M95 (%MX8.0..%MX11.7) and words D96..D127 (%MW96..%MW127)")
+                    .small()
+                    .monospace()
+                    .color(palette.text_primary),
+            );
+            ui.label(
+                RichText::new(
+                    "Values survive power loss. The firmware saves the area to Flash automatically when it \
+                     changes (at most once every 10 minutes), on STOP, and on \"💾 Save RETAIN to Flash\" \
+                     (Update to PLC window). \"🗑 Clear RETAIN\" erases it.",
+                )
+                .small()
+                .color(palette.rung_text_dim),
+            );
+        });
+}
 
 fn render_special_registers(
     ui: &mut Ui,
@@ -2107,6 +2568,11 @@ fn render_special_registers(
 
             ui.add_space(4.0);
 
+            // RETAIN (Flash-retained memory) explanation + live SD7 save counter
+            render_retain_info(ui, app, palette);
+
+            ui.add_space(4.0);
+
             // Filter items
             let query = app.special_reg_filter_text.trim().to_uppercase();
             let cat_filter = app.special_reg_filter_cat;
@@ -2199,6 +2665,7 @@ fn render_special_registers(
                                                     "%SD1" | "%SD2" | "%SD3" => format!("{} µs", v),
                                                     "%SD4" | "%SD5" => format!("{}", v),
                                                     "%SD6" => format!("{:.1} °C", (v as f32) / 10.0),
+                                                    "%SD7" => format!("{} saves", v),
                                                     _ => format!("{}", v),
                                                 };
                                                 ui.label(RichText::new(formatted).monospace().small().strong().color(palette.accent_heading));
@@ -2317,7 +2784,7 @@ fn render_special_registers(
                         });
                     ui.add_space(2.0);
                     ui.label(
-                        RichText::new("Word Memory: D0..D127 (User), D128..D159 (Latch), %SD0..%SD31 (0xA0..0xBF / D8000..D8031)")
+                        RichText::new("Word Memory: D0..D95 (User), D96..D127 / %MW96..%MW127 (RETAIN), %SD0..%SD31 (D128..D159 / D8000..D8031)")
                             .small()
                             .color(palette.rung_text_dim),
                     );
@@ -2622,7 +3089,7 @@ fn render_watch_table(
                     let bit = i % 8;
                     app.add_watch_row(&format!("%MX{}.{}", byte, bit), &format!("LATCH_M{}", i), WatchDisplayFormat::Bool);
                 }
-                for i in 128..136 {
+                for i in 96..104 {
                     app.add_watch_row(&format!("%MW{}", i), &format!("LATCH_D{}", i), WatchDisplayFormat::Dec);
                 }
             }
@@ -2634,6 +3101,7 @@ fn render_watch_table(
                 app.add_watch_row("%SD4", "SCAN_COUNT_LOW", WatchDisplayFormat::Dec);
                 app.add_watch_row("%SD5", "SCAN_COUNT_HIGH", WatchDisplayFormat::Dec);
                 app.add_watch_row("%SD6", "CPU_TEMP_C01", WatchDisplayFormat::Auto);
+                app.add_watch_row("%SD7", "RETAIN_SAVE_COUNT", WatchDisplayFormat::Dec);
             }
             _ => {}
         }

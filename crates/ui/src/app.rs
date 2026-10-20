@@ -10,7 +10,9 @@ use egui::{CentralPanel, Color32, Panel, RichText, Ui, Window};
 use my_canvas_core::{Document, IOPortMapping, InsertPosition, PlcStatusSnapshot, SchematicStyle, SimState};
 use serde::{Deserialize, Serialize};
 use crate::canvas::CanvasViewport;
-use crate::panels::{element_dialog::ElementConfigModal, left_panel, menu_bar, right_panel, status_bar, toolbar};
+use crate::panels::{element_dialog::ElementConfigModal, find_dialog, left_panel, menu_bar, right_panel, status_bar, toolbar};
+use crate::panels::find_dialog::FindState;
+use crate::serial;
 use crate::theme::{self, AppTheme};
 use crate::tools::ActiveTool;
 
@@ -98,6 +100,31 @@ pub struct AppSettings {
     pub window_pos_y: Option<f32>,
     pub last_folder: Option<PathBuf>,
     pub watch_rows: Vec<WatchRow>,
+    /// Most-recently opened/saved program files (newest first, max [`MAX_RECENT_FILES`]).
+    #[serde(default)]
+    pub recent_files: Vec<String>,
+}
+
+/// Maximum number of entries kept in File → Open Recent.
+pub const MAX_RECENT_FILES: usize = 10;
+
+/// Prefix used for ladder elements serialized to the system clipboard.
+pub const CLIPBOARD_ELEM_PREFIX: &str = "LADUINO-ELEM:";
+
+/// Move `path` to the front of a recent-files list (deduplicated, capped at [`MAX_RECENT_FILES`]).
+pub fn push_recent_file(list: &mut Vec<String>, path: &str) {
+    if path.is_empty() {
+        return;
+    }
+    list.retain(|p| p != path);
+    list.insert(0, path.to_string());
+    list.truncate(MAX_RECENT_FILES);
+}
+
+/// Parse `LADUINO-ELEM:<json>` clipboard text into ladder elements.
+pub fn parse_clipboard_elements(text: &str) -> Option<Vec<my_canvas_core::LadderElement>> {
+    let json = text.trim().strip_prefix(CLIPBOARD_ELEM_PREFIX)?;
+    serde_json::from_str(json).ok()
 }
 
 impl Default for AppSettings {
@@ -106,7 +133,7 @@ impl Default for AppSettings {
             theme: AppTheme::Modern,
             schematic_style: SchematicStyle::default(),
             show_il_code: true,
-            com_port: "ttyUSB0 (Auto)".to_string(),
+            com_port: String::new(), // empty = auto-detect
             baud_rate: "115200".to_string(),
             cycle_time_ms: 10,
             hardware: "IEC 61131-3 Standard PLC".to_string(),
@@ -118,6 +145,7 @@ impl Default for AppSettings {
             window_pos_y: None,
             last_folder: None,
             watch_rows: default_watch_rows(),
+            recent_files: Vec::new(),
         }
     }
 }
@@ -129,16 +157,60 @@ impl AppSettings {
         (w, h)
     }
 
+    /// Location of `settings.json`:
+    /// * Windows: `%APPDATA%\LaduinoPLC\settings.json`
+    /// * macOS: `~/Library/Application Support/LaduinoPLC/settings.json`
+    /// * Linux / other Unix: `$XDG_CONFIG_HOME/laduino_plc/settings.json` or
+    ///   `~/.config/laduino_plc/settings.json` (legacy `uplc_studio` dir is honoured if present)
     pub fn config_path() -> PathBuf {
+        let file_name = "settings.json";
+        #[cfg(windows)]
+        {
+            if let Some(appdata) = std::env::var_os("APPDATA") {
+                return PathBuf::from(appdata).join("LaduinoPLC").join(file_name);
+            }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(home) = std::env::var_os("HOME") {
+                return PathBuf::from(home)
+                    .join("Library")
+                    .join("Application Support")
+                    .join("LaduinoPLC")
+                    .join(file_name);
+            }
+        }
         if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
-            PathBuf::from(xdg).join("uplc_studio").join("settings.json")
+            let primary = PathBuf::from(&xdg).join("laduino_plc").join(file_name);
+            if primary.exists() {
+                return primary;
+            }
+            let legacy = PathBuf::from(xdg).join("uplc_studio").join(file_name);
+            if legacy.exists() {
+                return legacy;
+            }
+            primary
         } else if let Some(home) = std::env::var_os("HOME") {
-            PathBuf::from(home)
-                .join(".config")
-                .join("uplc_studio")
-                .join("settings.json")
+            let base = PathBuf::from(home).join(".config");
+            let primary = base.join("laduino_plc").join(file_name);
+            if primary.exists() {
+                return primary;
+            }
+            let legacy = base.join("uplc_studio").join(file_name);
+            if legacy.exists() {
+                return legacy;
+            }
+            primary
         } else {
-            PathBuf::from("uplc_settings.json")
+            let primary = PathBuf::from("laduino_settings.json");
+            if primary.exists() {
+                return primary;
+            }
+            let legacy = PathBuf::from("uplc_settings.json");
+            if legacy.exists() {
+                return legacy;
+            }
+            primary
         }
     }
 
@@ -168,6 +240,7 @@ pub enum PendingAction {
     NewProgram,
     OpenProgram,
     LoadExample(String),
+    OpenRecent(String),
     ExitApp,
 }
 
@@ -175,7 +248,14 @@ pub struct CanvasApp {
     pub doc: Document,
     pub active_tool: ActiveTool,
     pub insert_pos: InsertPosition,
-    pub copied_rung_idx: Option<usize>,
+    /// "Copy Network" clipboard: a snapshot of the copied rung (not an index, so later edits don't change it)
+    pub copied_rung: Option<my_canvas_core::Rung>,
+    /// Element-level clipboard (Ctrl+C / Ctrl+X / Ctrl+V)
+    pub clipboard: Vec<my_canvas_core::LadderElement>,
+    /// File → Open Recent (newest first)
+    pub recent_files: Vec<String>,
+    /// Find / Replace window state (Ctrl+F)
+    pub find: FindState,
     pub canvas: CanvasViewport,
     pub elem_modal: ElementConfigModal,
     pub elem_filter_text: String,
@@ -223,6 +303,12 @@ pub struct CanvasApp {
     pub pending_action: Option<PendingAction>,
     pub allow_exit: bool,
     pub current_window_title: String,
+    pub about_logo_texture: Option<egui::TextureHandle>,
+    pub confirm_retain_action: Option<my_canvas_core::PlcSerialCommand>,
+    pub uart_tx_history: Vec<u8>,
+    pub uart_rx_input: String,
+    pub uart_rx_mode: u8,
+    pub uart_hex_view: bool,
 }
 
 impl Default for CanvasApp {
@@ -240,7 +326,10 @@ impl Default for CanvasApp {
             doc,
             active_tool: ActiveTool::Select,
             insert_pos: InsertPosition::AppendRung,
-            copied_rung_idx: None,
+            copied_rung: None,
+            clipboard: Vec::new(),
+            recent_files: settings.recent_files.clone(),
+            find: FindState::default(),
             canvas: CanvasViewport::default(),
             elem_modal: ElementConfigModal::default(),
             elem_filter_text: String::new(),
@@ -292,76 +381,49 @@ impl Default for CanvasApp {
             pending_action: None,
             allow_exit: false,
             current_window_title: String::new(),
+            about_logo_texture: None,
+            confirm_retain_action: None,
+            uart_tx_history: Vec::new(),
+            uart_rx_input: String::new(),
+            uart_rx_mode: 0,
+            uart_hex_view: false,
         }
     }
 }
 
 impl CanvasApp {
+    /// List serial ports for the port picker as `name (label)` display strings.
     pub fn available_serial_ports() -> Vec<String> {
-        let mut ports = Vec::new();
-        if let Ok(entries) = std::fs::read_dir("/dev") {
-            for entry in entries.flatten() {
-                if let Some(name) = entry.file_name().to_str() {
-                    if name.starts_with("ttyACM") || name.starts_with("ttyUSB") {
-                        let prod_path = format!("/sys/class/tty/{}/device/../product", name);
-                        let label = if let Ok(prod) = std::fs::read_to_string(&prod_path) {
-                            let clean = prod.trim();
-                            if !clean.is_empty() {
-                                format!("/dev/{} ({})", name, clean)
-                            } else {
-                                format!("/dev/{}", name)
-                            }
-                        } else {
-                            format!("/dev/{}", name)
-                        };
-                        ports.push(label);
-                    }
-                }
-            }
-        }
-        ports.sort();
-        if ports.is_empty() {
-            ports.push("/dev/ttyACM0".to_string());
-            ports.push("/dev/ttyUSB0".to_string());
-            ports.push("COM3".to_string());
-        }
-        ports
+        serial::list_ports().iter().map(|p| p.display()).collect()
     }
 
-    /// Find a connected RP2040 Micro-VM USB-CDC port (`/dev/ttyACM*` or `/dev/ttyUSB*`)
+    /// Find a connected RP2040 Micro-VM USB-CDC port (e.g. `/dev/ttyACM*`, `COM*`, `/dev/cu.usbmodem*`)
     pub fn detect_uplc_usb_port() -> Option<String> {
-        if let Ok(entries) = std::fs::read_dir("/dev") {
-            let mut candidates: Vec<String> = entries
-                .flatten()
-                .filter_map(|e| e.file_name().into_string().ok())
-                .filter(|n| n.starts_with("ttyACM") || n.starts_with("ttyUSB"))
-                .collect();
-            candidates.sort();
+        serial::detect_plc_port()
+    }
 
-            // Priority 1: device whose product description contains "uPLC", "RP2040", or "Pico", and is not a Debugprobe
-            for name in &candidates {
-                let prod_path = format!("/sys/class/tty/{}/device/../product", name);
-                if let Ok(prod) = std::fs::read_to_string(&prod_path) {
-                    if !prod.contains("Debugprobe")
-                        && (prod.contains("uPLC") || prod.contains("RP2040") || prod.contains("Pico"))
-                    {
-                        return Some(format!("/dev/{}", name));
-                    }
-                }
-            }
-
-            // Priority 2: any ttyACM or ttyUSB that is explicitly not a Debugprobe
-            for name in &candidates {
-                let prod_path = format!("/sys/class/tty/{}/device/../product", name);
-                let is_debugprobe = std::fs::read_to_string(&prod_path)
-                    .map(|p| p.contains("Debugprobe"))
-                    .unwrap_or(false);
-                if !is_debugprobe {
-                    return Some(format!("/dev/{}", name));
-                }
+    /// Resolve the configured `com_port` (empty = auto-detect) into an openable port name.
+    ///
+    /// If an explicitly configured port is missing or is a Debugprobe and another Micro-VM
+    /// port was detected instead, `com_port` is updated to the detected port.
+    /// An empty (auto-detect) setting is left untouched.
+    fn resolve_serial_port(&mut self) -> Option<String> {
+        let resolved = serial::resolve_port(&self.com_port)?;
+        if let Some(configured) = serial::normalize_port_name(&self.com_port) {
+            if !serial::same_port(&configured, &resolved) {
+                self.com_port = resolved.clone();
             }
         }
-        None
+        Some(resolved)
+    }
+
+    /// Human-readable configured port for status messages (`Auto` when empty).
+    pub fn com_port_display(&self) -> &str {
+        if self.com_port.trim().is_empty() {
+            "Auto"
+        } else {
+            self.com_port.as_str()
+        }
     }
 
     /// Read the compiled bytecode directly from the connected PLC Micro-VM via CMD 0x04
@@ -373,50 +435,23 @@ impl CanvasApp {
             thread::sleep(Duration::from_millis(60));
         }
 
-        let raw_port = self.com_port.split_whitespace().next().unwrap_or("/dev/ttyACM1");
-        let mut port_path = if raw_port.starts_with("tty") {
-            format!("/dev/{}", raw_port)
-        } else {
-            raw_port.to_string()
-        };
-
-        let is_debugprobe = port_path
-            .strip_prefix("/dev/")
-            .and_then(|n| std::fs::read_to_string(format!("/sys/class/tty/{}/device/../product", n)).ok())
-            .map(|p| p.contains("Debugprobe"))
-            .unwrap_or(false);
-        if (!std::path::Path::new(&port_path).exists() || is_debugprobe)
-            && Self::detect_uplc_usb_port().is_some()
-        {
-            if let Some(detected) = Self::detect_uplc_usb_port() {
-                port_path = detected.clone();
-                self.com_port = detected;
-            }
-        }
-
-        if !std::path::Path::new(&port_path).exists() {
+        let Some(port_path) = self.resolve_serial_port() else {
             if was_online {
                 self.start_online_monitoring();
             }
-            return Err(format!("Serial port '{}' not connected", port_path));
-        }
-
-        // Configure raw mode via stty on Linux
-        let _ = std::process::Command::new("stty")
-            .args(["-F", &port_path, &self.baud_rate, "raw", "-echo", "-hupcl", "min", "0", "time", "2"])
-            .output();
+            return Err(format!("Serial port '{}' not connected", self.com_port_display()));
+        };
+        let baud = serial::parse_baud(&self.baud_rate);
 
         let res = (|| -> Result<my_canvas_core::LadderProgram, String> {
-            use std::io::{Read, Write};
-            let mut file = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(&port_path)
+            use std::io::Write;
+            // Raw 8N1, 200 ms read timeout (equivalent to legacy `stty ... min 0 time 2`)
+            let mut file = serial::open(&port_path, baud, 200)
                 .map_err(|e| format!("Failed to open {}: {}", port_path, e))?;
 
             // Drain any pending bytes
             let mut drain = [0u8; 512];
-            let _ = file.read(&mut drain);
+            let _ = serial::read_some(&mut *file, &mut drain);
 
             // Construct CMD 0x04 request packet: [0xAA, 0x04, 0x00, 0x00, CRC8]
             let dummy_bc = my_canvas_core::BytecodeProgram {
@@ -436,7 +471,7 @@ impl CanvasApp {
             let start = Instant::now();
 
             while start.elapsed().as_millis() < 800 {
-                match file.read(&mut chunk) {
+                match serial::read_some(&mut *file, &mut chunk) {
                     Ok(0) => thread::sleep(Duration::from_millis(10)),
                     Ok(n) => {
                         rx_accum.extend_from_slice(&chunk[..n]);
@@ -482,7 +517,7 @@ impl CanvasApp {
     }
 
     fn transmit_packet_internal(&mut self, cmd: my_canvas_core::PlcSerialCommand, custom_packet: Option<Vec<u8>>) {
-        use std::io::{Read, Write};
+        use std::io::Write;
         let bc = self.doc.compile_to_bytecode();
         if cmd == my_canvas_core::PlcSerialCommand::UploadProgram {
             match self.upload_program_from_plc() {
@@ -532,6 +567,12 @@ impl CanvasApp {
                             my_canvas_core::PlcSerialCommand::WriteValue => {
                                 self.update_plc_status = "✍ Write Value Command sent to hardware".to_string();
                             }
+                            my_canvas_core::PlcSerialCommand::PersistSave => {
+                                self.update_plc_status = "💾 Save RETAIN to Flash (0x08) sent to hardware".to_string();
+                            }
+                            my_canvas_core::PlcSerialCommand::PersistClear => {
+                                self.update_plc_status = "🗑 Clear RETAIN (0x09) sent to hardware".to_string();
+                            }
                             _ => {}
                         }
                         return;
@@ -549,43 +590,27 @@ impl CanvasApp {
             thread::sleep(Duration::from_millis(60));
         }
 
-        let raw_port = self.com_port.split_whitespace().next().unwrap_or("/dev/ttyACM0");
-        let mut port_path = if raw_port.starts_with("tty") {
-            format!("/dev/{}", raw_port)
-        } else {
-            raw_port.to_string()
+        // Resolve the configured port (empty = auto); auto-selects the RP2040 Micro-VM USB-CDC
+        // port if the configured one doesn't exist or is a Debugprobe
+        let resolved_port = self.resolve_serial_port();
+        let port_path = resolved_port
+            .clone()
+            .unwrap_or_else(|| self.com_port_display().to_string());
+
+        // Raw 8N1, 100 ms read timeout (equivalent to legacy `stty ... min 0 time 1`)
+        let open_res = match resolved_port {
+            Some(ref p) => serial::open(p, serial::parse_baud(&self.baud_rate), 100),
+            None => Err(std::io::Error::new(std::io::ErrorKind::NotFound, "no serial port found")),
         };
 
-        // Auto-select the RP2040 Micro-VM USB-CDC port if the current port doesn't exist or is a Debugprobe
-        let is_debugprobe = port_path
-            .strip_prefix("/dev/")
-            .and_then(|n| std::fs::read_to_string(format!("/sys/class/tty/{}/device/../product", n)).ok())
-            .map(|p| p.contains("Debugprobe"))
-            .unwrap_or(false);
-        if (!std::path::Path::new(&port_path).exists() || is_debugprobe)
-            && Self::detect_uplc_usb_port().is_some()
-        {
-            if let Some(detected) = Self::detect_uplc_usb_port() {
-                port_path = detected.clone();
-                self.com_port = detected;
-            }
-        }
-
-        // Configure raw mode via stty on Linux if device exists
-        if std::path::Path::new(&port_path).exists() {
-            let _ = std::process::Command::new("stty")
-                .args(["-F", &port_path, &self.baud_rate, "raw", "-echo", "-hupcl", "min", "0", "time", "1"])
-                .output();
-        }
-
-        match std::fs::OpenOptions::new().read(true).write(true).open(&port_path) {
+        match open_res {
             Ok(mut file) => match file.write_all(&packet) {
                 Ok(_) => {
                     let _ = file.flush();
                     // Briefly drain any 3-byte ACK ([0xAA, 0x81/0x82/0x85, 0x00]) so RX buffer stays clean
                     thread::sleep(Duration::from_millis(15));
                     let mut ack_drain = [0u8; 32];
-                    let _ = file.read(&mut ack_drain);
+                    let _ = serial::read_some(&mut *file, &mut ack_drain);
 
                     self.update_plc_is_error = false;
                     match cmd {
@@ -635,6 +660,12 @@ impl CanvasApp {
                             );
                         }
                         my_canvas_core::PlcSerialCommand::UploadProgram => {}
+                        my_canvas_core::PlcSerialCommand::PersistSave => {
+                            self.update_plc_status = format!("💾 Save RETAIN to Flash (0x08) sent to {}", port_path);
+                        }
+                        my_canvas_core::PlcSerialCommand::PersistClear => {
+                            self.update_plc_status = format!("🗑 Clear RETAIN (0x09) sent to {}", port_path);
+                        }
                     }
                 }
                 Err(e) => {
@@ -682,6 +713,7 @@ impl CanvasApp {
             window_pos_y: self.window_pos_y,
             last_folder: self.last_folder.clone(),
             watch_rows: self.watch_rows.clone(),
+            recent_files: self.recent_files.clone(),
         }
     }
 
@@ -808,10 +840,10 @@ impl CanvasApp {
 
         if let Some((vm_addr, _name, _)) = my_canvas_core::BytecodeCompiler::parse_direct_address(&addr, true) {
             self.write_word_register(vm_addr, num_val);
-            self.doc.simulator.registers.insert(addr, num_val);
+            self.doc.simulator.write_word(&addr, num_val);
             Ok(())
         } else {
-            self.doc.simulator.registers.insert(addr, num_val);
+            self.doc.simulator.write_word(&addr, num_val);
             Ok(())
         }
     }
@@ -865,17 +897,147 @@ impl CanvasApp {
             .add_filter("IEC 61131-3 IL & Projects (*.il, *.json, *.ld)", &["il", "json", "ld"]);
         if let Some(path) = dialog.pick_file() {
             self.set_last_folder_from_path(&path);
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                    if let Ok(doc) = serde_json::from_str(&content) {
-                        self.doc = doc;
-                    }
-                } else {
-                    let _ = self.doc.load_from_il_str(&content);
-                }
-                self.doc.file_path = Some(path.display().to_string());
-                self.doc.is_dirty = false;
+            let _ = self.open_path(&path);
+        }
+    }
+
+    /// Load a `.il` / `.ld` / `.json` program from `path` into the active document
+    /// and record it in the recent-files list. Shared by Open… and Open Recent.
+    pub fn open_path(&mut self, path: &std::path::Path) -> Result<(), String> {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| format!("Cannot read {}: {}", path.display(), e))?;
+        if path.extension().and_then(|e| e.to_str()) == Some("json") {
+            let doc = serde_json::from_str(&content)
+                .map_err(|e| format!("Invalid project {}: {}", path.display(), e))?;
+            self.doc = doc;
+        } else {
+            self.doc.load_from_il_str(&content)?;
+        }
+        self.doc.file_path = Some(path.display().to_string());
+        self.doc.is_dirty = false;
+        self.add_recent_file(&path.display().to_string());
+        Ok(())
+    }
+
+    /// Record `path` at the top of File → Open Recent and persist settings.
+    pub fn add_recent_file(&mut self, path: &str) {
+        push_recent_file(&mut self.recent_files, path);
+        self.save_settings();
+    }
+
+    /// Clear File → Open Recent.
+    pub fn clear_recent_files(&mut self) {
+        self.recent_files.clear();
+        self.save_settings();
+    }
+
+    /// Open a recent file. Prompts first if unsaved changes exist.
+    pub fn request_open_recent(&mut self, path: String) {
+        if self.doc.is_dirty {
+            self.pending_action = Some(PendingAction::OpenRecent(path));
+        } else {
+            self.open_recent_file(&path);
+        }
+    }
+
+    /// Open a recent file now; a file that can no longer be read is dropped from the list.
+    fn open_recent_file(&mut self, path: &str) {
+        let p = std::path::Path::new(path);
+        if self.open_path(p).is_ok() {
+            self.set_last_folder_from_path(p);
+        } else if !p.exists() {
+            self.recent_files.retain(|r| r != path);
+            self.save_settings();
+        }
+    }
+
+    /// Copy the selected elements to the internal clipboard and (as `LADUINO-ELEM:` JSON)
+    /// to the system clipboard. Returns false if nothing is selected.
+    pub fn copy_selected_elements(&mut self, ctx: &egui::Context) -> bool {
+        let els = self.doc.copy_selected();
+        if els.is_empty() {
+            return false;
+        }
+        if let Ok(json) = serde_json::to_string(&els) {
+            ctx.copy_text(format!("{}{}", CLIPBOARD_ELEM_PREFIX, json));
+        }
+        self.clipboard = els;
+        true
+    }
+
+    /// Copy then delete the selected elements (one undo step for the delete).
+    pub fn cut_selected_elements(&mut self, ctx: &egui::Context) -> bool {
+        if self.copy_selected_elements(ctx) {
+            self.doc.delete_selected_element();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Paste elements after the current selection (or append to the selected network).
+    ///
+    /// `system_text` is the system clipboard content (from `egui::Event::Paste`); if it holds
+    /// `LADUINO-ELEM:` JSON it is used, otherwise the internal clipboard is pasted.
+    /// Returns the ids of the pasted top-level elements.
+    pub fn paste_clipboard_elements(&mut self, system_text: Option<&str>) -> Vec<u64> {
+        let els = system_text
+            .and_then(parse_clipboard_elements)
+            .unwrap_or_else(|| self.clipboard.clone());
+        if els.is_empty() {
+            return Vec::new();
+        }
+        let pos = if self.doc.selected_ids().is_empty() {
+            InsertPosition::AppendRung
+        } else {
+            InsertPosition::Right
+        };
+        self.doc.paste_elements(&els, pos)
+    }
+
+    /// Edit → Copy Network: snapshot the selected rung.
+    pub fn copy_selected_network(&mut self) {
+        self.copied_rung = self
+            .doc
+            .selected_rung_idx
+            .and_then(|i| self.doc.program.rungs.get(i).cloned());
+    }
+
+    /// Edit → Paste Network Below: insert the copied rung snapshot (or duplicate the selected one).
+    pub fn paste_network_below(&mut self) {
+        if let Some(idx) = self.doc.selected_rung_idx {
+            if let Some(rung) = self.copied_rung.clone() {
+                self.doc.paste_rung(&rung, idx + 1);
+            } else {
+                self.doc.copy_rung_at(idx, idx + 1);
             }
+        }
+    }
+
+    /// Open the Find window (Ctrl+F), pre-filling the query from the selected element.
+    pub fn open_find(&mut self) {
+        if !self.find.open && self.find.query.is_empty() {
+            if let Some(el) = self.doc.selected_element() {
+                self.find.query = el.name.clone();
+            }
+        }
+        self.find.open = true;
+        self.find.request_focus = true;
+    }
+
+    /// Jump to the next (`delta = 1`) / previous (`delta = -1`) Find result (F3 / Shift+F3).
+    pub fn find_step(&mut self, delta: isize) {
+        self.find.refresh(&self.doc);
+        if let Some(i) = self.find.step(delta) {
+            self.goto_find_result(i);
+        }
+    }
+
+    /// Select the element of Find result `i` and scroll the canvas to its network.
+    pub fn goto_find_result(&mut self, i: usize) {
+        if let Some(hit) = self.find.results.get(i).cloned() {
+            self.doc.set_single_selection(Some(hit.rung_idx), hit.elem_id);
+            self.canvas.scroll_to_rung(&self.doc, hit.rung_idx);
         }
     }
 
@@ -900,6 +1062,7 @@ impl CanvasApp {
             if std::fs::write(&path, il_text).is_ok() {
                 self.doc.file_path = Some(path.display().to_string());
                 self.doc.is_dirty = false;
+                self.add_recent_file(&path.display().to_string());
                 return true;
             }
         }
@@ -910,7 +1073,7 @@ impl CanvasApp {
     pub fn save_as_json_dialog(&mut self) -> bool {
         let mut dialog = rfd::FileDialog::new()
             .set_directory(self.dialog_directory())
-            .add_filter("uPLC JSON Project (*.json)", &["json"]);
+            .add_filter("LaduinoPLC JSON Project (*.json)", &["json"]);
         if let Some(ref current_path) = self.doc.file_path {
             let path = std::path::Path::new(current_path);
             if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
@@ -923,6 +1086,7 @@ impl CanvasApp {
                 if std::fs::write(&path, json).is_ok() {
                     self.doc.file_path = Some(path.display().to_string());
                     self.doc.is_dirty = false;
+                    self.add_recent_file(&path.display().to_string());
                     return true;
                 }
             }
@@ -932,12 +1096,13 @@ impl CanvasApp {
 
     /// Quick-save directly to existing file_path if known; otherwise open Save dialog. Returns true if saved.
     pub fn save_or_save_as(&mut self) -> bool {
-        if let Some(ref current_path) = self.doc.file_path {
-            let path = std::path::Path::new(current_path);
+        if let Some(current_path) = self.doc.file_path.clone() {
+            let path = std::path::Path::new(&current_path);
             if path.extension().and_then(|e| e.to_str()) == Some("json") {
                 if let Ok(json) = serde_json::to_string_pretty(&self.doc) {
                     if std::fs::write(path, json).is_ok() {
                         self.doc.is_dirty = false;
+                        self.add_recent_file(&current_path);
                         return true;
                     }
                 }
@@ -945,6 +1110,7 @@ impl CanvasApp {
                 let il_text = self.doc.export_to_il_str();
                 if std::fs::write(path, il_text).is_ok() {
                     self.doc.is_dirty = false;
+                    self.add_recent_file(&current_path);
                     return true;
                 }
             }
@@ -1059,6 +1225,9 @@ impl CanvasApp {
                 PendingAction::LoadExample(path_str) => {
                     self.load_example_file(&path_str);
                 }
+                PendingAction::OpenRecent(path_str) => {
+                    self.open_recent_file(&path_str);
+                }
                 PendingAction::ExitApp => {
                     self.allow_exit = true;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1081,6 +1250,7 @@ impl CanvasApp {
             Some(PendingAction::NewProgram) => "creating a new program / ก่อนสร้างโปรแกรมใหม่",
             Some(PendingAction::OpenProgram) => "opening another program / ก่อนเปิดโปรแกรมใหม่",
             Some(PendingAction::LoadExample(_)) => "loading example / ก่อนโหลดตัวอย่าง",
+            Some(PendingAction::OpenRecent(_)) => "opening a recent program / ก่อนเปิดไฟล์ล่าสุด",
             Some(PendingAction::ExitApp) => "closing application / ก่อนออกจากโปรแกรม",
             None => "",
         };
@@ -1177,40 +1347,22 @@ impl CanvasApp {
             let stop_flag = Arc::new(AtomicBool::new(false));
             self.online_worker_stop = stop_flag.clone();
 
-            let raw_port = self.com_port.split_whitespace().next().unwrap_or("/dev/ttyACM1");
-            let mut port_path = if raw_port.starts_with("tty") {
-                format!("/dev/{}", raw_port)
-            } else {
-                raw_port.to_string()
-            };
+            // Resolve configured port (empty = auto-detect; skips Debugprobe)
+            let mut port_path = self.resolve_serial_port().unwrap_or_default();
+            let configured_port = self.com_port.clone();
 
-            // Auto-detect uPLC port if current does not exist or is a debugprobe
-            let is_debugprobe = port_path
-                .strip_prefix("/dev/")
-                .and_then(|n| std::fs::read_to_string(format!("/sys/class/tty/{}/device/../product", n)).ok())
-                .map(|p| p.contains("Debugprobe"))
-                .unwrap_or(false);
-            if (!std::path::Path::new(&port_path).exists() || is_debugprobe)
-                && Self::detect_uplc_usb_port().is_some()
-            {
-                if let Some(detected) = Self::detect_uplc_usb_port() {
-                    port_path = detected.clone();
-                    self.com_port = detected;
-                }
+            if port_path.is_empty() {
+                self.online_status_text = format!("⚠ Waiting for port '{}'...", self.com_port_display());
             }
 
-            if !std::path::Path::new(&port_path).exists() {
-                self.online_status_text = format!("⚠ Waiting for port '{}'...", port_path);
-            }
-
-            let baud = self.baud_rate.clone();
+            let baud = serial::parse_baud(&self.baud_rate);
             let (tx, rx) = mpsc::channel::<(PlcStatusSnapshot, String)>();
             self.online_worker_rx = Some(rx);
             let (cmd_tx, cmd_rx) = mpsc::channel::<Vec<u8>>();
             self.online_worker_cmd_tx = Some(cmd_tx);
 
             thread::spawn(move || {
-                use std::io::{Read, Write};
+                use std::io::Write;
                 // Pre-constructed MonitorStatus request packet: [0xAA, 0x03, 0x00, 0x00, 0xBD]
                 let req = [0xAAu8, 0x03, 0x00, 0x00, 0xBD];
                 let mut chunk = [0u8; 512];
@@ -1218,8 +1370,8 @@ impl CanvasApp {
 
                 while !stop_flag.load(Ordering::Relaxed) {
                     // Check if current port_path exists; if not, attempt auto-detection (hotplug)
-                    if !std::path::Path::new(&port_path).exists() {
-                        if let Some(detected) = Self::detect_uplc_usb_port() {
+                    if !serial::port_present(&port_path) {
+                        if let Some(detected) = serial::resolve_port(&configured_port) {
                             port_path = detected;
                         } else {
                             thread::sleep(Duration::from_millis(250));
@@ -1227,15 +1379,11 @@ impl CanvasApp {
                         }
                     }
 
-                    // Configure stty raw mode with timeout
-                    let _ = std::process::Command::new("stty")
-                        .args(["-F", &port_path, &baud, "raw", "-echo", "-hupcl", "min", "0", "time", "1"])
-                        .output();
-
-                    match std::fs::OpenOptions::new().read(true).write(true).open(&port_path) {
+                    // Raw 8N1, 100 ms read timeout (equivalent to legacy `stty ... min 0 time 1`)
+                    match serial::open(&port_path, baud, 100) {
                         Ok(mut file) => {
                             // Drain any stale bytes on initial open
-                            let _ = file.read(&mut chunk);
+                            let _ = serial::read_some(&mut *file, &mut chunk);
                             rx_accum.clear();
                             let mut consecutive_failures = 0u32;
 
@@ -1245,7 +1393,7 @@ impl CanvasApp {
                                     if file.write_all(&cmd_packet).is_ok() && file.flush().is_ok() {
                                         thread::sleep(Duration::from_millis(5));
                                         let mut ack = [0u8; 16];
-                                        let _ = file.read(&mut ack);
+                                        let _ = serial::read_some(&mut *file, &mut ack);
                                     }
                                 }
 
@@ -1261,7 +1409,7 @@ impl CanvasApp {
                                     if stop_flag.load(Ordering::Relaxed) {
                                         break;
                                     }
-                                    match file.read(&mut chunk) {
+                                    match serial::read_some(&mut *file, &mut chunk) {
                                         Ok(0) => thread::sleep(Duration::from_millis(4)),
                                         Ok(n) => {
                                             rx_accum.extend_from_slice(&chunk[..n]);
@@ -1315,7 +1463,7 @@ impl CanvasApp {
                                     if consecutive_failures >= 4 {
                                         // Repeated timeouts: drain OS serial buffer in case of framing jam
                                         let mut drain = [0u8; 512];
-                                        let _ = file.read(&mut drain);
+                                        let _ = serial::read_some(&mut *file, &mut drain);
                                         rx_accum.clear();
                                         // If still failing after 8 attempts (~2s), force re-opening port
                                         if consecutive_failures >= 8 {
@@ -1330,7 +1478,7 @@ impl CanvasApp {
                         Err(_) => {
                             // Port cannot be opened: wait and check for hotplug re-detection
                             thread::sleep(Duration::from_millis(250));
-                            if let Some(detected) = Self::detect_uplc_usb_port() {
+                            if let Some(detected) = serial::resolve_port(&configured_port) {
                                 port_path = detected;
                             }
                         }
@@ -1528,7 +1676,7 @@ impl CanvasApp {
         self.canvas.context_menu_elem = None;
         self.canvas.reset_view();
         self.active_tool = ActiveTool::Select;
-        self.copied_rung_idx = None;
+        self.copied_rung = None;
         self.elem_filter_text.clear();
         self.elem_filter_cat = 0;
         self.component_filter.clear();
@@ -1574,7 +1722,7 @@ impl eframe::App for CanvasApp {
             "Untitled"
         };
         let dirty_suffix = if self.doc.is_dirty { "*" } else { "" };
-        let full_title = format!("uPLC Studio - {}{}", file_title, dirty_suffix);
+        let full_title = format!("LaduinoPLC - {}{}", file_title, dirty_suffix);
         if self.current_window_title != full_title {
             self.current_window_title = full_title.clone();
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Title(full_title));
@@ -1670,6 +1818,16 @@ impl eframe::App for CanvasApp {
             ui.ctx().request_repaint();
         }
 
+        // Drain any newly transmitted bytes from UartSend blocks into the persistent UI history buffer
+        let new_uart_tx = self.doc.simulator.take_uart_tx();
+        if !new_uart_tx.is_empty() {
+            self.uart_tx_history.extend_from_slice(&new_uart_tx);
+            if self.uart_tx_history.len() > 4096 {
+                let drop_n = self.uart_tx_history.len() - 4096;
+                self.uart_tx_history.drain(..drop_n);
+            }
+        }
+
         // Online Monitoring Telemetry Polling (RP2040 Hardware or Virtual Simulator)
         if self.online_mode {
             if self.online_target_hw {
@@ -1683,7 +1841,12 @@ impl eframe::App for CanvasApp {
                     self.plc_remote_running = snap.running;
                     self.latest_snapshot = Some(snap);
                     self.last_telemetry_rx = Some(Instant::now());
-                    if !port.is_empty() && self.com_port != port {
+                    // Keep an empty (auto-detect) setting as-is; otherwise follow the worker's port
+                    if !port.is_empty()
+                        && !self.com_port.trim().is_empty()
+                        && !serial::normalize_port_name(&self.com_port)
+                            .is_some_and(|c| serial::same_port(&c, &port))
+                    {
                         self.com_port = port;
                     }
                 }
@@ -1731,7 +1894,7 @@ impl eframe::App for CanvasApp {
                     self.doc.clear_conduction();
                     self.online_status_text = format!(
                         "⚠ Waiting for RP2040 ({}) - Auto-reconnecting...",
-                        self.com_port
+                        self.com_port_display()
                     );
                 }
             } else {
@@ -1784,7 +1947,43 @@ impl eframe::App for CanvasApp {
                 self.doc.redo();
             }
 
+            // Find (Ctrl+F) and F3 / Shift+F3 work even while typing in the Find box
+            if ui.input(|i| i.modifiers.command && !i.modifiers.shift && i.key_pressed(egui::Key::F)) {
+                self.open_find();
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::F3)) {
+                let back = ui.input(|i| i.modifiers.shift);
+                if !self.find.query.is_empty() {
+                    self.find_step(if back { -1 } else { 1 });
+                } else {
+                    self.open_find();
+                }
+            }
+
             if !ui.ctx().egui_wants_keyboard_input() {
+                // Element clipboard: egui-winit turns Ctrl+C / Ctrl+X / Ctrl+V into Copy / Cut / Paste
+                // events (no key_pressed for C/X/V), so listen for the events instead.
+                let clip_events: Vec<egui::Event> = ui.input(|i| {
+                    i.events
+                        .iter()
+                        .filter(|e| matches!(e, egui::Event::Copy | egui::Event::Cut | egui::Event::Paste(_)))
+                        .cloned()
+                        .collect()
+                });
+                for ev in clip_events {
+                    match ev {
+                        egui::Event::Copy => {
+                            self.copy_selected_elements(ui.ctx());
+                        }
+                        egui::Event::Cut => {
+                            self.cut_selected_elements(ui.ctx());
+                        }
+                        egui::Event::Paste(text) => {
+                            self.paste_clipboard_elements(Some(&text));
+                        }
+                        _ => {}
+                    }
+                }
                 if ui.input(|i| {
                     i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)
                 }) {
@@ -2152,6 +2351,47 @@ impl eframe::App for CanvasApp {
                                     });
                             });
                     }
+
+                    // If HW MCU reports fw_feature_level < 2 while the current program requires v2 opcodes, display orange warning banner
+                    if is_hw {
+                        let req_level = self.doc.compile_to_bytecode().required_feature_level();
+                        if req_level >= 2 {
+                            if let Some(ref snap) = self.latest_snapshot {
+                                if !snap.firmware_supports(req_level) {
+                                    let y_off = if !is_matched { 52.0 } else { 14.0 };
+                                    let fw_banner_pos =
+                                        egui::pos2(max_rect.center().x - 270.0, max_rect.min.y + y_off);
+                                    egui::Area::new(egui::Id::new("online_fw_feature_banner"))
+                                        .order(egui::Order::Foreground)
+                                        .fixed_pos(fw_banner_pos)
+                                        .interactable(false)
+                                        .show(ui.ctx(), |ui| {
+                                            egui::Frame::NONE
+                                                .fill(egui::Color32::from_rgba_unmultiplied(
+                                                    48, 26, 6, 245,
+                                                ))
+                                                .stroke(egui::Stroke::new(
+                                                    1.2,
+                                                    egui::Color32::from_rgb(245, 158, 11),
+                                                ))
+                                                .corner_radius(egui::CornerRadius::same(6))
+                                                .inner_margin(egui::Margin::symmetric(12, 6))
+                                                .show(ui, |ui| {
+                                                    ui.label(
+                                                        RichText::new(format!(
+                                                            "⚠ FIRMWARE FEATURE LEVEL v{} (< v2): Program uses Phase 2 opcodes (PID/SCALE/LIMIT/BITWISE/SHIFT/UART)",
+                                                            snap.fw_feature_level.max(1)
+                                                        ))
+                                                        .color(egui::Color32::from_rgb(251, 191, 36))
+                                                        .strong()
+                                                        .size(11.0),
+                                                    );
+                                                });
+                                        });
+                                }
+                            }
+                        }
+                    }
                 }
             });
 
@@ -2177,61 +2417,243 @@ impl eframe::App for CanvasApp {
             }
             let mut open_about = self.show_about;
             let mut close_about = false;
-            Window::new("About uPLC Studio")
+            Window::new("About LaduinoPLC")
                 .order(egui::Order::Foreground)
                 .open(&mut open_about)
                 .collapsible(false)
                 .resizable(false)
+                .default_width(550.0)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .show(ui.ctx(), |ui| {
-                    ui.horizontal(|ui| {
-                        // Microchip Ladder Logic badge (Concept 1)
-                        let (rect, _response) = ui.allocate_exact_size(egui::vec2(48.0, 48.0), egui::Sense::hover());
-                        let painter = ui.painter_at(rect);
-                        // Background squircle chip
-                        painter.rect_filled(rect.shrink(4.0), 6.0, egui::Color32::from_rgb(15, 23, 42));
-                        painter.rect_stroke(
-                            rect.shrink(4.0),
-                            6.0,
-                            egui::Stroke::new(1.5, egui::Color32::from_rgb(14, 165, 233)),
-                            egui::StrokeKind::Inside,
-                        );
-                        // IC Pins
-                        let p = egui::Stroke::new(1.5, egui::Color32::from_rgb(148, 163, 184));
-                        painter.line_segment([egui::pos2(rect.left() + 14.0, rect.top()), egui::pos2(rect.left() + 14.0, rect.top() + 4.0)], p);
-                        painter.line_segment([egui::pos2(rect.left() + 24.0, rect.top()), egui::pos2(rect.left() + 24.0, rect.top() + 4.0)], p);
-                        painter.line_segment([egui::pos2(rect.left() + 34.0, rect.top()), egui::pos2(rect.left() + 34.0, rect.top() + 4.0)], p);
-                        painter.line_segment([egui::pos2(rect.left() + 14.0, rect.bottom() - 4.0), egui::pos2(rect.left() + 14.0, rect.bottom())], p);
-                        painter.line_segment([egui::pos2(rect.left() + 24.0, rect.bottom() - 4.0), egui::pos2(rect.left() + 24.0, rect.bottom())], p);
-                        painter.line_segment([egui::pos2(rect.left() + 34.0, rect.bottom() - 4.0), egui::pos2(rect.left() + 34.0, rect.bottom())], p);
-                        // Rails
-                        let cy = rect.center().y;
-                        painter.line_segment([egui::pos2(rect.left() + 10.0, cy - 12.0), egui::pos2(rect.left() + 10.0, cy + 12.0)], egui::Stroke::new(2.0, egui::Color32::from_rgb(245, 158, 11)));
-                        painter.line_segment([egui::pos2(rect.right() - 10.0, cy - 12.0), egui::pos2(rect.right() - 10.0, cy + 12.0)], egui::Stroke::new(2.0, egui::Color32::from_rgb(148, 163, 184)));
-                        // Contact & Coil in center
-                        painter.line_segment([egui::pos2(rect.left() + 10.0, cy), egui::pos2(rect.left() + 17.0, cy)], egui::Stroke::new(1.5, egui::Color32::from_rgb(0, 240, 255)));
-                        painter.line_segment([egui::pos2(rect.left() + 17.0, cy - 6.0), egui::pos2(rect.left() + 17.0, cy + 6.0)], egui::Stroke::new(2.0, egui::Color32::from_rgb(0, 240, 255)));
-                        painter.line_segment([egui::pos2(rect.left() + 22.0, cy - 6.0), egui::pos2(rect.left() + 22.0, cy + 6.0)], egui::Stroke::new(2.0, egui::Color32::from_rgb(0, 240, 255)));
-                        painter.line_segment([egui::pos2(rect.left() + 22.0, cy), egui::pos2(rect.left() + 28.0, cy)], egui::Stroke::new(1.5, egui::Color32::from_rgb(0, 240, 255)));
-                        // Coil
-                        let coil_color = egui::Color32::from_rgb(16, 225, 130);
-                        painter.circle_stroke(egui::pos2(rect.left() + 32.5, cy), 4.5, egui::Stroke::new(1.5, coil_color));
-                        painter.line_segment([egui::pos2(rect.left() + 37.0, cy), egui::pos2(rect.right() - 10.0, cy)], egui::Stroke::new(1.5, egui::Color32::from_rgb(0, 240, 255)));
+                    ui.spacing_mut().item_spacing.y = 8.0;
 
+                    // 1. HERO HEADER BANNER
+                    egui::Frame::new()
+                        .fill(if palette.is_light() {
+                            Color32::from_rgb(238, 243, 250)
+                        } else {
+                            Color32::from_rgb(20, 24, 33)
+                        })
+                        .corner_radius(egui::CornerRadius::same(10))
+                        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(14, 165, 233).gamma_multiply(0.5)))
+                        .inner_margin(egui::Margin::symmetric(14, 12))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                let logo_tex = self.about_logo_texture.get_or_insert_with(|| {
+                                    let img = image::load_from_memory(include_bytes!("../../../assets/laduinoplc_128.png")).expect("logo");
+                                    let rgba = img.to_rgba8();
+                                    let (w, h) = rgba.dimensions();
+                                    let color_image = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], rgba.as_raw());
+                                    ui.ctx().load_texture("laduinoplc_about_logo", color_image, Default::default())
+                                });
+                                ui.add(egui::Image::new(&*logo_tex).fit_to_exact_size(egui::vec2(62.0, 62.0)));
+
+                                ui.add_space(10.0);
+
+                                ui.vertical(|ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            RichText::new("LaduinoPLC")
+                                                .size(23.0)
+                                                .strong()
+                                                .color(if palette.is_light() {
+                                                    Color32::from_rgb(12, 74, 110)
+                                                } else {
+                                                    Color32::from_rgb(56, 189, 248)
+                                                }),
+                                        );
+                                        ui.add_space(6.0);
+                                        // Version Tag Badge
+                                        egui::Frame::new()
+                                            .fill(if palette.is_light() {
+                                                Color32::from_rgb(224, 231, 255)
+                                            } else {
+                                                Color32::from_rgb(30, 41, 59)
+                                            })
+                                            .corner_radius(egui::CornerRadius::same(5))
+                                            .inner_margin(egui::Margin::symmetric(6, 2))
+                                            .show(ui, |ui| {
+                                                ui.label(
+                                                    RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
+                                                        .size(11.0)
+                                                        .strong()
+                                                        .color(if palette.is_light() {
+                                                            Color32::from_rgb(67, 56, 202)
+                                                        } else {
+                                                            Color32::from_rgb(129, 140, 248)
+                                                        }),
+                                                );
+                                            });
+                                    });
+
+                                    ui.label(
+                                        RichText::new("Visual Ladder Logic IDE & Microcontroller PLC Engine")
+                                            .size(12.0)
+                                            .color(palette.text_primary),
+                                    );
+
+                                    ui.add_space(2.0);
+
+                                    // Tag pills
+                                    ui.horizontal_wrapped(|ui| {
+                                        let tags = [
+                                            ("🦀 Rust 2021", Color32::from_rgb(234, 88, 12)),
+                                            ("⚡ IEC 61131-3", Color32::from_rgb(14, 165, 233)),
+                                            ("🔌 Arduino & RP2040", Color32::from_rgb(16, 185, 129)),
+                                            ("📡 Modbus RTU", Color32::from_rgb(168, 85, 247)),
+                                        ];
+                                        for (tag_text, tag_color) in tags {
+                                            egui::Frame::new()
+                                                .fill(tag_color.gamma_multiply(0.12))
+                                                .corner_radius(egui::CornerRadius::same(4))
+                                                .stroke(egui::Stroke::new(1.0, tag_color.gamma_multiply(0.35)))
+                                                .inner_margin(egui::Margin::symmetric(5, 1))
+                                                .show(ui, |ui| {
+                                                    ui.label(RichText::new(tag_text).size(10.0).strong().color(tag_color));
+                                                });
+                                        }
+                                    });
+                                });
+                            });
+                        });
+
+                    // 2. MEANINGFUL EXPLANATION / CONCEPT (สื่อความหมาย)
+                    egui::Frame::new()
+                        .fill(if palette.is_light() {
+                            Color32::from_rgb(243, 244, 246)
+                        } else {
+                            palette.card_bg
+                        })
+                        .corner_radius(egui::CornerRadius::same(8))
+                        .stroke(egui::Stroke::new(1.0, palette.card_border.gamma_multiply(0.6)))
+                        .inner_margin(egui::Margin::symmetric(12, 9))
+                        .show(ui, |ui| {
+                            ui.label(
+                                RichText::new("💡 ความหมาย & วัตถุประสงค์ (Concept & Mission)")
+                                    .strong()
+                                    .color(palette.accent_heading),
+                            );
+                            ui.add_space(3.0);
+                            ui.label(
+                                RichText::new("LaduinoPLC (Ladder + Arduino + PLC) เชื่อมโยงมาตรฐานควบคุมอุตสาหกรรม (IEC 61131-3) เข้ากับบอร์ดไมโครคอนโทรลเลอร์แบบเปิด ช่วยให้วิศวกร ช่างเทคนิค และผู้สร้างสรรค์ ออกแบบ Ladder Diagram, จำลองผลล่วงหน้าแบบ Real-Time และ Flash ลงชิปฮาร์ดแวร์เพื่อใช้งานควบคุมอัตโนมัติจริงได้ทันที โดยไม่มีค่าลิขสิทธิ์ราคาแพง")
+                                    .size(11.5)
+                                    .color(palette.text_primary),
+                            );
+                        });
+
+                    // 3. PILLARS GRID (4 เสาหลักฟังก์ชันการทำงาน)
+                    egui::Grid::new("about_pillars_grid")
+                        .num_columns(2)
+                        .spacing([10.0, 8.0])
+                        .show(ui, |ui| {
+                            // Column 1 - Card 1: CAD & Power Flow
+                            egui::Frame::new()
+                                .fill(if palette.is_light() { Color32::from_rgb(248, 250, 252) } else { palette.pill_bg })
+                                .corner_radius(egui::CornerRadius::same(6))
+                                .stroke(egui::Stroke::new(1.0, palette.card_border.gamma_multiply(0.4)))
+                                .inner_margin(egui::Margin::symmetric(10, 8))
+                                .show(ui, |ui| {
+                                    ui.set_width(250.0);
+                                    ui.label(RichText::new("⚡ Visual Ladder CAD").strong().color(palette.accent_heading));
+                                    ui.label(RichText::new("Dark CAD Canvas พร้อม Live Power Flow Visualizer แสดงกระแสไฟและคอยล์ติดสว่างเรียลไทม์ 10ms").size(11.0).color(palette.rung_text_dim));
+                                });
+
+                            // Column 2 - Card 2: Micro-VM & Hardware
+                            egui::Frame::new()
+                                .fill(if palette.is_light() { Color32::from_rgb(248, 250, 252) } else { palette.pill_bg })
+                                .corner_radius(egui::CornerRadius::same(6))
+                                .stroke(egui::Stroke::new(1.0, palette.card_border.gamma_multiply(0.4)))
+                                .inner_margin(egui::Margin::symmetric(10, 8))
+                                .show(ui, |ui| {
+                                    ui.set_width(250.0);
+                                    ui.label(RichText::new("🔌 Embedded Micro-VM").strong().color(palette.accent_ok));
+                                    ui.label(RichText::new("คอมไพล์เป็น Bytecode และอัปโหลดไปยัง Arduino UNO/Nano/Mega และ RP2040 Pico (Embassy Async)").size(11.0).color(palette.rung_text_dim));
+                                });
+                            ui.end_row();
+
+                            // Column 1 - Card 3: Online Monitoring & Modbus
+                            egui::Frame::new()
+                                .fill(if palette.is_light() { Color32::from_rgb(248, 250, 252) } else { palette.pill_bg })
+                                .corner_radius(egui::CornerRadius::same(6))
+                                .stroke(egui::Stroke::new(1.0, palette.card_border.gamma_multiply(0.4)))
+                                .inner_margin(egui::Margin::symmetric(10, 8))
+                                .show(ui, |ui| {
+                                    ui.set_width(250.0);
+                                    ui.label(RichText::new("📡 Live Telemetry & Modbus").strong().color(palette.accent_warn));
+                                    ui.label(RichText::new("Online Monitoring ผ่าน USB พร้อม Data Watch Table, Force I/O และ Modbus RTU Master ในตัว").size(11.0).color(palette.rung_text_dim));
+                                });
+
+                            // Column 2 - Card 4: IEC 61131-3 & Interop
+                            egui::Frame::new()
+                                .fill(if palette.is_light() { Color32::from_rgb(248, 250, 252) } else { palette.pill_bg })
+                                .corner_radius(egui::CornerRadius::same(6))
+                                .stroke(egui::Stroke::new(1.0, palette.card_border.gamma_multiply(0.4)))
+                                .inner_margin(egui::Margin::symmetric(10, 8))
+                                .show(ui, |ui| {
+                                    ui.set_width(250.0);
+                                    ui.label(RichText::new("📐 IEC 61131-3 Interop").strong().color(Color32::from_rgb(168, 85, 247)));
+                                    ui.label(RichText::new("รองรับ Instruction List (.il) นำเข้า/ส่งออกสอดคล้องกับ OpenPLC และ CODESYS อย่างโปร่งใส").size(11.0).color(palette.rung_text_dim));
+                                });
+                            ui.end_row();
+                        });
+
+                    // 4. HARDWARE COMPATIBILITY BADGES
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("ฮาร์ดแวร์:").size(11.0).color(palette.rung_text_dim));
+                        let hw_targets = [
+                            "Arduino UNO R3",
+                            "Arduino Nano",
+                            "Arduino Mega 2560",
+                            "RP2040 Pico",
+                            "ESP32",
+                        ];
+                        for hw in hw_targets {
+                            egui::Frame::new()
+                                .fill(if palette.is_light() { Color32::from_rgb(230, 235, 245) } else { Color32::from_rgb(33, 37, 45) })
+                                .corner_radius(egui::CornerRadius::same(4))
+                                .inner_margin(egui::Margin::symmetric(5, 1))
+                                .show(ui, |ui| {
+                                    ui.label(RichText::new(hw).size(10.0).color(palette.text_primary));
+                                });
+                        }
+                    });
+
+                    ui.separator();
+
+                    // 5. FOOTER & CLOSE BUTTON
+                    ui.horizontal(|ui| {
                         ui.vertical(|ui| {
-                            ui.heading("uPLC Studio (MICROPLC Edition)");
-                            ui.label("Ladder Program By uPLC Studio [PksofttecH]");
+                            ui.label(
+                                RichText::new("Created & Developed by PksofttecH")
+                                    .size(11.0)
+                                    .strong()
+                                    .color(palette.rung_text_dim),
+                            );
+                            ui.label(
+                                RichText::new("Open-Source Automation • Built with Rust & egui")
+                                    .size(10.0)
+                                    .color(palette.rung_text_dim.gamma_multiply(0.8)),
+                            );
+                        });
+
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let close_btn = egui::Button::new(
+                                RichText::new("  Close (Esc)  ")
+                                    .strong()
+                                    .color(Color32::WHITE),
+                            )
+                            .fill(if palette.is_light() {
+                                Color32::from_rgb(14, 165, 233)
+                            } else {
+                                Color32::from_rgb(14, 116, 170)
+                            })
+                            .corner_radius(egui::CornerRadius::same(6));
+
+                            if ui.add(close_btn).clicked() {
+                                close_about = true;
+                            }
                         });
                     });
-                    ui.separator();
-                    ui.label("- CAD Corner-Bracket Element Selection & Floating Quick-Action HUD");
-                    ui.label("- Professional LD Element Configuration Window (Double-Click / Enter)");
-                    ui.label("- Undo / Redo History (Ctrl+Z / Ctrl+Y) & Cross-Rung Drag & Drop");
-                    ui.label("- Modern / Dark / Light Theme Support with Thai & Symbol Fonts");
-                    ui.add_space(8.0);
-                    if ui.button("Close").clicked() {
-                        close_about = true;
-                    }
                 });
             if !open_about || close_about {
                 self.show_about = false;
@@ -2325,7 +2747,13 @@ impl eframe::App for CanvasApp {
                             ui.end_row();
 
                             ui.label("Serial Port:");
-                            if ui.text_edit_singleline(&mut self.com_port).changed() {
+                            if ui
+                                .add(
+                                    egui::TextEdit::singleline(&mut self.com_port)
+                                        .hint_text("Auto-detect"),
+                                )
+                                .changed()
+                            {
                                 settings_changed = true;
                             }
                             ui.end_row();
@@ -2489,10 +2917,12 @@ impl eframe::App for CanvasApp {
             let mut settings_changed = false;
             let mut trigger_cmd: Option<my_canvas_core::PlcSerialCommand> = None;
 
-            let bc = self.doc.compile_to_bytecode();
+            let (bc, compile_report) =
+                my_canvas_core::BytecodeCompiler::compile_program_with_report(&self.doc.program);
             let packet = bc.to_serial_packet(my_canvas_core::PlcSerialCommand::DownloadProgram);
             let crc8 = packet.last().copied().unwrap_or(0);
-            let port_exists = std::path::Path::new(self.com_port.trim()).exists();
+            let port_exists = serial::configured_port_available(&self.com_port);
+            let req_feature_level = bc.required_feature_level();
 
             Window::new("⚡ Update to PLC — Micro-VM Serial Loader & Controller")
                 .order(egui::Order::Foreground)
@@ -2534,6 +2964,7 @@ impl eframe::App for CanvasApp {
                                 if ui
                                     .add(
                                         egui::TextEdit::singleline(&mut self.com_port)
+                                            .hint_text("Auto-detect")
                                             .desired_width(125.0)
                                             .font(egui::TextStyle::Monospace),
                                     )
@@ -2543,14 +2974,32 @@ impl eframe::App for CanvasApp {
                                 }
                                 egui::ComboBox::from_id_salt("update_plc_port_combo")
                                     .width(105.0)
-                                    .selected_text("🔍 Detect")
+                                    .selected_text(if self.com_port.trim().is_empty() {
+                                        "🔍 Auto-detect"
+                                    } else {
+                                        "🔍 Detect"
+                                    })
                                     .show_ui(ui, |ui| {
-                                        if let Some(auto_port) = Self::detect_uplc_usb_port() {
+                                        // Enumerate once per second while the popup is open
+                                        let ports = serial::list_ports_cached(Duration::from_millis(1000));
+                                        let detected = serial::choose_plc_port(&ports);
+                                        let auto_label = match &detected {
+                                            Some(p) => format!("Auto-detect (★ {})", p),
+                                            None => "Auto-detect".to_string(),
+                                        };
+                                        if ui
+                                            .selectable_value(&mut self.com_port, String::new(), auto_label)
+                                            .changed()
+                                        {
+                                            settings_changed = true;
+                                        }
+                                        ui.separator();
+                                        if let Some(auto_port) = detected {
                                             if ui
                                                 .selectable_value(
                                                     &mut self.com_port,
                                                     auto_port.clone(),
-                                                    format!("★ {} (uPLC VM)", auto_port),
+                                                    format!("★ {} (LaduinoPLC VM)", auto_port),
                                                 )
                                                 .changed()
                                             {
@@ -2558,7 +3007,7 @@ impl eframe::App for CanvasApp {
                                             }
                                             ui.separator();
                                         }
-                                        for p in Self::available_serial_ports() {
+                                        for p in ports.iter().map(|p| p.display()) {
                                             if ui
                                                 .selectable_value(&mut self.com_port, p.clone(), &p)
                                                 .changed()
@@ -2841,7 +3290,7 @@ impl eframe::App for CanvasApp {
                     let status_text = if self.update_plc_status.is_empty() {
                         format!(
                             "Ready — Target Port: {} @ {} bps | Protocol: SOF 0xAA + CMD + LEN + PAYLOAD + CRC8",
-                            self.com_port, self.baud_rate
+                            self.com_port_display(), self.baud_rate
                         )
                     } else {
                         self.update_plc_status.clone()
@@ -2882,6 +3331,80 @@ impl eframe::App for CanvasApp {
                             );
                         });
 
+                    // 5a. Compiler Report (Errors / Warnings) & Firmware Feature-Level v2 Check
+                    if compile_report.has_messages() {
+                        let is_err = !compile_report.is_ok();
+                        let (rep_bg, rep_border) = if is_err {
+                            (
+                                egui::Color32::from_rgba_unmultiplied(231, 76, 60, 28),
+                                egui::Color32::from_rgb(231, 76, 60),
+                            )
+                        } else {
+                            (
+                                egui::Color32::from_rgba_unmultiplied(245, 158, 11, 28),
+                                egui::Color32::from_rgb(245, 158, 11),
+                            )
+                        };
+                        egui::Frame::NONE
+                            .fill(rep_bg)
+                            .stroke(egui::Stroke::new(1.0, rep_border))
+                            .corner_radius(egui::CornerRadius::same(6))
+                            .inner_margin(egui::Margin::symmetric(10, 6))
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                for err in &compile_report.errors {
+                                    ui.label(
+                                        RichText::new(format!("✖ Compile Error: {}", err))
+                                            .monospace()
+                                            .size(11.0)
+                                            .color(egui::Color32::from_rgb(255, 118, 105)),
+                                    );
+                                }
+                                for warn in &compile_report.warnings {
+                                    ui.label(
+                                        RichText::new(format!("⚠ Compile Warning: {}", warn))
+                                            .monospace()
+                                            .size(11.0)
+                                            .color(egui::Color32::from_rgb(251, 191, 36)),
+                                    );
+                                }
+                            });
+                    }
+
+                    if req_feature_level >= 2 {
+                        let hw_unsupported = self
+                            .latest_snapshot
+                            .as_ref()
+                            .is_some_and(|s| !s.firmware_supports(req_feature_level));
+                        if hw_unsupported {
+                            let fw_ver = self
+                                .latest_snapshot
+                                .as_ref()
+                                .map(|s| s.fw_feature_level.max(1))
+                                .unwrap_or(1);
+                            egui::Frame::NONE
+                                .fill(egui::Color32::from_rgba_unmultiplied(245, 158, 11, 32))
+                                .stroke(egui::Stroke::new(
+                                    1.2,
+                                    egui::Color32::from_rgb(245, 158, 11),
+                                ))
+                                .corner_radius(egui::CornerRadius::same(6))
+                                .inner_margin(egui::Margin::symmetric(10, 6))
+                                .show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    ui.label(
+                                        RichText::new(format!(
+                                            "⚠ Connected PLC firmware reports Feature Level v{} (< v2), but this program requires Feature Level v2 (PID / SCALE / LIMIT / BITWISE / SHIFT / UART / ADC).",
+                                            fw_ver
+                                        ))
+                                        .strong()
+                                        .size(11.0)
+                                        .color(egui::Color32::from_rgb(251, 191, 36)),
+                                    );
+                                });
+                        }
+                    }
+
                     ui.add_space(3.0);
                     ui.horizontal(|ui| {
                         ui.label(
@@ -2891,11 +3414,105 @@ impl eframe::App for CanvasApp {
                                 .color(palette.accent_heading),
                         );
                         ui.label(
-                            RichText::new("Non-Volatile Flash Persistence Active (Sector 0x1FE000 with CRC16 Boot Integrity)")
+                            RichText::new("RETAIN Area (M64..M95 / %MW96..%MW127 @ Sector 0x1FF000)")
                                 .size(11.0)
                                 .color(palette.accent_ok),
                         );
+
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let clear_retain_btn = egui::Button::new(
+                                RichText::new("🗑 Clear RETAIN")
+                                    .size(11.0)
+                                    .strong()
+                                    .color(palette.accent_danger),
+                            )
+                            .corner_radius(egui::CornerRadius::same(5));
+                            if ui
+                                .add(clear_retain_btn)
+                                .on_hover_text(
+                                    "Zero M64..M95 and D96..D127 in RAM and erase the RETAIN Flash sector (CMD 0x09)",
+                                )
+                                .clicked()
+                            {
+                                self.confirm_retain_action =
+                                    Some(my_canvas_core::PlcSerialCommand::PersistClear);
+                            }
+
+                            let save_retain_btn = egui::Button::new(
+                                RichText::new("💾 Save RETAIN to Flash")
+                                    .size(11.0)
+                                    .strong()
+                                    .color(palette.accent_ok),
+                            )
+                            .corner_radius(egui::CornerRadius::same(5));
+                            if ui
+                                .add(save_retain_btn)
+                                .on_hover_text(
+                                    "Save current M64..M95 and D96..D127 values to non-volatile Flash sector 0x1FF000 (CMD 0x08)",
+                                )
+                                .clicked()
+                            {
+                                self.confirm_retain_action =
+                                    Some(my_canvas_core::PlcSerialCommand::PersistSave);
+                            }
+                        });
                     });
+
+                    if let Some(pending_cmd) = self.confirm_retain_action {
+                        let is_clear =
+                            pending_cmd == my_canvas_core::PlcSerialCommand::PersistClear;
+                        let prompt_txt = if is_clear {
+                            "⚠ Confirm Clear RETAIN? This zeroes M64..M95 & %MW96..%MW127 in RAM and erases Flash sector 0x1FF000 (CMD 0x09)."
+                        } else {
+                            "💾 Confirm Save RETAIN to Flash? This writes current M64..M95 & %MW96..%MW127 to Flash sector 0x1FF000 (CMD 0x08)."
+                        };
+                        egui::Frame::NONE
+                            .fill(egui::Color32::from_rgba_unmultiplied(245, 158, 11, 28))
+                            .stroke(egui::Stroke::new(
+                                1.0,
+                                if is_clear {
+                                    palette.accent_danger
+                                } else {
+                                    palette.accent_warn
+                                },
+                            ))
+                            .corner_radius(egui::CornerRadius::same(6))
+                            .inner_margin(egui::Margin::symmetric(10, 6))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new(prompt_txt)
+                                            .size(11.0)
+                                            .strong()
+                                            .color(palette.text_primary),
+                                    );
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if ui.small_button("Cancel").clicked() {
+                                                self.confirm_retain_action = None;
+                                            }
+                                            let confirm_btn = egui::Button::new(
+                                                RichText::new("✔ Confirm")
+                                                    .size(11.0)
+                                                    .strong()
+                                                    .color(egui::Color32::WHITE),
+                                            )
+                                            .fill(if is_clear {
+                                                egui::Color32::from_rgb(192, 57, 43)
+                                            } else {
+                                                egui::Color32::from_rgb(24, 130, 90)
+                                            });
+                                            if ui.add(confirm_btn).clicked() {
+                                                trigger_cmd = Some(pending_cmd);
+                                                self.confirm_retain_action = None;
+                                            }
+                                        },
+                                    );
+                                });
+                            });
+                    }
+
                     ui.add_space(2.0);
 
                     // 6. Primary Bottom Action Bar (Unified PLC Controls)
@@ -2910,11 +3527,15 @@ impl eframe::App for CanvasApp {
                         .corner_radius(egui::CornerRadius::same(6))
                         .min_size(egui::vec2(160.0, 32.0));
 
+                        let upload_hover = if compile_report.is_ok() {
+                            "Transmit 32-Bit Bytecode Packet Frame (CMD 0x01) via USB Serial and auto-start PLC execution"
+                        } else {
+                            "Upload disabled: resolve compile errors above before downloading to PLC"
+                        };
+
                         if ui
-                            .add(upload_btn)
-                            .on_hover_text(
-                                "Transmit 32-Bit Bytecode Packet Frame (CMD 0x01) via USB Serial and auto-start PLC execution",
-                            )
+                            .add_enabled(compile_report.is_ok(), upload_btn)
+                            .on_hover_text(upload_hover)
                             .clicked()
                         {
                             trigger_cmd = Some(my_canvas_core::PlcSerialCommand::DownloadProgram);
@@ -3018,6 +3639,9 @@ impl eframe::App for CanvasApp {
         if self.pending_action.is_some() {
             self.render_unsaved_changes_modal(ui.ctx());
         }
+
+        // Floating (non-modal) Find / Replace window
+        find_dialog::render(&ui.ctx().clone(), self);
     }
 
     fn on_exit(&mut self) {
@@ -3052,6 +3676,7 @@ mod tests {
                     window_pos_y: Some(50.0),
                     last_folder: Some(PathBuf::from("/tmp/projects")),
                     watch_rows: default_watch_rows(),
+                    recent_files: vec!["/tmp/projects/a.il".to_string()],
                 };
                 let json = serde_json::to_string_pretty(&settings).unwrap();
                 let loaded: AppSettings = serde_json::from_str(&json).unwrap();
@@ -3070,6 +3695,14 @@ mod tests {
                 assert_eq!(loaded.last_folder, Some(PathBuf::from("/tmp/projects")));
             }
         }
+    }
+
+    #[test]
+    fn test_app_settings_default_com_port_is_auto() {
+        let s = AppSettings::default();
+        assert!(s.com_port.is_empty());
+        assert_eq!(serial::normalize_port_name(&s.com_port), None);
+        assert!(AppSettings::config_path().ends_with("settings.json"));
     }
 
     #[test]
@@ -3299,7 +3932,159 @@ mod tests {
         assert!(iw_str.contains("2048"));
         assert!(iw_str.contains("1.65V"));
     }
+    #[test]
+    fn test_recent_files_serde_and_legacy_settings() {
+        // Old settings file without `recent_files` still loads
+        let legacy_json = r#"{ "theme": "Dark", "com_port": "ttyUSB0", "baud_rate": "115200" }"#;
+        let loaded: AppSettings = serde_json::from_str(legacy_json).unwrap();
+        assert!(loaded.recent_files.is_empty());
+
+        let mut s = AppSettings::default();
+        for i in 0..12 {
+            push_recent_file(&mut s.recent_files, &format!("/tmp/p{}.il", i));
+        }
+        push_recent_file(&mut s.recent_files, "/tmp/p5.il");
+        assert_eq!(s.recent_files.len(), MAX_RECENT_FILES);
+        assert_eq!(s.recent_files[0], "/tmp/p5.il");
+        assert_eq!(s.recent_files.iter().filter(|p| *p == "/tmp/p5.il").count(), 1);
+        assert_eq!(s.recent_files[1], "/tmp/p11.il");
+
+        let json = serde_json::to_string(&s).unwrap();
+        let back: AppSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.recent_files, s.recent_files);
+    }
+
+    #[test]
+    fn test_open_recent_pending_action_when_dirty() {
+        let mut app = CanvasApp::default();
+        app.doc.is_dirty = true;
+        app.request_open_recent("/tmp/does_not_exist.il".to_string());
+        assert_eq!(
+            app.pending_action,
+            Some(PendingAction::OpenRecent("/tmp/does_not_exist.il".to_string()))
+        );
+    }
+
+    fn all_element_ids(doc: &Document) -> Vec<u64> {
+        fn walk(el: &my_canvas_core::LadderElement, out: &mut Vec<u64>) {
+            out.push(el.id);
+            for p in &el.branch_paths {
+                for s in p {
+                    walk(s, out);
+                }
+            }
+        }
+        let mut v = Vec::new();
+        for r in &doc.program.rungs {
+            for e in &r.elements {
+                walk(e, &mut v);
+            }
+        }
+        v
+    }
+
+    fn sample_app() -> CanvasApp {
+        let mut app = CanvasApp::default();
+        app.doc = Document::new_empty();
+        let a = app.doc.program.alloc_id();
+        let b = app.doc.program.alloc_id();
+        app.doc.program.rungs[0].elements.push(my_canvas_core::LadderElement::new_contact(
+            a,
+            "%IX0.0",
+            "START",
+            my_canvas_core::ContactMode::NormallyOpen,
+        ));
+        app.doc.program.rungs[0].elements.push(my_canvas_core::LadderElement::new_coil(
+            b,
+            "%QX0.0",
+            "MOTOR",
+            my_canvas_core::CoilMode::Normal,
+        ));
+        app
+    }
+
+    #[test]
+    fn test_copy_paste_elements_unique_ids_and_undo() {
+        let mut app = sample_app();
+        let ctx = egui::Context::default();
+        let first = app.doc.program.rungs[0].elements[0].id;
+        app.doc.set_single_selection(Some(0), first);
+        assert!(app.copy_selected_elements(&ctx));
+        assert_eq!(app.clipboard.len(), 1);
+
+        // Internal clipboard paste
+        let undo_before = app.doc.undo_stack.len();
+        let ids1 = app.paste_clipboard_elements(None);
+        assert_eq!(ids1.len(), 1);
+        assert_eq!(app.doc.undo_stack.len(), undo_before + 1);
+
+        // System clipboard paste (LADUINO-ELEM: JSON)
+        let text = format!(
+            "{}{}",
+            CLIPBOARD_ELEM_PREFIX,
+            serde_json::to_string(&app.clipboard).unwrap()
+        );
+        assert_eq!(parse_clipboard_elements(&text).map(|v| v.len()), Some(1));
+        assert!(parse_clipboard_elements("plain text").is_none());
+        let ids2 = app.paste_clipboard_elements(Some(&text));
+        assert_eq!(ids2.len(), 1);
+
+        let ids = all_element_ids(&app.doc);
+        let mut dedup = ids.clone();
+        dedup.sort();
+        dedup.dedup();
+        assert_eq!(ids.len(), dedup.len(), "duplicate ids: {:?}", ids);
+        assert_eq!(app.doc.program.rungs[0].elements.len(), 4);
+
+        assert!(app.doc.undo());
+        assert!(app.doc.undo());
+        assert_eq!(app.doc.program.rungs[0].elements.len(), 2);
+
+        // Cut removes the element, paste brings it back with a new id
+        app.doc.set_single_selection(Some(0), first);
+        assert!(app.cut_selected_elements(&ctx));
+        assert_eq!(app.doc.program.rungs[0].elements.len(), 1);
+        let ids3 = app.paste_clipboard_elements(None);
+        assert_ne!(ids3[0], first);
+    }
+
+    #[test]
+    fn test_copy_network_stores_snapshot() {
+        let mut app = sample_app();
+        app.doc.selected_rung_idx = Some(0);
+        app.copy_selected_network();
+        app.doc.program.rungs[0].elements.clear();
+        app.paste_network_below();
+        assert_eq!(app.doc.program.rungs.len(), 2);
+        assert_eq!(app.doc.program.rungs[1].elements.len(), 2);
+    }
+
+    #[test]
+    fn test_find_and_replace_all() {
+        let mut app = sample_app();
+        app.find.query = "%QX0.0".to_string();
+        app.find_step(1);
+        assert_eq!(app.find.results.len(), 1);
+        let coil_id = app.doc.program.rungs[0].elements[1].id;
+        assert_eq!(app.doc.selected_element_id, Some(coil_id));
+
+        app.find.query = "x0.".to_string();
+        app.find.refresh(&app.doc);
+        assert_eq!(app.find.results.len(), 2);
+        app.find.opts.match_case = true;
+        app.find.refresh(&app.doc);
+        assert!(app.find.results.is_empty());
+
+        let undo_before = app.doc.undo_stack.len();
+        let n = app.doc.replace_all(
+            "START",
+            "RUN_PB",
+            my_canvas_core::document::FindOptions { match_case: true, whole_word: true },
+        );
+        assert_eq!(n, 1);
+        assert_eq!(app.doc.undo_stack.len(), undo_before + 1);
+        assert_eq!(app.doc.program.rungs[0].elements[0].symbol, "RUN_PB");
+        app.doc.undo();
+        assert_eq!(app.doc.program.rungs[0].elements[0].symbol, "START");
+    }
 }
-
-
-

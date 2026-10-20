@@ -239,6 +239,33 @@ impl ElementConfigModal {
                                 ("T0", "TIMER_0"),
                                 ("%IW0", "ADC_0"),
                             ],
+                            TypeTag::Adc => &[
+                                ("%IW0", "ADC_0"),
+                                ("%IW1", "ADC_1"),
+                                ("%IW2", "ADC_2"),
+                                ("%IW3", "ADC_3"),
+                            ],
+                            TypeTag::Bitwise
+                            | TypeTag::ShiftRegisters
+                            | TypeTag::ShiftRegInbit
+                            | TypeTag::ShiftRegReset
+                            | TypeTag::ShiftLeft
+                            | TypeTag::ShiftRight
+                            | TypeTag::ShiftVariable => &[
+                                ("%MW0", "VAR_0"),
+                                ("%MW1", "VAR_1"),
+                                ("%MW30", "SHIFT_REG"),
+                                ("%MW96", "RETAIN_0"),
+                            ],
+                            TypeTag::Pid | TypeTag::Scale | TypeTag::Limit => &[
+                                ("PID0", "PID_LOOP"),
+                                ("SCALE0", "SCALE_0"),
+                                ("LIMIT0", "LIMIT_0"),
+                            ],
+                            TypeTag::UartSend | TypeTag::UartRecv => &[
+                                ("U_TX0", "UART_SEND"),
+                                ("U_RX0", "UART_RECV"),
+                            ],
                             _ => &[
                                 ("%IX0.0", "START_PB"),
                                 ("%IX0.1", "STOP_PB"),
@@ -292,6 +319,31 @@ impl ElementConfigModal {
                                 .color(palette.accent_ok),
                         );
                         ui.separator();
+                        // RETAIN badge: address (or OUT / IN register) lies in the Flash-retained area
+                        let retain_addr = [
+                            &self.draft.name,
+                            &self.draft.target_reg,
+                            &self.draft.fb.in1,
+                            &self.draft.fb.in2,
+                        ]
+                        .into_iter()
+                        .find(|a| is_retain_address(a))
+                        .cloned();
+                        if let Some(addr) = retain_addr {
+                            ui.label(
+                                RichText::new("🔒 RETAIN")
+                                    .small()
+                                    .strong()
+                                    .color(palette.accent_ok)
+                                    .background_color(palette.accent_ok.gamma_multiply(0.15)),
+                            )
+                            .on_hover_text(format!(
+                                "{} is in the RETAIN area (M64..M95 / %MW96..%MW127): saved to Flash by the \
+                                 firmware and restored after power loss",
+                                addr
+                            ));
+                            ui.separator();
+                        }
                         let usage_str = if usages.is_empty() {
                             "New IEC address (not used elsewhere yet)".to_string()
                         } else {
@@ -639,8 +691,8 @@ impl ElementConfigModal {
                             });
                         }
 
-                        TypeTag::Move | TypeTag::Math | TypeTag::Adc => {
-                            ui.horizontal(|ui| {
+                        TypeTag::Move | TypeTag::Math => {
+                            ui.horizontal_wrapped(|ui| {
                                 ui.label("Operation:");
                                 if ui
                                     .selectable_label(
@@ -665,27 +717,733 @@ impl ElementConfigModal {
                                         self.draft.math_op = op.to_string();
                                     }
                                 }
-                                if ui
-                                    .selectable_label(
-                                        self.draft.element_type == TypeTag::Adc,
-                                        "ADC Read",
-                                    )
-                                    .clicked()
-                                {
-                                    self.draft.element_type = TypeTag::Adc;
-                                }
                             });
-                            if self.draft.element_type != TypeTag::Adc {
-                                ui.add_space(6.0);
-                                ui.horizontal(|ui| {
+                            ui.add_space(6.0);
+                            egui::Grid::new("move_math_params_grid")
+                                .num_columns(2)
+                                .spacing([12.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.label("Destination Register (OUT):");
+                                    ui.horizontal(|ui| {
+                                        let resp = ui.add(
+                                            egui::TextEdit::singleline(&mut self.draft.name)
+                                                .font(egui::TextStyle::Monospace)
+                                                .hint_text("e.g. %MW0, D0")
+                                                .desired_width(140.0),
+                                        );
+                                        if resp.changed() {
+                                            self.draft.name = self.draft.name.to_ascii_uppercase();
+                                            self.draft.target_reg = self.draft.name.clone();
+                                        }
+                                        for r in ["%MW0", "%MW1", "%MW2", "%MW96"] {
+                                            if ui.selectable_label(self.draft.name == r, r).clicked() {
+                                                self.draft.name = r.to_string();
+                                                self.draft.target_reg = r.to_string();
+                                            }
+                                        }
+                                    });
+                                    ui.end_row();
+
                                     ui.label("Source Value / Constant:");
                                     ui.add(
                                         egui::DragValue::new(&mut self.draft.preset_value)
                                             .range(-100_000..=100_000)
                                             .speed(1),
                                     );
+                                    ui.end_row();
                                 });
+                        }
+
+                        TypeTag::Adc => {
+                            egui::Grid::new("adc_params_grid")
+                                .num_columns(2)
+                                .spacing([12.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.label("ADC Channel (%IW):");
+                                    ui.horizontal_wrapped(|ui| {
+                                        for (ch, lbl) in [
+                                            ("%IW0", "%IW0 (GPIO26 / ADC0)"),
+                                            ("%IW1", "%IW1 (GPIO27 / ADC1)"),
+                                            ("%IW2", "%IW2 (GPIO28 / ADC2)"),
+                                            ("%IW3", "%IW3 (GPIO29 / ADC3)"),
+                                        ] {
+                                            if ui
+                                                .selectable_label(
+                                                    self.draft.name.eq_ignore_ascii_case(ch),
+                                                    lbl,
+                                                )
+                                                .clicked()
+                                            {
+                                                self.draft.name = ch.to_string();
+                                            }
+                                        }
+                                    });
+                                    ui.end_row();
+
+                                    ui.label("Destination Register (OUT):");
+                                    ui.horizontal(|ui| {
+                                        let resp = ui.add(
+                                            egui::TextEdit::singleline(&mut self.draft.target_reg)
+                                                .font(egui::TextStyle::Monospace)
+                                                .hint_text("e.g. %MW0 (optional)")
+                                                .desired_width(140.0),
+                                        );
+                                        if resp.changed() {
+                                            self.draft.target_reg =
+                                                self.draft.target_reg.to_ascii_uppercase();
+                                        }
+                                        for r in ["%MW0", "%MW1", "%MW2", "%MW3"] {
+                                            if ui
+                                                .selectable_label(self.draft.target_reg == r, r)
+                                                .clicked()
+                                            {
+                                                self.draft.target_reg = r.to_string();
+                                            }
+                                        }
+                                    });
+                                    ui.end_row();
+                                });
+                            ui.add_space(4.0);
+                            ui.label(
+                                RichText::new("Reads 12-bit analog input (0..4095) into accumulator and OUT register when rung is TRUE.")
+                                    .small()
+                                    .color(palette.rung_text_dim),
+                            );
+                        }
+
+                        TypeTag::Pid => {
+                            if self.draft.fb.k[3] <= 0 {
+                                self.draft.fb.k[3] = 1000;
                             }
+                            egui::Grid::new("pid_params_grid")
+                                .num_columns(2)
+                                .spacing([12.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.label("Process Variable (PV):");
+                                    ui.horizontal(|ui| {
+                                        let r = ui.add(
+                                            egui::TextEdit::singleline(&mut self.draft.fb.in1)
+                                                .font(egui::TextStyle::Monospace)
+                                                .hint_text("e.g. %IW0, %MW0")
+                                                .desired_width(140.0),
+                                        );
+                                        if r.changed() {
+                                            self.draft.fb.in1 =
+                                                self.draft.fb.in1.to_ascii_uppercase();
+                                        }
+                                        for p in ["%IW0", "%IW1", "%MW0", "%MW1"] {
+                                            if ui.selectable_label(self.draft.fb.in1 == p, p).clicked() {
+                                                self.draft.fb.in1 = p.to_string();
+                                            }
+                                        }
+                                    });
+                                    ui.end_row();
+
+                                    ui.label("Setpoint (SP):");
+                                    ui.horizontal(|ui| {
+                                        let r = ui.add(
+                                            egui::TextEdit::singleline(&mut self.draft.fb.in2)
+                                                .font(egui::TextStyle::Monospace)
+                                                .hint_text("Register (%MW1) or literal (500)")
+                                                .desired_width(140.0),
+                                        );
+                                        if r.changed() {
+                                            self.draft.fb.in2 =
+                                                self.draft.fb.in2.to_ascii_uppercase();
+                                        }
+                                        for p in ["500", "1000", "2048", "%MW1"] {
+                                            if ui.selectable_label(self.draft.fb.in2 == p, p).clicked() {
+                                                self.draft.fb.in2 = p.to_string();
+                                            }
+                                        }
+                                    });
+                                    ui.end_row();
+
+                                    ui.label("Output Register (OUT):");
+                                    ui.horizontal(|ui| {
+                                        let r = ui.add(
+                                            egui::TextEdit::singleline(&mut self.draft.target_reg)
+                                                .font(egui::TextStyle::Monospace)
+                                                .hint_text("e.g. %MW10, %QW0")
+                                                .desired_width(140.0),
+                                        );
+                                        if r.changed() {
+                                            self.draft.target_reg =
+                                                self.draft.target_reg.to_ascii_uppercase();
+                                        }
+                                        for p in ["%MW10", "%QW0", "%QW1"] {
+                                            if ui.selectable_label(self.draft.target_reg == p, p).clicked() {
+                                                self.draft.target_reg = p.to_string();
+                                            }
+                                        }
+                                    });
+                                    ui.end_row();
+
+                                    ui.label("Kp (×100):");
+                                    ui.horizontal(|ui| {
+                                        ui.add(
+                                            egui::DragValue::new(&mut self.draft.fb.k[0])
+                                                .range(0..=100_000)
+                                                .speed(5),
+                                        );
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "= {:.2}",
+                                                self.draft.fb.k[0] as f64 / 100.0
+                                            ))
+                                            .monospace()
+                                            .color(palette.accent_ok),
+                                        );
+                                    });
+                                    ui.end_row();
+
+                                    ui.label("Ki (×100, 1/s):");
+                                    ui.horizontal(|ui| {
+                                        ui.add(
+                                            egui::DragValue::new(&mut self.draft.fb.k[1])
+                                                .range(0..=100_000)
+                                                .speed(2),
+                                        );
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "= {:.2} /s",
+                                                self.draft.fb.k[1] as f64 / 100.0
+                                            ))
+                                            .monospace()
+                                            .color(palette.accent_ok),
+                                        );
+                                    });
+                                    ui.end_row();
+
+                                    ui.label("Kd (×100, s):");
+                                    ui.horizontal(|ui| {
+                                        ui.add(
+                                            egui::DragValue::new(&mut self.draft.fb.k[2])
+                                                .range(0..=100_000)
+                                                .speed(2),
+                                        );
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "= {:.2} s",
+                                                self.draft.fb.k[2] as f64 / 100.0
+                                            ))
+                                            .monospace()
+                                            .color(palette.accent_ok),
+                                        );
+                                    });
+                                    ui.end_row();
+
+                                    ui.label("Output Clamp Max (out_max):");
+                                    ui.horizontal(|ui| {
+                                        ui.add(
+                                            egui::DragValue::new(&mut self.draft.fb.k[3])
+                                                .range(1..=100_000)
+                                                .speed(10),
+                                        );
+                                        for m in [255, 1000, 4095, 10000] {
+                                            if ui
+                                                .selectable_label(
+                                                    self.draft.fb.k[3] == m,
+                                                    format!("0..{}", m),
+                                                )
+                                                .clicked()
+                                            {
+                                                self.draft.fb.k[3] = m;
+                                            }
+                                        }
+                                    });
+                                    ui.end_row();
+                                });
+                        }
+
+                        TypeTag::Scale => {
+                            egui::Grid::new("scale_params_grid")
+                                .num_columns(2)
+                                .spacing([12.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.label("Input (IN):");
+                                    ui.horizontal(|ui| {
+                                        let r = ui.add(
+                                            egui::TextEdit::singleline(&mut self.draft.fb.in1)
+                                                .font(egui::TextStyle::Monospace)
+                                                .hint_text("e.g. %IW0, %MW0")
+                                                .desired_width(140.0),
+                                        );
+                                        if r.changed() {
+                                            self.draft.fb.in1 =
+                                                self.draft.fb.in1.to_ascii_uppercase();
+                                        }
+                                        for p in ["%IW0", "%IW1", "%MW0"] {
+                                            if ui.selectable_label(self.draft.fb.in1 == p, p).clicked() {
+                                                self.draft.fb.in1 = p.to_string();
+                                            }
+                                        }
+                                    });
+                                    ui.end_row();
+
+                                    ui.label("Output Register (OUT):");
+                                    ui.horizontal(|ui| {
+                                        let r = ui.add(
+                                            egui::TextEdit::singleline(&mut self.draft.target_reg)
+                                                .font(egui::TextStyle::Monospace)
+                                                .hint_text("e.g. %MW20, %QW0")
+                                                .desired_width(140.0),
+                                        );
+                                        if r.changed() {
+                                            self.draft.target_reg =
+                                                self.draft.target_reg.to_ascii_uppercase();
+                                        }
+                                        for p in ["%MW20", "%MW21", "%QW0"] {
+                                            if ui.selectable_label(self.draft.target_reg == p, p).clicked() {
+                                                self.draft.target_reg = p.to_string();
+                                            }
+                                        }
+                                    });
+                                    ui.end_row();
+
+                                    ui.label("Input Range [in_min .. in_max]:");
+                                    ui.horizontal(|ui| {
+                                        ui.add(
+                                            egui::DragValue::new(&mut self.draft.fb.k[0])
+                                                .range(-100_000..=100_000)
+                                                .speed(5)
+                                                .prefix("min: "),
+                                        );
+                                        ui.add(
+                                            egui::DragValue::new(&mut self.draft.fb.k[1])
+                                                .range(-100_000..=100_000)
+                                                .speed(5)
+                                                .prefix("max: "),
+                                        );
+                                        for (mn, mx, lbl) in [
+                                            (0, 4095, "0..4095 (12b)"),
+                                            (0, 1023, "0..1023 (10b)"),
+                                            (0, 1000, "0..1000"),
+                                        ] {
+                                            if ui
+                                                .selectable_label(
+                                                    self.draft.fb.k[0] == mn
+                                                        && self.draft.fb.k[1] == mx,
+                                                    lbl,
+                                                )
+                                                .clicked()
+                                            {
+                                                self.draft.fb.k[0] = mn;
+                                                self.draft.fb.k[1] = mx;
+                                            }
+                                        }
+                                    });
+                                    ui.end_row();
+
+                                    ui.label("Output Range [out_min .. out_max]:");
+                                    ui.horizontal(|ui| {
+                                        ui.add(
+                                            egui::DragValue::new(&mut self.draft.fb.k[2])
+                                                .range(-100_000..=100_000)
+                                                .speed(5)
+                                                .prefix("min: "),
+                                        );
+                                        ui.add(
+                                            egui::DragValue::new(&mut self.draft.fb.k[3])
+                                                .range(-100_000..=100_000)
+                                                .speed(5)
+                                                .prefix("max: "),
+                                        );
+                                        for (mn, mx, lbl) in [
+                                            (0, 1000, "0..1000"),
+                                            (0, 100, "0..100%"),
+                                            (-1000, 1000, "-1000..1000"),
+                                        ] {
+                                            if ui
+                                                .selectable_label(
+                                                    self.draft.fb.k[2] == mn
+                                                        && self.draft.fb.k[3] == mx,
+                                                    lbl,
+                                                )
+                                                .clicked()
+                                            {
+                                                self.draft.fb.k[2] = mn;
+                                                self.draft.fb.k[3] = mx;
+                                            }
+                                        }
+                                    });
+                                    ui.end_row();
+                                });
+                            ui.add_space(4.0);
+                            let [in_min, in_max, out_min, out_max] = self.draft.fb.k;
+                            let mid_in = (in_min + in_max) / 2;
+                            let mid_out = if in_max != in_min {
+                                ((mid_in - in_min) as i64 * (out_max - out_min) as i64
+                                    / (in_max - in_min) as i64
+                                    + out_min as i64) as i32
+                            } else {
+                                out_min
+                            };
+                            ui.label(
+                                RichText::new(format!(
+                                    "Formula: OUT = (IN - {}) * ({} - {}) / ({} - {}) + {}   (e.g. IN={} → OUT={})",
+                                    in_min, out_max, out_min, in_max, in_min, out_min, mid_in, mid_out
+                                ))
+                                .monospace()
+                                .small()
+                                .color(palette.accent_ok),
+                            );
+                        }
+
+                        TypeTag::Limit => {
+                            egui::Grid::new("limit_params_grid")
+                                .num_columns(2)
+                                .spacing([12.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.label("Input (IN):");
+                                    ui.horizontal(|ui| {
+                                        let r = ui.add(
+                                            egui::TextEdit::singleline(&mut self.draft.fb.in1)
+                                                .font(egui::TextStyle::Monospace)
+                                                .hint_text("e.g. %MW20, %IW0")
+                                                .desired_width(140.0),
+                                        );
+                                        if r.changed() {
+                                            self.draft.fb.in1 =
+                                                self.draft.fb.in1.to_ascii_uppercase();
+                                        }
+                                        for p in ["%MW20", "%MW0", "%IW0"] {
+                                            if ui.selectable_label(self.draft.fb.in1 == p, p).clicked() {
+                                                self.draft.fb.in1 = p.to_string();
+                                            }
+                                        }
+                                    });
+                                    ui.end_row();
+
+                                    ui.label("Output Register (OUT):");
+                                    ui.horizontal(|ui| {
+                                        let r = ui.add(
+                                            egui::TextEdit::singleline(&mut self.draft.target_reg)
+                                                .font(egui::TextStyle::Monospace)
+                                                .hint_text("e.g. %MW21, %QW0")
+                                                .desired_width(140.0),
+                                        );
+                                        if r.changed() {
+                                            self.draft.target_reg =
+                                                self.draft.target_reg.to_ascii_uppercase();
+                                        }
+                                        for p in ["%MW21", "%MW1", "%QW0"] {
+                                            if ui.selectable_label(self.draft.target_reg == p, p).clicked() {
+                                                self.draft.target_reg = p.to_string();
+                                            }
+                                        }
+                                    });
+                                    ui.end_row();
+
+                                    ui.label("Minimum Clamp (MIN):");
+                                    ui.add(
+                                        egui::DragValue::new(&mut self.draft.fb.k[0])
+                                            .range(-100_000..=100_000)
+                                            .speed(5),
+                                    );
+                                    ui.end_row();
+
+                                    ui.label("Maximum Clamp (MAX):");
+                                    ui.add(
+                                        egui::DragValue::new(&mut self.draft.fb.k[1])
+                                            .range(-100_000..=100_000)
+                                            .speed(5),
+                                    );
+                                    ui.end_row();
+                                });
+                        }
+
+                        TypeTag::Bitwise => {
+                            let cur_op = if self.draft.math_op.trim().is_empty() {
+                                "AND".to_string()
+                            } else {
+                                self.draft.math_op.trim().to_ascii_uppercase()
+                            };
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label("Bitwise Operator:");
+                                for (op, lbl) in [
+                                    ("AND", "AND (&)"),
+                                    ("OR", "OR (|)"),
+                                    ("XOR", "XOR (^)"),
+                                    ("NOT", "NOT (~)"),
+                                ] {
+                                    if ui.selectable_label(cur_op == op, lbl).clicked() {
+                                        self.draft.math_op = op.to_string();
+                                    }
+                                }
+                            });
+                            ui.add_space(6.0);
+                            let is_not = self.draft.math_op.eq_ignore_ascii_case("NOT");
+                            egui::Grid::new("bitwise_params_grid")
+                                .num_columns(2)
+                                .spacing([12.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.label("Source A (IN1):");
+                                    ui.horizontal(|ui| {
+                                        let r = ui.add(
+                                            egui::TextEdit::singleline(&mut self.draft.fb.in1)
+                                                .font(egui::TextStyle::Monospace)
+                                                .hint_text("e.g. %MW0")
+                                                .desired_width(140.0),
+                                        );
+                                        if r.changed() {
+                                            self.draft.fb.in1 =
+                                                self.draft.fb.in1.to_ascii_uppercase();
+                                        }
+                                        for p in ["%MW0", "%MW1", "16#FFFF"] {
+                                            if ui.selectable_label(self.draft.fb.in1 == p, p).clicked() {
+                                                self.draft.fb.in1 = p.to_string();
+                                            }
+                                        }
+                                    });
+                                    ui.end_row();
+
+                                    if !is_not {
+                                        ui.label("Source B / Mask (IN2):");
+                                        ui.horizontal(|ui| {
+                                            let r = ui.add(
+                                                egui::TextEdit::singleline(&mut self.draft.fb.in2)
+                                                    .font(egui::TextStyle::Monospace)
+                                                    .hint_text("e.g. 16#00FF, %MW1")
+                                                    .desired_width(140.0),
+                                            );
+                                            if r.changed() {
+                                                self.draft.fb.in2 =
+                                                    self.draft.fb.in2.to_ascii_uppercase();
+                                            }
+                                            for p in ["16#00FF", "16#FF00", "16#000F", "16#0001"] {
+                                                if ui.selectable_label(self.draft.fb.in2 == p, p).clicked() {
+                                                    self.draft.fb.in2 = p.to_string();
+                                                }
+                                            }
+                                        });
+                                        ui.end_row();
+                                    }
+
+                                    ui.label("Destination Register (OUT):");
+                                    ui.horizontal(|ui| {
+                                        let r = ui.add(
+                                            egui::TextEdit::singleline(&mut self.draft.target_reg)
+                                                .font(egui::TextStyle::Monospace)
+                                                .hint_text("e.g. %MW1")
+                                                .desired_width(140.0),
+                                        );
+                                        if r.changed() {
+                                            self.draft.target_reg =
+                                                self.draft.target_reg.to_ascii_uppercase();
+                                            self.draft.name = self.draft.target_reg.clone();
+                                        }
+                                        for p in ["%MW1", "%MW2", "%MW3"] {
+                                            if ui.selectable_label(self.draft.target_reg == p, p).clicked() {
+                                                self.draft.target_reg = p.to_string();
+                                                self.draft.name = p.to_string();
+                                            }
+                                        }
+                                    });
+                                    ui.end_row();
+                                });
+                        }
+
+                        TypeTag::ShiftRegisters
+                        | TypeTag::ShiftRegInbit
+                        | TypeTag::ShiftRegReset
+                        | TypeTag::ShiftLeft
+                        | TypeTag::ShiftRight
+                        | TypeTag::ShiftVariable => {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label("Shift Mode:");
+                                for (t_type, lbl) in [
+                                    (TypeTag::ShiftRegisters, "Array Shift (SFT)"),
+                                    (TypeTag::ShiftRegInbit, "Bit Shift In (SBIT)"),
+                                    (TypeTag::ShiftLeft, "Shift Left (SHL)"),
+                                    (TypeTag::ShiftRight, "Shift Right (SHR)"),
+                                    (TypeTag::ShiftVariable, "Shift Variable (SHV)"),
+                                    (TypeTag::ShiftRegReset, "Shift Reset (SRST)"),
+                                ] {
+                                    if ui
+                                        .selectable_label(self.draft.element_type == t_type, lbl)
+                                        .clicked()
+                                    {
+                                        self.draft.element_type = t_type;
+                                    }
+                                }
+                            });
+                            ui.add_space(6.0);
+                            egui::Grid::new("shift_params_grid")
+                                .num_columns(2)
+                                .spacing([12.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.label("Target / Base Word:");
+                                    ui.horizontal(|ui| {
+                                        let r = ui.add(
+                                            egui::TextEdit::singleline(&mut self.draft.name)
+                                                .font(egui::TextStyle::Monospace)
+                                                .hint_text("e.g. %MW30")
+                                                .desired_width(140.0),
+                                        );
+                                        if r.changed() {
+                                            self.draft.name = self.draft.name.to_ascii_uppercase();
+                                        }
+                                        for p in ["%MW30", "%MW0", "%MW96"] {
+                                            if ui.selectable_label(self.draft.name == p, p).clicked() {
+                                                self.draft.name = p.to_string();
+                                            }
+                                        }
+                                    });
+                                    ui.end_row();
+
+                                    match self.draft.element_type {
+                                        TypeTag::ShiftRegisters => {
+                                            ui.label("Stage Count (LEN, 1..16):");
+                                            ui.add(
+                                                egui::DragValue::new(&mut self.draft.preset_value)
+                                                    .range(1..=16)
+                                                    .speed(1),
+                                            );
+                                            ui.end_row();
+
+                                            ui.label("Shift-In Source (IN):");
+                                            ui.add(
+                                                egui::TextEdit::singleline(&mut self.draft.fb.in1)
+                                                    .font(egui::TextStyle::Monospace)
+                                                    .hint_text("e.g. %MW0 or literal")
+                                                    .desired_width(140.0),
+                                            );
+                                            ui.end_row();
+                                        }
+                                        TypeTag::ShiftRegInbit => {
+                                            ui.label("Bit Input (IN_BIT):");
+                                            ui.horizontal(|ui| {
+                                                let r = ui.add(
+                                                    egui::TextEdit::singleline(&mut self.draft.fb.in1)
+                                                        .font(egui::TextStyle::Monospace)
+                                                        .hint_text("e.g. %IX0.0, %MX0.0")
+                                                        .desired_width(140.0),
+                                                );
+                                                if r.changed() {
+                                                    self.draft.fb.in1 =
+                                                        self.draft.fb.in1.to_ascii_uppercase();
+                                                }
+                                                for p in ["%IX0.0", "%IX0.1", "%MX0.0"] {
+                                                    if ui.selectable_label(self.draft.fb.in1 == p, p).clicked() {
+                                                        self.draft.fb.in1 = p.to_string();
+                                                    }
+                                                }
+                                            });
+                                            ui.end_row();
+                                        }
+                                        TypeTag::ShiftLeft | TypeTag::ShiftRight => {
+                                            ui.label("Shift Count (N bits, 0..15):");
+                                            ui.add(
+                                                egui::DragValue::new(&mut self.draft.preset_value)
+                                                    .range(0..=15)
+                                                    .speed(1),
+                                            );
+                                            ui.end_row();
+                                        }
+                                        TypeTag::ShiftVariable => {
+                                            ui.label("Shift Count Operand (COUNT):");
+                                            ui.horizontal(|ui| {
+                                                ui.add(
+                                                    egui::TextEdit::singleline(&mut self.draft.fb.in1)
+                                                        .font(egui::TextStyle::Monospace)
+                                                        .hint_text("e.g. %MW31 (+SHL / -SHR)")
+                                                        .desired_width(140.0),
+                                                );
+                                                ui.label(
+                                                    RichText::new("(>0: SHL, <0: SHR)")
+                                                        .small()
+                                                        .color(palette.rung_text_dim),
+                                                );
+                                            });
+                                            ui.end_row();
+                                        }
+                                        TypeTag::ShiftRegReset => {
+                                            ui.label("Action:");
+                                            ui.label(
+                                                RichText::new("Clears target word to 0 when rung is TRUE")
+                                                    .small()
+                                                    .color(palette.rung_text_dim),
+                                            );
+                                            ui.end_row();
+                                        }
+                                        _ => {}
+                                    }
+                                });
+                        }
+
+                        TypeTag::UartSend => {
+                            egui::Grid::new("uart_send_params_grid")
+                                .num_columns(2)
+                                .spacing([12.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.label("Source Operand / Byte (IN):");
+                                    ui.horizontal(|ui| {
+                                        let r = ui.add(
+                                            egui::TextEdit::singleline(&mut self.draft.fb.in1)
+                                                .font(egui::TextStyle::Monospace)
+                                                .hint_text("e.g. %MW0, 65 ('A'), 16#41")
+                                                .desired_width(150.0),
+                                        );
+                                        if r.changed() {
+                                            self.draft.fb.in1 =
+                                                self.draft.fb.in1.to_ascii_uppercase();
+                                        }
+                                        for (p, desc) in [
+                                            ("%MW0", "%MW0"),
+                                            ("65", "65 ('A')"),
+                                            ("48", "48 ('0')"),
+                                        ] {
+                                            if ui.selectable_label(self.draft.fb.in1 == p, desc).clicked() {
+                                                self.draft.fb.in1 = p.to_string();
+                                            }
+                                        }
+                                    });
+                                    ui.end_row();
+
+                                    ui.label("Line Ending:");
+                                    let mut crlf = self.draft.fb.mode != 0;
+                                    if ui
+                                        .checkbox(&mut crlf, "Append \\r\\n (CRLF) after byte")
+                                        .changed()
+                                    {
+                                        self.draft.fb.mode = u8::from(crlf);
+                                    }
+                                    ui.end_row();
+                                });
+                        }
+
+                        TypeTag::UartRecv => {
+                            egui::Grid::new("uart_recv_params_grid")
+                                .num_columns(2)
+                                .spacing([12.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.label("Destination Register (OUT):");
+                                    ui.horizontal(|ui| {
+                                        let r = ui.add(
+                                            egui::TextEdit::singleline(&mut self.draft.target_reg)
+                                                .font(egui::TextStyle::Monospace)
+                                                .hint_text("e.g. %MW1")
+                                                .desired_width(150.0),
+                                        );
+                                        if r.changed() {
+                                            self.draft.target_reg =
+                                                self.draft.target_reg.to_ascii_uppercase();
+                                        }
+                                        for p in ["%MW1", "%MW2", "%MW3"] {
+                                            if ui.selectable_label(self.draft.target_reg == p, p).clicked() {
+                                                self.draft.target_reg = p.to_string();
+                                            }
+                                        }
+                                    });
+                                    ui.end_row();
+                                });
+                            ui.add_space(4.0);
+                            ui.label(
+                                RichText::new("Dequeues 1 byte (0..255) into OUT and sets rung TRUE; writes -1 and sets FALSE if RX FIFO is empty.")
+                                    .small()
+                                    .color(palette.rung_text_dim),
+                            );
                         }
 
                         TypeTag::Sr | TypeTag::Rs => {
@@ -1155,9 +1913,21 @@ impl ElementConfigModal {
                 TypeTag::Ton | TypeTag::Tof | TypeTag::Tp => VectorIcon::Timer,
                 TypeTag::Ctu | TypeTag::Ctd | TypeTag::Ctud => VectorIcon::Counter,
                 TypeTag::RTrig | TypeTag::FTrig => VectorIcon::MasterRelay,
-                TypeTag::Compare | TypeTag::Move | TypeTag::Math | TypeTag::Adc => {
-                    VectorIcon::FunctionBlock
-                }
+                TypeTag::Compare
+                | TypeTag::Move
+                | TypeTag::Math
+                | TypeTag::Adc
+                | TypeTag::Pid
+                | TypeTag::Scale
+                | TypeTag::Limit
+                | TypeTag::Bitwise => VectorIcon::FunctionBlock,
+                TypeTag::ShiftRegisters
+                | TypeTag::ShiftRegInbit
+                | TypeTag::ShiftRegReset
+                | TypeTag::ShiftLeft
+                | TypeTag::ShiftRight
+                | TypeTag::ShiftVariable => VectorIcon::ShiftReg,
+                TypeTag::UartSend | TypeTag::UartRecv => VectorIcon::SerialComm,
                 TypeTag::Comment => VectorIcon::Comment,
                 _ => VectorIcon::MasterRelay,
             };
@@ -1192,56 +1962,60 @@ impl ElementConfigModal {
             palette.banner_title,
         );
 
-        let detail_summary = match self.draft.element_type {
-            TypeTag::Contact => {
-                let st = global_contact_style;
-                let mode_str = match self.draft.contact_mode {
-                    ContactMode::NormallyOpen => "Normally Open (NO)",
-                    ContactMode::NormallyClosed => "Normally Closed (NC)",
-                    ContactMode::PositiveTransition => "Positive Transition (P)",
-                    ContactMode::NegativeTransition => "Negative Transition (N)",
-                };
-                format!(
-                    "Address: {}  |  Mode: {}  |  Style: {}",
+        let detail_summary = if let Some(fb_sum) = self.draft.fb_value_summary() {
+            format!("{}  |  {}", self.draft.name, fb_sum)
+        } else {
+            match self.draft.element_type {
+                TypeTag::Contact => {
+                    let st = global_contact_style;
+                    let mode_str = match self.draft.contact_mode {
+                        ContactMode::NormallyOpen => "Normally Open (NO)",
+                        ContactMode::NormallyClosed => "Normally Closed (NC)",
+                        ContactMode::PositiveTransition => "Positive Transition (P)",
+                        ContactMode::NegativeTransition => "Negative Transition (N)",
+                    };
+                    format!(
+                        "Address: {}  |  Mode: {}  |  Style: {}",
+                        self.draft.name,
+                        mode_str,
+                        st.short_name()
+                    )
+                }
+                TypeTag::Coil => {
+                    let st = global_coil_style;
+                    format!(
+                        "Address: {}  |  Action: {:?}  |  Theme: {}",
+                        self.draft.name,
+                        self.draft.coil_mode,
+                        st.short_name()
+                    )
+                }
+                TypeTag::Ton | TypeTag::Tof | TypeTag::Tp => format!(
+                    "Timer: {}  |  PT = {} ms ({:.2}s)",
                     self.draft.name,
-                    mode_str,
-                    st.short_name()
-                )
-            }
-            TypeTag::Coil => {
-                let st = global_coil_style;
-                format!(
-                    "Address: {}  |  Action: {:?}  |  Theme: {}",
+                    self.draft.preset_value,
+                    self.draft.preset_value as f32 / 1000.0
+                ),
+                TypeTag::Ctu | TypeTag::Ctd | TypeTag::Ctud => format!(
+                    "Counter: {}  |  PV = {}  |  SV = {}",
+                    self.draft.name, self.draft.preset_value, self.draft.preset_value1
+                ),
+                TypeTag::RTrig | TypeTag::FTrig => format!(
+                    "Edge Trigger: {} ({})",
                     self.draft.name,
-                    self.draft.coil_mode,
-                    st.short_name()
-                )
+                    if self.draft.element_type == TypeTag::RTrig { "R_TRIG Rising Edge" } else { "F_TRIG Falling Edge" }
+                ),
+                TypeTag::Compare => format!(
+                    "Condition: {} {} {}",
+                    self.draft.name, self.draft.compare_op, self.draft.preset_value
+                ),
+                TypeTag::Move => format!("Assignment: {} := {}", self.draft.name, self.draft.preset_value),
+                TypeTag::Math => format!(
+                    "Expression: {} {}= {}",
+                    self.draft.name, self.draft.math_op, self.draft.preset_value
+                ),
+                _ => format!("Tag: {} ({})", self.draft.name, self.draft.symbol),
             }
-            TypeTag::Ton | TypeTag::Tof | TypeTag::Tp => format!(
-                "Timer: {}  |  PT = {} ms ({:.2}s)",
-                self.draft.name,
-                self.draft.preset_value,
-                self.draft.preset_value as f32 / 1000.0
-            ),
-            TypeTag::Ctu | TypeTag::Ctd | TypeTag::Ctud => format!(
-                "Counter: {}  |  PV = {}  |  SV = {}",
-                self.draft.name, self.draft.preset_value, self.draft.preset_value1
-            ),
-            TypeTag::RTrig | TypeTag::FTrig => format!(
-                "Edge Trigger: {} ({})",
-                self.draft.name,
-                if self.draft.element_type == TypeTag::RTrig { "R_TRIG Rising Edge" } else { "F_TRIG Falling Edge" }
-            ),
-            TypeTag::Compare => format!(
-                "Condition: {} {} {}",
-                self.draft.name, self.draft.compare_op, self.draft.preset_value
-            ),
-            TypeTag::Move => format!("Assignment: {} := {}", self.draft.name, self.draft.preset_value),
-            TypeTag::Math => format!(
-                "Expression: {} {}= {}",
-                self.draft.name, self.draft.math_op, self.draft.preset_value
-            ),
-            _ => format!("Tag: {} ({})", self.draft.name, self.draft.symbol),
         };
 
         p.text(
@@ -1329,5 +2103,27 @@ fn mode_select_card(
     }
     if resp.clicked() {
         on_click();
+    }
+}
+
+/// `true` if `addr` lies in the RETAIN area saved to Flash by the firmware
+/// (`M64..M95` / `%MX8.0..%MX11.7`, `D96..D127` / `V96..V127` / `%MW96..%MW127`).
+/// Delegates to the core helper [`IlParser::check_persistent_address`](my_canvas_core::IlParser::check_persistent_address).
+pub fn is_retain_address(addr: &str) -> bool {
+    !addr.trim().is_empty() && my_canvas_core::IlParser::check_persistent_address(addr).is_some()
+}
+
+#[cfg(test)]
+mod retain_tests {
+    use super::is_retain_address;
+
+    #[test]
+    fn retain_address_aliases() {
+        for a in ["M64", "m95", "%MX8.0", "%MX11.7", "D96", "V127", "%MW96", "%mw127"] {
+            assert!(is_retain_address(a), "{} should be RETAIN", a);
+        }
+        for a in ["", "M63", "M96", "%MX7.7", "%MX12.0", "D95", "D128", "%MW95", "%MW128", "%IX0.0", "T0"] {
+            assert!(!is_retain_address(a), "{} should not be RETAIN", a);
+        }
     }
 }

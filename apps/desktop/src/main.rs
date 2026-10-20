@@ -1,7 +1,19 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use eframe::NativeOptions;
 use my_canvas_ui::{AppSettings, CanvasApp};
 
 fn generate_app_icon() -> egui::IconData {
+    if let Ok(img) = image::load_from_memory(include_bytes!("../../../assets/laduinoplc_128.png")) {
+        let rgba = img.to_rgba8();
+        let (width, height) = rgba.dimensions();
+        return egui::IconData {
+            rgba: rgba.into_raw(),
+            width,
+            height,
+        };
+    }
+
     const SIZE: usize = 128;
     let mut rgba = vec![0u8; SIZE * SIZE * 4];
 
@@ -150,8 +162,8 @@ fn main() -> eframe::Result<()> {
     let (width, height) = settings.clamped_window_size();
 
     let mut viewport = egui::ViewportBuilder::default()
-        .with_title("uPLC Studio")
-        .with_app_id("uplc-studio")
+        .with_title("LaduinoPLC")
+        .with_app_id("laduinoplc")
         .with_icon(generate_app_icon())
         .with_inner_size([width, height])
         .with_min_inner_size([960.0, 600.0]);
@@ -172,7 +184,7 @@ fn main() -> eframe::Result<()> {
     };
 
     eframe::run_native(
-        "uPLC Studio",
+        "LaduinoPLC",
         native_options,
         Box::new(|_cc| Ok(Box::new(CanvasApp::default()))),
     )
@@ -197,6 +209,7 @@ mod tests {
         };
         let _ = std::fs::create_dir_all(target_dir);
         if let Some(img) = image::RgbaImage::from_raw(icon.width, icon.height, icon.rgba) {
+            let _ = img.save(format!("{}/laduinoplc.png", target_dir));
             let _ = img.save(format!("{}/uplc-studio.png", target_dir));
         }
     }

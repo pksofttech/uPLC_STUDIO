@@ -1,6 +1,98 @@
-use std::collections::HashMap;
-use crate::bytecode::PlcStatusSnapshot;
-use crate::ladder::{CoilMode, ContactMode, IOPortMapping, LadderElement, LadderProgram, TypeTag};
+use std::collections::{HashMap, VecDeque};
+use crate::bytecode::{BytecodeCompiler, PlcStatusSnapshot};
+use crate::ladder::{parse_int_literal, CoilMode, ContactMode, IOPortMapping, LadderElement, LadderProgram, TypeTag};
+use uplc_vm::{PidState, UartTx};
+
+/// Canonical class of a word register address used by the Simulator alias table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WordKey {
+    /// `%MW0..%MW127` / `D0..D127` / `V0..V127`
+    Mw(usize),
+    /// `%SD0..%SD31` / `SD*` / `D128..D159` / `D8000..D8031`
+    Sd(usize),
+    /// `%IW*` / `AI*` / `ADC*`
+    Iw(usize),
+    /// `%QW*` / `AO*` / `PWM*`
+    Qw(usize),
+    /// Timer current value `T*`
+    Timer(usize),
+    /// Counter current value `C*`
+    Counter(usize),
+}
+
+fn parse_digits(s: &str) -> Option<usize> {
+    if !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()) {
+        s.parse().ok()
+    } else {
+        None
+    }
+}
+
+fn classify_word(name: &str) -> Option<WordKey> {
+    let s = name.trim().to_ascii_uppercase();
+    let mw_or_sd = |n: usize| -> Option<WordKey> {
+        if (8000..8032).contains(&n) {
+            Some(WordKey::Sd(n - 8000))
+        } else if n < 128 {
+            Some(WordKey::Mw(n))
+        } else if n < 160 {
+            Some(WordKey::Sd(n - 128))
+        } else {
+            None
+        }
+    };
+    if let Some(r) = s.strip_prefix("%MW") {
+        return parse_digits(r).and_then(mw_or_sd);
+    }
+    if let Some(r) = s.strip_prefix("%SD").or_else(|| s.strip_prefix("SD")) {
+        return parse_digits(r).filter(|n| *n < 32).map(WordKey::Sd);
+    }
+    if let Some(r) = s.strip_prefix("%IW").or_else(|| s.strip_prefix("ADC")).or_else(|| s.strip_prefix("AI")) {
+        return parse_digits(r).filter(|n| *n < 16).map(WordKey::Iw);
+    }
+    if let Some(r) = s.strip_prefix("%QW").or_else(|| s.strip_prefix("PWM")).or_else(|| s.strip_prefix("AO")) {
+        return parse_digits(r).filter(|n| *n < 16).map(WordKey::Qw);
+    }
+    if let Some(r) = s.strip_prefix('D').or_else(|| s.strip_prefix('V')) {
+        return parse_digits(r).and_then(mw_or_sd);
+    }
+    if let Some(r) = s.strip_prefix('T') {
+        return parse_digits(r).map(WordKey::Timer);
+    }
+    if let Some(r) = s.strip_prefix('C') {
+        return parse_digits(r).map(WordKey::Counter);
+    }
+    None
+}
+
+fn word_aliases(key: WordKey) -> Vec<String> {
+    match key {
+        WordKey::Mw(n) => vec![format!("%MW{}", n), format!("D{}", n), format!("D{:02}", n), format!("V{}", n), format!("V{:02}", n)],
+        WordKey::Sd(i) => vec![
+            format!("%SD{}", i),
+            format!("SD{}", i),
+            format!("D{}", 128 + i),
+            format!("D{}", 8000 + i),
+            format!("%MW{}", 128 + i),
+        ],
+        WordKey::Iw(n) => vec![format!("%IW{}", n), format!("AI{}", n), format!("AI{:02}", n)],
+        WordKey::Qw(n) => vec![format!("%QW{}", n), format!("AO{}", n), format!("AO{:02}", n)],
+        WordKey::Timer(n) => vec![format!("T{}", n)],
+        WordKey::Counter(n) => vec![format!("C{}", n)],
+    }
+}
+
+/// Map a word operand string to the opcode used by the VM for a `Bitwise` element (`math_op`).
+pub fn bitwise_opcode(math_op: &str) -> u8 {
+    match math_op.trim().to_ascii_uppercase().as_str() {
+        "OR" | "WOR" | "|" => uplc_vm::OP_WOR,
+        "XOR" | "WXOR" | "^" => uplc_vm::OP_WXOR,
+        "NOT" | "WNOT" | "~" | "!" => uplc_vm::OP_WNOT,
+        "SHL" | "<<" => uplc_vm::OP_SHL,
+        "SHR" | ">>" => uplc_vm::OP_SHR,
+        _ => uplc_vm::OP_WAND,
+    }
+}
 
 /// Parses IEC 61131-3 (%IX0.0, %QX0.0, %MX0.0) or legacy (X0, Y0, M0) addresses
 /// Returns location type ('I', 'Q', 'M') and 0-based bit index.
@@ -115,6 +207,12 @@ pub struct PlcSimulator {
     pub edge_states: HashMap<u64, bool>,
     // Forced bit states: address (u8) -> forced bool value (Force ON / Force OFF)
     pub forced_bits: HashMap<u8, bool>,
+    /// PID function block states keyed by instance name (uppercase)
+    pub pid_states: HashMap<String, PidState>,
+    /// Bytes "transmitted" by UartSend blocks (drained by the UI UART terminal via `take_uart_tx`)
+    pub uart_tx_log: Vec<u8>,
+    /// Bytes waiting to be "received" by UartRecv blocks (filled via `push_uart_rx`)
+    pub uart_rx_queue: VecDeque<u8>,
 }
 
 impl Default for PlcSimulator {
@@ -198,6 +296,9 @@ impl Default for PlcSimulator {
             registers,
             edge_states: HashMap::new(),
             forced_bits: HashMap::new(),
+            pid_states: HashMap::new(),
+            uart_tx_log: Vec::new(),
+            uart_rx_queue: VecDeque::new(),
         }
     }
 }
@@ -205,6 +306,119 @@ impl Default for PlcSimulator {
 impl PlcSimulator {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Canonical register key of a word address so that `D5`, `V5` and `%MW5` (or `AI0` / `%IW0`,
+    /// `D128` / `%SD0`, ...) refer to the same value. Unknown names map to their uppercase form.
+    pub fn canonical_word_key(name: &str) -> String {
+        match classify_word(name) {
+            Some(k) => word_aliases(k).swap_remove(0),
+            None => name.trim().to_ascii_uppercase(),
+        }
+    }
+
+    /// Read a word operand: integer literals (`"100"`, `"-5"`, `"16#FF"`) are returned as-is,
+    /// otherwise the value is read from the register / timer / counter (or bit as 0/1).
+    pub fn read_word(&self, operand: &str) -> i32 {
+        let t = operand.trim();
+        if t.is_empty() {
+            return 0;
+        }
+        if let Some(v) = parse_int_literal(t) {
+            return v.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+        }
+        match classify_word(t) {
+            Some(WordKey::Timer(n)) => {
+                return self
+                    .timers
+                    .get(&format!("T{}", n))
+                    .or_else(|| self.timers.get(&format!("T{:02}", n)))
+                    .map(|(acc, _)| *acc as i32)
+                    .unwrap_or(0);
+            }
+            Some(WordKey::Counter(n)) => {
+                return self
+                    .counters
+                    .get(&format!("C{}", n))
+                    .or_else(|| self.counters.get(&format!("C{:02}", n)))
+                    .map(|(cv, _, _)| *cv)
+                    .unwrap_or(0);
+            }
+            Some(k) => {
+                let aliases = word_aliases(k);
+                for a in &aliases {
+                    if let Some(&v) = self.registers.get(a) {
+                        return v;
+                    }
+                }
+                return 0;
+            }
+            None => {}
+        }
+        let upper = t.to_ascii_uppercase();
+        if let Some(&v) = self.registers.get(&upper) {
+            return v;
+        }
+        if get_iec_channel_info(&upper).is_some() {
+            return i32::from(self.get_var_value(&upper));
+        }
+        0
+    }
+
+    /// Write a word register (all aliases are updated). Literals are ignored.
+    pub fn write_word(&mut self, operand: &str, val: i32) {
+        let t = operand.trim();
+        if t.is_empty() || parse_int_literal(t).is_some() {
+            return;
+        }
+        match classify_word(t) {
+            Some(WordKey::Timer(n)) => {
+                let e = self.timers.entry(format!("T{}", n)).or_insert((0, false));
+                e.0 = val.max(0) as u32;
+            }
+            Some(WordKey::Counter(n)) => {
+                let e = self.counters.entry(format!("C{}", n)).or_insert((0, false, false));
+                e.0 = val;
+            }
+            Some(k) => {
+                for a in word_aliases(k) {
+                    self.registers.insert(a, val);
+                }
+            }
+            None => {
+                self.registers.insert(t.to_ascii_uppercase(), val);
+            }
+        }
+    }
+
+    /// Read a bit operand (`"%IX0.1"`, `"M5"`, ...). Integer literals are `!= 0`.
+    pub fn read_bit(&self, operand: &str) -> bool {
+        let t = operand.trim();
+        if let Some(v) = parse_int_literal(t) {
+            return v != 0;
+        }
+        match t.to_ascii_uppercase().as_str() {
+            "TRUE" => true,
+            "FALSE" | "" => false,
+            _ => self.get_var_value(t),
+        }
+    }
+
+    /// Queue bytes to be received by `UartRecv` blocks (1 byte per UartRecv execution).
+    pub fn push_uart_rx(&mut self, bytes: &[u8]) {
+        self.uart_rx_queue.extend(bytes.iter().copied());
+    }
+
+    /// Drain all bytes transmitted by `UartSend` blocks since the last call.
+    pub fn take_uart_tx(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.uart_tx_log)
+    }
+
+    /// Rising-edge detection for edge-triggered function blocks (initial state = OFF, like the VM)
+    fn fb_rising_edge(&mut self, id: u64, en: bool) -> bool {
+        let prev = *self.edge_states.get(&id).unwrap_or(&false);
+        self.edge_states.insert(id, en);
+        en && !prev
     }
 
     /// Force a bit (Input X: 0x00..0x1F, Output Y: 0x20..0x3F, or Marker M: 0x40..0xBF) to ON/OFF
@@ -515,8 +729,28 @@ impl PlcSimulator {
 
     /// Full simulation reset: stops execution, zeroes scan count and timer,
     /// and resets all outputs, markers, registers, timers, counters and element accumulators.
+    ///
+    /// Like a power cycle of the real board, the RETAIN area (`M64..M95`, `D96..D127` /
+    /// `%MW96..%MW127`) is preserved. Use [`reset_including_retain`](Self::reset_including_retain)
+    /// to wipe it as well.
     pub fn reset(&mut self, program: &mut LadderProgram) {
+        let retain_bits: Vec<bool> = (64..96).map(|i| self.get_var_value(&format!("M{}", i))).collect();
+        let retain_words: Vec<i32> = (96..128).map(|i| self.read_word(&format!("%MW{}", i))).collect();
+        self.reset_including_retain(program);
+        for (i, v) in retain_bits.into_iter().enumerate() {
+            self.set_var_value(&format!("M{}", 64 + i), v);
+        }
+        for (i, v) in retain_words.into_iter().enumerate() {
+            self.write_word(&format!("%MW{}", 96 + i), v);
+        }
+    }
+
+    /// Full reset including the RETAIN area (equivalent of "Clear RETAIN" + power cycle).
+    pub fn reset_including_retain(&mut self, program: &mut LadderProgram) {
         self.stop(program);
+        self.pid_states.clear();
+        self.uart_tx_log.clear();
+        self.uart_rx_queue.clear();
         self.scan_count = 0;
         self.simulation_time_ms = 0;
 
@@ -830,7 +1064,7 @@ impl PlcSimulator {
             TypeTag::Comment => power_in,
             TypeTag::MasterRelay => power_in,
             TypeTag::Compare => {
-                let reg_val = *self.registers.get(&elem.name.to_uppercase()).unwrap_or(&0);
+                let reg_val = self.read_word(&elem.name);
                 let op = elem.compare_op.trim().to_uppercase();
                 let conducts = match op.as_str() {
                     "==" | "EQ" => reg_val == elem.preset_value,
@@ -862,7 +1096,8 @@ impl PlcSimulator {
             }
             TypeTag::Math => {
                 if power_in {
-                    let cur = *self.registers.get(&elem.target_reg.to_uppercase()).unwrap_or(&0);
+                    let dest = elem.word_target().to_string();
+                    let cur = self.read_word(&dest);
                     let res = match elem.math_op.as_str() {
                         "+" => cur.saturating_add(elem.preset_value),
                         "-" => cur.saturating_sub(elem.preset_value),
@@ -871,8 +1106,7 @@ impl PlcSimulator {
                         "%" => if elem.preset_value != 0 { cur % elem.preset_value } else { cur },
                         _ => cur,
                     };
-                    let reg_upper = elem.target_reg.to_uppercase();
-                    self.registers.insert(reg_upper, res);
+                    self.write_word(&dest, res);
                     elem.current_accum = res;
                     self.acc_word = res;
                 }
@@ -880,12 +1114,8 @@ impl PlcSimulator {
             }
             TypeTag::Move => {
                 if power_in {
-                    let reg = if !elem.target_reg.is_empty() {
-                        &elem.target_reg
-                    } else {
-                        &elem.name
-                    };
-                    self.registers.insert(reg.to_uppercase(), elem.preset_value);
+                    let dest = elem.word_target().to_string();
+                    self.write_word(&dest, elem.preset_value);
                     elem.current_accum = elem.preset_value;
                     self.acc_word = elem.preset_value;
                 }
@@ -941,6 +1171,147 @@ impl PlcSimulator {
             TypeTag::Label => {
                 elem.is_done = true;
                 power_in
+            }
+            TypeTag::Adc => {
+                if power_in {
+                    let v = self.read_word(&elem.name);
+                    self.write_word(&elem.target_reg, v);
+                    elem.current_accum = v;
+                    self.acc_word = v;
+                }
+                elem.is_done = power_in;
+                power_in
+            }
+            TypeTag::Bitwise => {
+                if power_in {
+                    let op = bitwise_opcode(&elem.math_op);
+                    let a = self.read_word(&elem.fb.in1);
+                    let b = self.read_word(&elem.fb.in2);
+                    let r = uplc_vm::bitwise(op, a, b);
+                    self.write_word(&elem.target_reg, r);
+                    elem.current_accum = r;
+                    self.acc_word = r;
+                }
+                elem.is_done = power_in;
+                power_in
+            }
+            TypeTag::Scale => {
+                if power_in {
+                    let k = elem.fb.k;
+                    let r = uplc_vm::scale(self.read_word(&elem.fb.in1), k[0], k[1], k[2], k[3]);
+                    self.write_word(&elem.target_reg, r);
+                    elem.current_accum = r;
+                    self.acc_word = r;
+                }
+                elem.is_done = power_in;
+                power_in
+            }
+            TypeTag::Limit => {
+                if power_in {
+                    let k = elem.fb.k;
+                    let r = uplc_vm::limit(self.read_word(&elem.fb.in1), k[0], k[1]);
+                    self.write_word(&elem.target_reg, r);
+                    elem.current_accum = r;
+                    self.acc_word = r;
+                }
+                elem.is_done = power_in;
+                power_in
+            }
+            TypeTag::Pid => {
+                let key = elem.name.trim().to_ascii_uppercase();
+                if power_in {
+                    let pv = self.read_word(&elem.fb.in1);
+                    let sp = self.read_word(&elem.fb.in2);
+                    let k = elem.fb.k;
+                    let st = self.pid_states.entry(key).or_insert_with(PidState::new);
+                    let cv = st.step(pv, sp, k[0], k[1], k[2], k[3], dt_ms);
+                    self.write_word(&elem.target_reg, cv);
+                    elem.current_accum = cv;
+                    self.acc_word = cv;
+                } else if let Some(st) = self.pid_states.get_mut(&key) {
+                    st.reset();
+                }
+                elem.is_done = power_in;
+                power_in
+            }
+            TypeTag::ShiftRegisters => {
+                if self.fb_rising_edge(elem.id, power_in) {
+                    let input = self.read_word(&elem.fb.in1);
+                    let len = elem.preset_value.clamp(1, 32) as usize;
+                    if let Some((base, _, _)) = BytecodeCompiler::parse_direct_address(&elem.name, true) {
+                        let base = base as usize;
+                        let last = (base + len - 1).min(255);
+                        let word_name = |a: usize| BytecodeCompiler::format_address(a as u8, true).1;
+                        let mut i = last;
+                        while i > base {
+                            let v = self.read_word(&word_name(i - 1));
+                            self.write_word(&word_name(i), v);
+                            i -= 1;
+                        }
+                    }
+                    self.write_word(&elem.name, input);
+                    elem.current_accum = input;
+                    self.acc_word = input;
+                }
+                elem.is_done = power_in;
+                power_in
+            }
+            TypeTag::ShiftRegInbit => {
+                if self.fb_rising_edge(elem.id, power_in) {
+                    let bit = i32::from(self.read_bit(&elem.fb.in1));
+                    let r = uplc_vm::shift_in_bit(self.read_word(&elem.name), bit);
+                    self.write_word(&elem.name, r);
+                    elem.current_accum = r;
+                    self.acc_word = r;
+                }
+                elem.is_done = power_in;
+                power_in
+            }
+            TypeTag::ShiftRegReset => {
+                if power_in {
+                    self.write_word(&elem.name, 0);
+                    elem.current_accum = 0;
+                }
+                elem.is_done = power_in;
+                power_in
+            }
+            TypeTag::ShiftLeft | TypeTag::ShiftRight | TypeTag::ShiftVariable => {
+                if self.fb_rising_edge(elem.id, power_in) {
+                    let cur = self.read_word(&elem.name);
+                    let r = match elem.element_type {
+                        TypeTag::ShiftLeft => uplc_vm::shift_left(cur, elem.preset_value),
+                        TypeTag::ShiftRight => uplc_vm::shift_right(cur, elem.preset_value),
+                        _ => uplc_vm::shift_left(cur, self.read_word(&elem.fb.in1)),
+                    };
+                    self.write_word(&elem.name, r);
+                    elem.current_accum = r;
+                    self.acc_word = r;
+                }
+                elem.is_done = power_in;
+                power_in
+            }
+            TypeTag::UartSend => {
+                if self.fb_rising_edge(elem.id, power_in) {
+                    let job = UartTx { instance: 0, mode: elem.fb.mode, value: self.read_word(&elem.fb.in1) };
+                    let mut buf = [0u8; 16];
+                    let n = job.encode(&mut buf);
+                    self.uart_tx_log.extend_from_slice(&buf[..n]);
+                    elem.current_accum = job.value;
+                }
+                elem.is_done = power_in;
+                power_in
+            }
+            TypeTag::UartRecv => {
+                let mut got = false;
+                if power_in {
+                    if let Some(b) = self.uart_rx_queue.pop_front() {
+                        self.write_word(&elem.target_reg, b as i32);
+                        elem.current_accum = b as i32;
+                        got = true;
+                    }
+                }
+                elem.is_done = got;
+                got
             }
             _ => power_in,
         };
@@ -1009,6 +1380,7 @@ impl PlcSimulator {
             data_reg,
             prog_len: 0,
             prog_crc: 0,
+            fw_feature_level: uplc_vm::FW_FEATURE_LEVEL,
         }
     }
 
@@ -1055,7 +1427,7 @@ impl PlcSimulator {
 
         // 3b. Special System Markers: %SM0..%SM31 / M8000..M8031 (0xA0..0xBF)
         for i in 0..32 {
-            let val = snapshot.bit_mem[0xA0 + i] != 0;
+            let val = (snapshot.bit_mem[0xA0 + i] & 0x01) != 0;
             self.markers.insert(format!("%SM{}", i), val);
             self.markers.insert(format!("SM{}", i), val);
             self.markers.insert(format!("M{}", 96 + i), val);
@@ -1091,7 +1463,7 @@ impl PlcSimulator {
             self.registers.insert(format!("%IW{}", i), val);
         }
 
-        // 6b. Special System Registers: %SD0..%SD6 from Snapshot telemetry
+        // 6b. Special System Registers: %SD0..%SD7 from Snapshot telemetry
         let scan_low = (snapshot.scan_count & 0xFFFF) as i32;
         let scan_high = ((snapshot.scan_count >> 16) & 0xFFFF) as i32;
         self.registers.insert("%SD0".to_string(), 100);
@@ -1115,6 +1487,19 @@ impl PlcSimulator {
         self.registers.insert("SD6".to_string(), temp_c01);
         self.registers.insert("D8006".to_string(), temp_c01);
         self.registers.insert("D134".to_string(), temp_c01);
+
+        // %SD7: RETAIN Flash save count encoded in bit 1 of bit_mem[0xA0..0xB0]
+        let mut sd7: u16 = 0;
+        for b in 0..16 {
+            if (snapshot.bit_mem[0xA0 + b] & 0x02) != 0 {
+                sd7 |= 1u16 << b;
+            }
+        }
+        let sd7_val = sd7 as i32;
+        self.registers.insert("%SD7".to_string(), sd7_val);
+        self.registers.insert("SD7".to_string(), sd7_val);
+        self.registers.insert("D8007".to_string(), sd7_val);
+        self.registers.insert("D135".to_string(), sd7_val);
 
         // 7. Re-apply any local force overrides (in case snapshot packet was in flight before force command arrived)
         if !self.forced_bits.is_empty() {
@@ -1229,7 +1614,7 @@ impl PlcSimulator {
                 false
             }
             TypeTag::Compare => {
-                let reg_val = *self.registers.get(&elem.name.to_uppercase()).unwrap_or(&0);
+                let reg_val = self.read_word(&elem.name);
                 let op = elem.compare_op.trim().to_uppercase();
                 let c = match op.as_str() {
                     "==" | "EQ" => reg_val == elem.preset_value,
@@ -1245,14 +1630,22 @@ impl PlcSimulator {
                 power_in && c
             }
             TypeTag::Math | TypeTag::Move => {
-                let reg_name = if !elem.target_reg.is_empty() {
-                    &elem.target_reg
-                } else {
-                    &elem.name
-                };
-                if let Some(&val) = self.registers.get(&reg_name.to_uppercase()) {
-                    elem.current_accum = val;
-                }
+                elem.current_accum = self.read_word(elem.word_target());
+                elem.is_done = power_in;
+                power_in
+            }
+            TypeTag::Adc | TypeTag::Bitwise | TypeTag::Scale | TypeTag::Limit | TypeTag::Pid | TypeTag::UartRecv => {
+                elem.current_accum = self.read_word(&elem.target_reg);
+                elem.is_done = power_in;
+                power_in
+            }
+            TypeTag::ShiftRegisters
+            | TypeTag::ShiftRegInbit
+            | TypeTag::ShiftRegReset
+            | TypeTag::ShiftLeft
+            | TypeTag::ShiftRight
+            | TypeTag::ShiftVariable => {
+                elem.current_accum = self.read_word(&elem.name);
                 elem.is_done = power_in;
                 power_in
             }

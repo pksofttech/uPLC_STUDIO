@@ -1,11 +1,11 @@
 [Desktop Entry]
-Name=uPLC Studio
+Name=LaduinoPLC
 Comment=Micro PLC Ladder Logic IDE & Simulator (IEC 61131-3)
-Exec=/home/pksofttech/MEGAsync/uPLC_STDIO/target/debug/uplc-studio
-Icon=uplc-studio
+Exec=/home/pksofttech/MEGAsync/uPLC_STUDIO/target/debug/laduino-plc
+Icon=laduinoplc
 Terminal=false
 Type=Application
 Categories=Development;IDE;Engineering;
-Keywords=PLC;Ladder;Automation;IEC61131;Microcontroller;
+Keywords=PLC;Ladder;Automation;IEC61131;Microcontroller;Arduino;
 StartupNotify=true
-StartupWMClass=uplc-studio
+StartupWMClass=laduinoplc
