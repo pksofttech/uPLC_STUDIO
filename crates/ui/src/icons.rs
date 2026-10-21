@@ -48,6 +48,10 @@ pub enum VectorIcon {
     Step,
     Stop,
     Reset,
+    ZoomIn,
+    ZoomOut,
+    ZoomFit,
+    HandPan,
 }
 
 /// Draw a crisp, font-independent vector icon inside `rect`
@@ -578,6 +582,47 @@ pub fn paint_icon(painter: &Painter, rect: Rect, icon: VectorIcon, color: Color3
             painter.line_segment([tip, pos2(tip.x + r * 0.38, tip.y - r * 0.12)], s);
             painter.line_segment([tip, pos2(tip.x + r * 0.12, tip.y + r * 0.38)], s);
         }
+        VectorIcon::ZoomIn => {
+            let glass_c = pos2(c.x - r * 0.18, c.y - r * 0.18);
+            let glass_r = r * 0.58;
+            painter.circle_stroke(glass_c, glass_r, s);
+            let h_start = pos2(glass_c.x + glass_r * 0.707, glass_c.y + glass_r * 0.707);
+            let h_end = pos2(c.x + r * 0.85, c.y + r * 0.85);
+            painter.line_segment([h_start, h_end], s_bold);
+            let pl = r * 0.30;
+            painter.line_segment([pos2(glass_c.x - pl, glass_c.y), pos2(glass_c.x + pl, glass_c.y)], s);
+            painter.line_segment([pos2(glass_c.x, glass_c.y - pl), pos2(glass_c.x, glass_c.y + pl)], s);
+        }
+        VectorIcon::ZoomOut => {
+            let glass_c = pos2(c.x - r * 0.18, c.y - r * 0.18);
+            let glass_r = r * 0.58;
+            painter.circle_stroke(glass_c, glass_r, s);
+            let h_start = pos2(glass_c.x + glass_r * 0.707, glass_c.y + glass_r * 0.707);
+            let h_end = pos2(c.x + r * 0.85, c.y + r * 0.85);
+            painter.line_segment([h_start, h_end], s_bold);
+            let pl = r * 0.30;
+            painter.line_segment([pos2(glass_c.x - pl, glass_c.y), pos2(glass_c.x + pl, glass_c.y)], s);
+        }
+        VectorIcon::ZoomFit => {
+            let box_r = r * 0.68;
+            let rect = Rect::from_center_size(c, vec2(box_r * 2.0, box_r * 2.0));
+            painter.rect_stroke(rect, CornerRadius::same(2), s_thin, StrokeKind::Outside);
+            let dot_r = r * 0.22;
+            painter.circle_filled(c, dot_r, color);
+        }
+        VectorIcon::HandPan => {
+            let wrist = pos2(c.x, c.y + r * 0.80);
+            let palm = pos2(c.x, c.y + r * 0.15);
+            painter.line_segment([wrist, palm], s_bold);
+            let f1 = pos2(c.x - r * 0.45, c.y - r * 0.45);
+            let f2 = pos2(c.x - r * 0.15, c.y - r * 0.80);
+            let f3 = pos2(c.x + r * 0.15, c.y - r * 0.75);
+            let f4 = pos2(c.x + r * 0.45, c.y - r * 0.40);
+            painter.line_segment([pos2(c.x - r * 0.30, palm.y), f1], s);
+            painter.line_segment([pos2(c.x - r * 0.10, palm.y), f2], s);
+            painter.line_segment([pos2(c.x + r * 0.10, palm.y), f3], s);
+            painter.line_segment([pos2(c.x + r * 0.30, palm.y), f4], s);
+        }
     }
 }
 
@@ -593,7 +638,7 @@ pub fn modern_tool_button(
     width: f32,
     palette: ThemePalette,
 ) -> Response {
-    let height = 27.0;
+    let height = 26.0;
     let sense = if !is_enabled {
         Sense::hover()
     } else if allow_drag {
@@ -653,10 +698,10 @@ pub fn modern_tool_button(
         };
 
         let painter = ui.painter();
-        painter.rect_filled(rect, CornerRadius::same(5), bg);
+        painter.rect_filled(rect, CornerRadius::same(3), bg);
         painter.rect_stroke(
             rect,
-            CornerRadius::same(5),
+            CornerRadius::same(3),
             Stroke::new(if is_active || hovered { 1.3 } else { 1.0 }, border),
             StrokeKind::Inside,
         );
@@ -665,27 +710,27 @@ pub fn modern_tool_button(
         if is_active && is_enabled {
             let ind_rect = Rect::from_min_max(
                 pos2(rect.min.x + 3.0, rect.max.y - 2.5),
-                pos2(rect.max.x - 3.0, rect.max.y - 0.5),
+                pos2(rect.max.x - 3.0, rect.max.y - 0.8),
             );
             painter.rect_filled(ind_rect, CornerRadius::same(1), accent);
         }
 
         if let Some(ico) = icon {
             if label.is_empty() {
-                let icon_rect = Rect::from_center_size(rect.center(), vec2(16.0, 16.0));
+                let icon_rect = Rect::from_center_size(rect.center(), vec2(15.0, 15.0));
                 paint_icon(painter, icon_rect, ico, icon_color);
             } else {
                 let icon_rect = Rect::from_center_size(
-                    pos2(rect.min.x + 13.0, rect.center().y),
-                    vec2(15.0, 15.0),
+                    pos2(rect.min.x + 11.5, rect.center().y),
+                    vec2(14.5, 14.5),
                 );
                 paint_icon(painter, icon_rect, ico, icon_color);
 
                 painter.text(
-                    pos2(rect.min.x + 25.0, rect.center().y),
+                    pos2(rect.min.x + 22.0, rect.center().y),
                     Align2::LEFT_CENTER,
                     label,
-                    FontId::proportional(11.5),
+                    FontId::proportional(11.0),
                     fg,
                 );
             }
@@ -694,7 +739,7 @@ pub fn modern_tool_button(
                 rect.center(),
                 Align2::CENTER_CENTER,
                 label,
-                FontId::proportional(11.5),
+                FontId::proportional(11.0),
                 fg,
             );
         }

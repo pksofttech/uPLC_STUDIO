@@ -1,11 +1,19 @@
 use crate::app::CanvasApp;
-use crate::icons::{modern_tool_button, VectorIcon};
+use crate::icons::{modern_tool_button, paint_icon, VectorIcon};
 use crate::theme::{AppTheme, ThemePalette};
 use crate::tools::ActiveTool;
-use egui::{CornerRadius, RichText, Stroke, Ui};
+use egui::{Align, Align2, Color32, CornerRadius, FontId, Layout, Rect, Stroke, StrokeKind, Ui};
 use my_canvas_core::SchematicStyle;
 
-fn toolbar_group<R>(
+/// Uniform CAD toolbar control height (in logical pixels)
+const CAD_BTN_HEIGHT: f32 = 26.0;
+/// Square icon-only CAD button width (26x26)
+const CAD_ICON_BTN_WIDTH: f32 = 26.0;
+
+/// AutoCAD-style precision toolbar group container.
+/// Uses direct horizontal Frame allocation with `Align::Center` and uniform `interact_size.y`
+/// so buttons, dividers, ComboBoxes, and the LCD readout align on the exact same centerline.
+fn cad_toolbar_group<R>(
     ui: &mut Ui,
     palette: ThemePalette,
     add_contents: impl FnOnce(&mut Ui) -> R,
@@ -13,50 +21,177 @@ fn toolbar_group<R>(
     let frame = egui::Frame::new()
         .fill(palette.pill_bg)
         .stroke(Stroke::new(1.0, palette.rung_badge_border))
-        .corner_radius(CornerRadius::same(6))
-        .inner_margin(egui::Margin::symmetric(5, 3));
+        .corner_radius(CornerRadius::same(3)) // Crisp 3px technical CAD chamfer
+        .inner_margin(egui::Margin::symmetric(4, 3));
 
     frame
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 4.0;
-                add_contents(ui)
-            })
-            .inner
+            ui.spacing_mut().item_spacing = egui::vec2(3.0, 0.0);
+            ui.spacing_mut().interact_size.y = CAD_BTN_HEIGHT;
+            ui.spacing_mut().button_padding = egui::vec2(6.0, 4.0);
+            ui.with_layout(Layout::left_to_right(Align::Center), |ui| add_contents(ui))
+                .inner
         })
         .inner
 }
 
+/// CAD-style vertical hairline divider inside a toolbar group
 fn toolbar_divider(ui: &mut Ui, palette: ThemePalette) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, 21.0), egui::Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(3.0, CAD_BTN_HEIGHT), egui::Sense::hover());
     ui.painter().line_segment(
         [
-            egui::pos2(rect.center().x, rect.min.y + 2.0),
-            egui::pos2(rect.center().x, rect.max.y - 2.0),
+            egui::pos2(rect.center().x, rect.min.y + 3.0),
+            egui::pos2(rect.center().x, rect.max.y - 3.0),
         ],
         Stroke::new(1.0, palette.rung_badge_border),
     );
 }
 
+/// Prominent CAD hero action button (e.g. RUN, ONLINE) with active LED bar and border glow
+fn cad_hero_button(
+    ui: &mut Ui,
+    icon: Option<VectorIcon>,
+    label: &str,
+    accent: Color32,
+    is_active: bool,
+    is_enabled: bool,
+    width: f32,
+    palette: ThemePalette,
+) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(width, CAD_BTN_HEIGHT),
+        if is_enabled {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        },
+    );
+
+    if ui.is_rect_visible(rect) {
+        let hovered = is_enabled && resp.hovered();
+        let pressed = is_enabled && resp.is_pointer_button_down_on();
+
+        let (bg, stroke) = if !is_enabled {
+            (palette.pill_bg.gamma_multiply(0.4), Stroke::NONE)
+        } else if is_active {
+            (accent.gamma_multiply(0.24), Stroke::new(1.5, accent))
+        } else if pressed {
+            (accent.gamma_multiply(0.36), Stroke::new(1.2, accent))
+        } else if hovered {
+            (
+                palette.rung_badge_hov_bg,
+                Stroke::new(1.0, palette.accent_heading),
+            )
+        } else {
+            (palette.card_bg, Stroke::new(1.0, palette.rung_badge_border))
+        };
+
+        ui.painter()
+            .rect(rect, CornerRadius::same(3), bg, stroke, StrokeKind::Inside);
+
+        // Industrial CAD status LED strip on bottom edge when active
+        if is_active && is_enabled {
+            let led_rect = Rect::from_min_max(
+                egui::pos2(rect.min.x + 3.0, rect.max.y - 2.5),
+                egui::pos2(rect.max.x - 3.0, rect.max.y - 0.8),
+            );
+            ui.painter()
+                .rect_filled(led_rect, CornerRadius::same(1), accent);
+        }
+
+        let text_color = if !is_enabled {
+            palette.rung_text_dim
+        } else if is_active {
+            accent
+        } else {
+            palette.text_primary
+        };
+
+        let has_label = !label.is_empty();
+        if let Some(ic) = icon {
+            let ic_w = 15.0;
+            let ic_x = if has_label {
+                rect.min.x + 12.0
+            } else {
+                rect.center().x
+            };
+            let ic_rect = Rect::from_center_size(
+                egui::pos2(ic_x, rect.center().y),
+                egui::vec2(ic_w, ic_w),
+            );
+            paint_icon(ui.painter(), ic_rect, ic, text_color);
+        }
+
+        if has_label {
+            let text_x = if icon.is_some() {
+                rect.min.x + 22.5
+            } else {
+                rect.center().x
+            };
+            let align = if icon.is_some() {
+                Align2::LEFT_CENTER
+            } else {
+                Align2::CENTER_CENTER
+            };
+            ui.painter().text(
+                egui::pos2(text_x, rect.center().y),
+                align,
+                label,
+                FontId::proportional(11.0),
+                text_color,
+            );
+        }
+    }
+
+    resp
+}
+
+/// Fixed-dimension recessed CAD LCD readout for scan count / simulation timer
+fn cad_lcd_readout(ui: &mut Ui, text: &str, text_color: Color32, palette: ThemePalette) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(84.0, CAD_BTN_HEIGHT), egui::Sense::hover());
+    if ui.is_rect_visible(rect) {
+        ui.painter().rect(
+            rect,
+            CornerRadius::same(3),
+            palette.canvas_bg,
+            Stroke::new(1.0, palette.rung_badge_border),
+            StrokeKind::Inside,
+        );
+        ui.painter().text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            text,
+            FontId::monospace(11.0),
+            text_color,
+        );
+    }
+}
+
 pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
     let palette = app.theme.palette();
     let avail_width = ui.available_width();
-    let is_compact = avail_width < 1260.0;
+
+    // 3-tier responsive breakpoints calibrated so groups never overflow or clip labels
+    let show_file_labels = avail_width >= 1460.0;
+    let is_compact = avail_width < 1220.0;
     let is_ultra_compact = avail_width < 980.0;
 
     egui::ScrollArea::horizontal()
         .id_salt("top_toolbar_scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(6.0, 2.0);
-
+            ui.spacing_mut().item_spacing = egui::vec2(6.0, 2.0);
+            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                 // =========================================================================
-                // Group 1: Project & Edit Tools (File, Undo/Redo, Selection)
+                // Group 1: Project & Cursor Tools (New, Open, Save | Undo, Redo | Select, Pan)
                 // =========================================================================
-                toolbar_group(ui, palette, |ui| {
+                cad_toolbar_group(ui, palette, |ui| {
                     // New File
-                    let (new_lbl, new_w) = if is_compact { ("", 28.0) } else { ("New", 56.0) };
+                    let (new_lbl, new_w) = if show_file_labels {
+                        ("New", 50.0)
+                    } else {
+                        ("", CAD_ICON_BTN_WIDTH)
+                    };
                     if modern_tool_button(
                         ui,
                         Some(VectorIcon::NewFile),
@@ -68,14 +203,18 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                         new_w,
                         palette,
                     )
-                    .on_hover_text("New Ladder Project (Ctrl+N)")
+                    .on_hover_text("New Ladder Project [Ctrl+N]")
                     .clicked()
                     {
                         app.request_new_program();
                     }
 
                     // Open File
-                    let (open_lbl, open_w) = if is_compact { ("", 28.0) } else { ("Open", 58.0) };
+                    let (open_lbl, open_w) = if show_file_labels {
+                        ("Open", 54.0)
+                    } else {
+                        ("", CAD_ICON_BTN_WIDTH)
+                    };
                     if modern_tool_button(
                         ui,
                         Some(VectorIcon::OpenFile),
@@ -87,14 +226,18 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                         open_w,
                         palette,
                     )
-                    .on_hover_text("Open IEC 61131-3 IL (.il) or Project (.json)")
+                    .on_hover_text("Open IEC 61131-3 IL (.il) or Project (.json) [Ctrl+O]")
                     .clicked()
                     {
                         app.request_open_program();
                     }
 
                     // Save File
-                    let (save_lbl, save_w) = if is_compact { ("", 28.0) } else { ("Save", 58.0) };
+                    let (save_lbl, save_w) = if show_file_labels {
+                        ("Save", 54.0)
+                    } else {
+                        ("", CAD_ICON_BTN_WIDTH)
+                    };
                     if modern_tool_button(
                         ui,
                         Some(VectorIcon::SaveFile),
@@ -106,7 +249,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                         save_w,
                         palette,
                     )
-                    .on_hover_text("Save Program (Ctrl+S)")
+                    .on_hover_text("Save Program [Ctrl+S]")
                     .clicked()
                     {
                         app.save_or_save_as();
@@ -115,7 +258,11 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     toolbar_divider(ui, palette);
 
                     // Undo
-                    let (undo_lbl, undo_w) = if is_compact { ("", 28.0) } else { ("Undo", 58.0) };
+                    let (undo_lbl, undo_w) = if show_file_labels {
+                        ("Undo", 54.0)
+                    } else {
+                        ("", CAD_ICON_BTN_WIDTH)
+                    };
                     if modern_tool_button(
                         ui,
                         Some(VectorIcon::Undo),
@@ -127,14 +274,18 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                         undo_w,
                         palette,
                     )
-                    .on_hover_text("Undo last circuit edit (Ctrl+Z)")
+                    .on_hover_text("Undo last circuit edit [Ctrl+Z]")
                     .clicked()
                     {
                         app.doc.undo();
                     }
 
                     // Redo
-                    let (redo_lbl, redo_w) = if is_compact { ("", 28.0) } else { ("Redo", 58.0) };
+                    let (redo_lbl, redo_w) = if show_file_labels {
+                        ("Redo", 54.0)
+                    } else {
+                        ("", CAD_ICON_BTN_WIDTH)
+                    };
                     if modern_tool_button(
                         ui,
                         Some(VectorIcon::Redo),
@@ -146,7 +297,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                         redo_w,
                         palette,
                     )
-                    .on_hover_text("Redo circuit edit (Ctrl+Y)")
+                    .on_hover_text("Redo circuit edit [Ctrl+Y]")
                     .clicked()
                     {
                         app.doc.redo();
@@ -156,7 +307,11 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
 
                     // Select / Pointer Tool
                     let is_sel = app.active_tool == ActiveTool::Select;
-                    let (sel_lbl, sel_w) = if is_compact { ("", 28.0) } else { ("Select", 62.0) };
+                    let (sel_lbl, sel_w) = if is_compact {
+                        ("", CAD_ICON_BTN_WIDTH)
+                    } else {
+                        ("Select", 60.0)
+                    };
                     if modern_tool_button(
                         ui,
                         Some(VectorIcon::CursorSelect),
@@ -168,15 +323,43 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                         sel_w,
                         palette,
                     )
-                    .on_hover_text("Select & Move Tool (Click or drag box to select / Press Esc)")
+                    .on_hover_text("Select & Move Tool (Click or drag box to select) [Esc]")
                     .clicked()
                     {
                         app.active_tool = ActiveTool::Select;
                     }
+
+                    // Hand Pan Tool
+                    let is_pan = app.active_tool == ActiveTool::Pan;
+                    let (pan_lbl, pan_w) = if is_compact {
+                        ("", CAD_ICON_BTN_WIDTH)
+                    } else {
+                        ("Pan", 48.0)
+                    };
+                    if modern_tool_button(
+                        ui,
+                        Some(VectorIcon::HandPan),
+                        pan_lbl,
+                        palette.accent_heading,
+                        is_pan,
+                        true,
+                        false,
+                        pan_w,
+                        palette,
+                    )
+                    .on_hover_text("Pan Canvas Viewport (Drag with Left Mouse)")
+                    .clicked()
+                    {
+                        app.active_tool = if is_pan {
+                            ActiveTool::Select
+                        } else {
+                            ActiveTool::Pan
+                        };
+                    }
                 });
 
                 // =========================================================================
-                // Group 2: Simulation / PLC Control Station (Run, Step, Stop, Reset)
+                // Group 2: Simulation / PLC Execution (Run, Step, Stop, Reset | Speed, LCD)
                 // =========================================================================
                 let is_hw = app.online_target_hw;
                 let is_hw_conn = !is_hw || app.is_hw_online_connected();
@@ -184,41 +367,44 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     let r = is_hw_conn && app.plc_remote_running;
                     (r, !r, !r)
                 } else {
-                    (app.doc.simulator.is_running(), app.doc.simulator.is_stopped(), app.doc.simulator.is_step())
+                    (
+                        app.doc.simulator.is_running(),
+                        app.doc.simulator.is_stopped(),
+                        app.doc.simulator.is_step(),
+                    )
                 };
 
-                toolbar_group(ui, palette, |ui| {
-                    // Start / RUN Button
+                cad_toolbar_group(ui, palette, |ui| {
+                    // Start / RUN Hero Button
                     let (start_label, start_w) = if is_running {
-                        ("RUN", if is_compact { 48.0 } else { 62.0 })
+                        ("RUN", 54.0)
                     } else if is_compact {
-                        ("", 28.0)
+                        ("Run", 50.0)
                     } else {
-                        ("Start", 60.0)
+                        ("Start", 56.0)
                     };
 
                     let run_hover = if is_hw {
                         if app.online_mode && !is_hw_conn {
                             "Waiting for RP2040 USB Connection (Auto-reconnecting...)"
                         } else if is_running {
-                            "Halt / STOP Hardware PLC Execution (F5)"
+                            "Halt / STOP Hardware PLC Execution [F5]"
                         } else if app.online_mode {
-                            "Start / RUN Hardware PLC Execution (F5)"
+                            "Start / RUN Hardware PLC Execution [F5]"
                         } else {
-                            "Connect & Start Hardware PLC Execution (F5)"
+                            "Connect & Start Hardware PLC Execution [F5]"
                         }
                     } else {
-                        "Start / Continuous Simulation (F5)"
+                        "Start / Continuous Simulation [F5]"
                     };
 
-                    if modern_tool_button(
+                    if cad_hero_button(
                         ui,
                         Some(VectorIcon::Play),
                         start_label,
                         palette.accent_ok,
                         is_running,
                         true,
-                        false,
                         start_w,
                         palette,
                     )
@@ -229,13 +415,16 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     }
 
                     // Step Button
-                    let (step_lbl, step_w) = if is_compact { ("", 28.0) } else { ("Step", 56.0) };
-                    let step_hover = if is_hw {
-                        "Execute Single Scan Step on Hardware PLC (F6)"
+                    let (step_lbl, step_w) = if is_compact {
+                        ("", CAD_ICON_BTN_WIDTH)
                     } else {
-                        "Execute Single Scan Step (F6)"
+                        ("Step", 52.0)
                     };
-
+                    let step_hover = if is_hw {
+                        "Execute Single Scan Step on Hardware PLC [F6]"
+                    } else {
+                        "Execute Single Scan Step [F6]"
+                    };
                     if modern_tool_button(
                         ui,
                         Some(VectorIcon::Step),
@@ -254,7 +443,11 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     }
 
                     // Stop Button
-                    let (stop_lbl, stop_w) = if is_compact { ("", 28.0) } else { ("Stop", 56.0) };
+                    let (stop_lbl, stop_w) = if is_compact {
+                        ("", CAD_ICON_BTN_WIDTH)
+                    } else {
+                        ("Stop", 52.0)
+                    };
                     let stop_hover = if is_hw {
                         "Halt Hardware PLC Scan & Safe Output Shutdown"
                     } else {
@@ -265,7 +458,6 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     } else {
                         !is_stopped
                     };
-
                     if modern_tool_button(
                         ui,
                         Some(VectorIcon::Stop),
@@ -284,13 +476,16 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     }
 
                     // Reset Button
-                    let (reset_lbl, reset_w) = if is_compact { ("", 28.0) } else { ("Reset", 58.0) };
-                    let reset_hover = if is_hw {
-                        "Reset / Halt Hardware PLC (Shift+F5)"
+                    let (reset_lbl, reset_w) = if is_compact {
+                        ("", CAD_ICON_BTN_WIDTH)
                     } else {
-                        "Reset Simulation & Clear Memory (Shift+F5)"
+                        ("Reset", 58.0)
                     };
-
+                    let reset_hover = if is_hw {
+                        "Reset / Halt Hardware PLC [Shift+F5]"
+                    } else {
+                        "Reset Simulation & Clear Memory [Shift+F5]"
+                    };
                     if modern_tool_button(
                         ui,
                         Some(VectorIcon::Reset),
@@ -310,10 +505,10 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
 
                     toolbar_divider(ui, palette);
 
-                    // Simulation Speed Multiplier (Virtual Simulator only)
+                    // Simulation Speed Multiplier (48px guarantees "x10" + arrow never clips)
                     ui.add_enabled_ui(!is_hw, |ui| {
                         egui::ComboBox::from_id_salt("toolbar_sim_speed_combo")
-                            .width(42.0)
+                            .width(48.0)
                             .selected_text(format!("x{}", app.doc.simulator.speed_multiplier))
                             .show_ui(ui, |ui| {
                                 for mult in [1u32, 2, 5, 10] {
@@ -332,69 +527,70 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                             });
                     });
 
-                    // Digital Hardware Scan Timer / Counter Display
+                    // Digital Hardware Scan Timer / Counter Display (Fixed-size 84x26 LCD Readout)
                     if !is_ultra_compact {
-                        let lcd_frame = egui::Frame::new()
-                            .fill(palette.canvas_bg)
-                            .stroke(Stroke::new(1.0, palette.rung_badge_border))
-                            .corner_radius(CornerRadius::same(4))
-                            .inner_margin(egui::Margin::symmetric(6, 4));
-
                         let (time_text, text_color) = if is_hw {
                             if app.online_mode && !is_hw_conn {
                                 ("RECONN...".to_string(), palette.accent_warn)
                             } else {
-                                let scans = app.latest_snapshot.as_ref().map_or(0, |s| s.scan_count);
+                                let scans =
+                                    app.latest_snapshot.as_ref().map_or(0, |s| s.scan_count);
                                 (
                                     format!("{:>6} scans", scans),
-                                    if is_running { palette.accent_ok } else { palette.accent_heading },
+                                    if is_running {
+                                        palette.accent_ok
+                                    } else {
+                                        palette.accent_heading
+                                    },
                                 )
                             }
                         } else {
                             (
                                 app.doc.simulator.formatted_sim_time(),
-                                if is_running { palette.accent_ok } else { palette.accent_heading },
+                                if is_running {
+                                    palette.accent_ok
+                                } else {
+                                    palette.accent_heading
+                                },
                             )
                         };
 
-                        lcd_frame.show(ui, |ui| {
-                            ui.label(
-                                RichText::new(time_text)
-                                    .monospace()
-                                    .size(11.5)
-                                    .color(text_color),
-                            );
-                        });
+                        cad_lcd_readout(ui, &time_text, text_color, palette);
                     }
                 });
 
                 // =========================================================================
-                // Group 3: PLC & Online (Live Telemetry, Target Selector, Update PLC)
+                // Group 3: Online & PLC Link (Go Online, Target Selector, Update PLC)
                 // =========================================================================
-                toolbar_group(ui, palette, |ui| {
+                cad_toolbar_group(ui, palette, |ui| {
                     let is_online = app.online_mode;
                     let (online_btn_text, online_btn_w) = if is_online {
-                        (if is_compact { "Online" } else { "🟢 Online" }, if is_compact { 64.0 } else { 82.0 })
+                        ("ONLINE", 68.0)
+                    } else if is_compact {
+                        ("Online", 64.0)
                     } else {
-                        (if is_compact { "Online" } else { "🌐 Go Online" }, if is_compact { 64.0 } else { 92.0 })
+                        ("Go Online", 82.0)
                     };
-                    let online_btn_color = if is_online { palette.accent_ok } else { palette.accent_heading };
+                    let online_btn_color = if is_online {
+                        palette.accent_ok
+                    } else {
+                        palette.accent_heading
+                    };
 
-                    if modern_tool_button(
+                    if cad_hero_button(
                         ui,
                         Some(VectorIcon::SerialComm),
                         online_btn_text,
                         online_btn_color,
                         is_online,
                         true,
-                        false,
                         online_btn_w,
                         palette,
                     )
                     .on_hover_text(if is_online {
-                        "Online Monitoring ACTIVE: Real-time status from PLC / Simulator (Ctrl+M / F7 to stop)"
+                        "Online Monitoring ACTIVE: Real-time status from PLC / Simulator [Ctrl+M / F7]"
                     } else {
-                        "Start Online Monitoring: Live debug Process Image and ACC in real time (Ctrl+M / F7)"
+                        "Start Online Monitoring: Live debug Process Image in real time [Ctrl+M / F7]"
                     })
                     .clicked()
                     {
@@ -405,18 +601,26 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
 
                     // Target selector: Hardware (RP2040) vs Local Simulator
                     let cur_target_label = if is_compact {
-                        if app.online_target_hw { "🔌 HW" } else { "💻 Sim" }
+                        if app.online_target_hw {
+                            "🔌 HW"
+                        } else {
+                            "💻 Sim"
+                        }
+                    } else if app.online_target_hw {
+                        "🔌 RP2040"
                     } else {
-                        if app.online_target_hw { "🔌 RP2040" } else { "💻 Simulator" }
+                        "💻 Simulator"
                     };
-                    let combo_w = if is_compact { 68.0 } else { 96.0 };
+                    let target_combo_w = if is_compact { 68.0 } else { 96.0 };
                     egui::ComboBox::from_id_salt("toolbar_online_target_combo")
-                        .width(combo_w)
+                        .width(target_combo_w)
                         .selected_text(cur_target_label)
                         .show_ui(ui, |ui| {
                             if ui
                                 .selectable_label(app.online_target_hw, "🔌 Hardware (RP2040 USB)")
-                                .on_hover_text("Monitor & control physical RP2040 Micro-VM over USB CDC Serial")
+                                .on_hover_text(
+                                    "Monitor & control physical RP2040 Micro-VM over USB CDC Serial",
+                                )
                                 .clicked()
                             {
                                 app.set_online_target_hw(true);
@@ -424,7 +628,9 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                             }
                             if ui
                                 .selectable_label(!app.online_target_hw, "💻 Virtual Simulator")
-                                .on_hover_text("Monitor & control internal local PLC software simulation engine")
+                                .on_hover_text(
+                                    "Monitor & control internal local PLC software simulation engine",
+                                )
                                 .clicked()
                             {
                                 app.set_online_target_hw(false);
@@ -435,7 +641,11 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     toolbar_divider(ui, palette);
 
                     // Update to PLC (Compile IL -> Bytecode & Upload to MCU VM)
-                    let (plc_lbl, plc_w) = if is_compact { ("Update", 68.0) } else { ("Update PLC", 92.0) };
+                    let (plc_lbl, plc_w) = if is_compact {
+                        ("Update", 64.0)
+                    } else {
+                        ("Update PLC", 88.0)
+                    };
                     if modern_tool_button(
                         ui,
                         Some(VectorIcon::SerialComm),
@@ -447,7 +657,9 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                         plc_w,
                         palette,
                     )
-                    .on_hover_text("Compile IL to 32-bit Micro-VM Bytecode & Update to PLC via Serial/USB")
+                    .on_hover_text(
+                        "Compile IL to 32-bit Micro-VM Bytecode & Update to PLC via Serial/USB",
+                    )
                     .clicked()
                     {
                         app.show_update_plc = !app.show_update_plc;
@@ -455,11 +667,15 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 });
 
                 // =========================================================================
-                // Group 4: View & Tools (Code Export, Schematic Style, Theme, Config)
+                // Group 4: View & Setup (Code Export, Schematic Style, Theme, Config)
                 // =========================================================================
-                toolbar_group(ui, palette, |ui| {
+                cad_toolbar_group(ui, palette, |ui| {
                     // IEC 61131-3 IL Code Preview & Export
-                    let (code_lbl, code_w) = if is_compact { ("", 28.0) } else { ("Code", 58.0) };
+                    let (code_lbl, code_w) = if is_compact {
+                        ("", CAD_ICON_BTN_WIDTH)
+                    } else {
+                        ("Code", 54.0)
+                    };
                     if modern_tool_button(
                         ui,
                         Some(VectorIcon::ExportCode),
@@ -480,9 +696,19 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     toolbar_divider(ui, palette);
 
                     // Schematic Style Selector
+                    let style_selected_text = if is_compact {
+                        match app.doc.schematic_style {
+                            SchematicStyle::IecStandard => "IEC",
+                            SchematicStyle::JicNema => "JIC",
+                            SchematicStyle::DinEuropean => "DIN",
+                            SchematicStyle::PushBtnPilot => "Panel",
+                        }
+                    } else {
+                        app.doc.schematic_style.short_name()
+                    };
                     egui::ComboBox::from_id_salt("toolbar_schematic_style_combo")
-                        .selected_text(app.doc.schematic_style.short_name())
-                        .width(if is_compact { 68.0 } else { 82.0 })
+                        .selected_text(style_selected_text)
+                        .width(if is_compact { 62.0 } else { 96.0 })
                         .show_ui(ui, |ui| {
                             for st in SchematicStyle::ALL {
                                 let is_cur = app.doc.schematic_style == st;
@@ -500,9 +726,14 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     toolbar_divider(ui, palette);
 
                     // Compact Modern Theme Selector
+                    let theme_selected_text = if is_compact {
+                        app.theme.label().to_string()
+                    } else {
+                        format!("🎨 {}", app.theme.label())
+                    };
                     egui::ComboBox::from_id_salt("toolbar_theme_combo")
-                        .selected_text(format!("🎨 {}", app.theme.label()))
-                        .width(if is_compact { 72.0 } else { 85.0 })
+                        .selected_text(theme_selected_text)
+                        .width(if is_compact { 68.0 } else { 86.0 })
                         .show_ui(ui, |ui| {
                             for t in AppTheme::ALL {
                                 if ui.selectable_label(app.theme == t, t.label()).clicked() {
@@ -514,7 +745,11 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     toolbar_divider(ui, palette);
 
                     // Settings & Hardware I/O Configuration
-                    let (cfg_lbl, cfg_w) = if is_compact { ("", 28.0) } else { ("Config", 62.0) };
+                    let (cfg_lbl, cfg_w) = if is_compact {
+                        ("", CAD_ICON_BTN_WIDTH)
+                    } else {
+                        ("Config", 62.0)
+                    };
                     if modern_tool_button(
                         ui,
                         Some(VectorIcon::ConfigGear),
