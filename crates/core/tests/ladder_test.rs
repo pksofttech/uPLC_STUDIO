@@ -309,17 +309,11 @@ fn test_unified_schematic_style() {
     assert_eq!(doc.contact_style, ContactStyle::PushButton);
     assert_eq!(doc.coil_style, CoilStyle::PilotLight);
 
-    // Change to Toggle & Solenoid
-    doc.set_schematic_style(SchematicStyle::ToggleSolenoid);
-    assert_eq!(doc.schematic_style, SchematicStyle::ToggleSolenoid);
-    assert_eq!(doc.contact_style, ContactStyle::ToggleSwitch);
-    assert_eq!(doc.coil_style, CoilStyle::SolenoidValve);
-
     // Test JSON Serialization
     let json_str = serde_json::to_string(&doc).expect("serialize doc");
-    assert!(json_str.contains("ToggleSolenoid"));
+    assert!(json_str.contains("PushBtnPilot"));
     let deserialized: Document = serde_json::from_str(&json_str).expect("deserialize doc");
-    assert_eq!(deserialized.schematic_style, SchematicStyle::ToggleSolenoid);
+    assert_eq!(deserialized.schematic_style, SchematicStyle::PushBtnPilot);
 }
 
 #[test]
@@ -346,7 +340,7 @@ fn test_group_selection_parallel_and_series_insertion() {
     doc.selected_element_ids = vec![id1, id2];
     doc.selected_element_id = Some(id1);
 
-    // 3. Insert in Parallel (วงจรขนาน) across the selected group [X00, X01] with new contact X_PAR
+    // 3. Insert in Parallel across the selected group [X00, X01] with new contact X_PAR
     let id_par = 4;
     let elem_par = LadderElement::new_contact(id_par, "X_PAR", "PAR", ContactMode::NormallyOpen);
     doc.insert_parallel_to_selection(elem_par, false);
@@ -382,13 +376,13 @@ fn test_group_selection_parallel_and_series_insertion() {
     assert_eq!(doc.program.rungs[0].elements.len(), 2);
     assert_eq!(doc.program.rungs[0].elements[0].element_type, TypeTag::Branch);
 
-    // 6. Test Series Insertion (วงจรอนุกรม):
+    // 6. Test Series Insertion:
     // Select the branch and X02 as a group
     let branch_id = doc.program.rungs[0].elements[0].id;
     doc.selected_element_ids = vec![branch_id, id3];
     doc.selected_element_id = Some(id3);
 
-    // Insert in Series Right (ต่ออนุกรม ถัดไป)
+    // Insert in Series Right (After)
     let id_ser = 5;
     let elem_ser = LadderElement::new_contact(id_ser, "X_SER", "SER", ContactMode::NormallyOpen);
     doc.insert_series_to_selection(elem_ser, true);
@@ -399,7 +393,7 @@ fn test_group_selection_parallel_and_series_insertion() {
     assert_eq!(doc.program.rungs[0].elements[1].name, "X02");
     assert_eq!(doc.program.rungs[0].elements[2].name, "X_SER");
 
-    // Insert in Series Left (ต่ออนุกรม ก่อนหน้า)
+    // Insert in Series Left (Before)
     doc.selected_element_ids = vec![branch_id];
     let id_front = 6;
     let elem_front = LadderElement::new_contact(id_front, "X_FRONT", "FRONT", ContactMode::NormallyOpen);
@@ -2591,5 +2585,63 @@ END_PROGRAM
     let sim_uart_tx = sim.take_uart_tx();
     assert_eq!(sim_uart_tx, vm_uart_tx, "UART TX stream mismatch between Simulator and VM");
     assert!(!sim_uart_tx.is_empty());
+}
+
+#[test]
+fn test_global_symbol_table_single_source_of_truth() {
+    let mut doc = Document::new();
+
+    // The demo program has 3 rungs with %IX0.0 (START_PB), %QX0.0 (MOTOR_RUN), %IX0.1 (STOP_PB), %QX0.1 (LAMP_RUN), %QX0.2 (ALARM_BUZZER)
+    // Verify initial symbol resolution from Global Symbol Table
+    assert_eq!(doc.resolve_symbol_for_address("%IX0.0"), Some("START_PB".to_string()));
+    assert_eq!(doc.resolve_symbol_for_address("X0"), Some("START_PB".to_string()));
+    assert_eq!(doc.resolve_symbol_for_address("%QX0.0"), Some("MOTOR_RUN".to_string()));
+
+    // Verify uniqueness check
+    assert!(doc.program.symbols.is_symbol_taken_by_other("START_PB", "%IX0.1"));
+    assert!(!doc.program.symbols.is_symbol_taken_by_other("START_PB", "%IX0.0"));
+    assert!(!doc.program.symbols.is_symbol_taken_by_other("START_PB", "X0"));
+
+    // Multiple elements in the demo program reference %QX0.0 (MOTOR_RUN):
+    // Rung 0 has Contact %QX0.0 and Coil %QX0.0, Rung 1 has Contact %QX0.0, Rung 2 has Contact %QX0.0!
+    let usages = doc.find_address_usages("%QX0.0");
+    assert_eq!(usages.len(), 4, "Should find 4 references to %QX0.0 in demo program");
+
+    // Single Source of Truth Update: Rename MOTOR_RUN to PUMP_MAIN
+    let updated_count = doc.set_global_symbol("%QX0.0", "PUMP_MAIN", Some("Primary Coolant Pump"));
+    assert_eq!(updated_count, 4, "All 4 elements referencing %QX0.0 should be updated");
+
+    // Verify Global Symbol Table now has PUMP_MAIN
+    assert_eq!(doc.resolve_symbol_for_address("%QX0.0"), Some("PUMP_MAIN".to_string()));
+    assert_eq!(doc.resolve_symbol_for_address("Y0"), Some("PUMP_MAIN".to_string()));
+
+    // Verify all 4 elements in ladder have symbol == PUMP_MAIN
+    for rung in &doc.program.rungs {
+        for el in &rung.elements {
+            if el.name == "%QX0.0" {
+                assert_eq!(el.symbol, "PUMP_MAIN");
+                assert_eq!(doc.resolve_element_symbol(el), "PUMP_MAIN");
+            }
+            for path in &el.branch_paths {
+                for sub in path {
+                    if sub.name == "%QX0.0" {
+                        assert_eq!(sub.symbol, "PUMP_MAIN");
+                        assert_eq!(doc.resolve_element_symbol(sub), "PUMP_MAIN");
+                    }
+                }
+            }
+        }
+    }
+
+    // Verify IO mapping table is also updated
+    let io_y0 = doc.program.io_mappings.iter().find(|m| m.plc_address == "Y0" || m.iec_address == "%QX0.0");
+    assert!(io_y0.is_some());
+    assert_eq!(io_y0.unwrap().symbol, "PUMP_MAIN");
+
+    // Verify inserting a new element with %QX0.0 automatically inherits PUMP_MAIN
+    let new_contact = LadderElement::new_contact(999, "%QX0.0", "", ContactMode::NormallyOpen);
+    doc.insert_element(new_contact, InsertPosition::AppendRung);
+    let inserted = doc.element_by_id(999).expect("Element 999 should be inserted");
+    assert_eq!(inserted.symbol, "PUMP_MAIN");
 }
 

@@ -106,10 +106,10 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                         save_w,
                         palette,
                     )
-                    .on_hover_text("Save IEC 61131-3 IL (.il)")
+                    .on_hover_text("Save Program (Ctrl+S)")
                     .clicked()
                     {
-                        app.save_program_dialog();
+                        app.save_or_save_as();
                     }
 
                     toolbar_divider(ui, palette);

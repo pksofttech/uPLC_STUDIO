@@ -280,17 +280,14 @@ pub enum SchematicStyle {
     DinEuropean,
     /// Control Panel Wiring: Switch Push Button —○-┴-○— / Coil Pilot Lamp —( ⨂ )—
     PushBtnPilot,
-    /// Industrial Field / Automation: Switch Toggle Switch / Coil Solenoid Valve —[ ⧖ ]—
-    ToggleSolenoid,
 }
 
 impl SchematicStyle {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 4] = [
         Self::IecStandard,
         Self::JicNema,
         Self::DinEuropean,
         Self::PushBtnPilot,
-        Self::ToggleSolenoid,
     ];
 
     pub fn label(&self) -> &'static str {
@@ -299,7 +296,6 @@ impl SchematicStyle {
             Self::JicNema => "JIC / NEMA American (—○/○— / —[ M ]—)",
             Self::DinEuropean => "European DIN / JIS (—●/ — / —○—)",
             Self::PushBtnPilot => "Push Button & Pilot Lamp",
-            Self::ToggleSolenoid => "Toggle Switch & Solenoid Valve",
         }
     }
 
@@ -309,7 +305,6 @@ impl SchematicStyle {
             Self::JicNema => "JIC —[ ]—",
             Self::DinEuropean => "DIN —○—",
             Self::PushBtnPilot => "Panel —(⨂)—",
-            Self::ToggleSolenoid => "Field —[⧖]—",
         }
     }
 
@@ -319,7 +314,6 @@ impl SchematicStyle {
             Self::JicNema => "American JIC / NEMA (Contacts: —○/○—, Coils: —[ M ]—)",
             Self::DinEuropean => "European DIN EN 60617 & Japanese JIS (Contacts: —●/ —, Coils: —○—)",
             Self::PushBtnPilot => "Control panel representation (Push buttons & illuminated lamps)",
-            Self::ToggleSolenoid => "Industrial automation (Toggle switches & solenoid valves)",
         }
     }
 
@@ -329,7 +323,6 @@ impl SchematicStyle {
             Self::JicNema => ContactStyle::JicSchematic,
             Self::DinEuropean => ContactStyle::DinEuropean,
             Self::PushBtnPilot => ContactStyle::PushButton,
-            Self::ToggleSolenoid => ContactStyle::ToggleSwitch,
         }
     }
 
@@ -339,7 +332,6 @@ impl SchematicStyle {
             Self::JicNema => CoilStyle::NemaBox,
             Self::DinEuropean => CoilStyle::CircleRelay,
             Self::PushBtnPilot => CoilStyle::PilotLight,
-            Self::ToggleSolenoid => CoilStyle::SolenoidValve,
         }
     }
 }
@@ -772,11 +764,122 @@ impl IOPortMapping {
     }
 }
 
+/// A record representing a symbol in the Global Symbol Table (Single Source of Truth).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SymbolRecord {
+    pub address: String,       // canonical address or IEC / PLC address (e.g. "%IX0.0", "%QX0.0", "M0", "T0", etc.)
+    pub symbol: String,        // user-friendly tag name e.g. "START_PB"
+    #[serde(default)]
+    pub comment: String,
+    #[serde(default = "default_symbol_datatype")]
+    pub data_type: String,
+}
+
+fn default_symbol_datatype() -> String {
+    "BOOL".to_string()
+}
+
+/// Global Symbol Table serving as the Single Source of Truth for element symbols and tag names across the PLC project.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct GlobalSymbolTable {
+    #[serde(default)]
+    pub records: Vec<SymbolRecord>,
+}
+
+impl GlobalSymbolTable {
+    pub fn new() -> Self {
+        Self { records: Vec::new() }
+    }
+
+    /// Retrieve symbol name by address (case-insensitive, checking raw and canonical address).
+    pub fn get_symbol(&self, address: &str) -> Option<&str> {
+        let clean = address.trim();
+        if clean.is_empty() {
+            return None;
+        }
+        let canon = LadderProgram::canonical_address(clean);
+        for r in &self.records {
+            if r.address.eq_ignore_ascii_case(clean) || r.address.eq_ignore_ascii_case(&canon) {
+                if !r.symbol.is_empty() {
+                    return Some(&r.symbol);
+                }
+            }
+        }
+        None
+    }
+
+    /// Retrieve full symbol record by address.
+    pub fn get_record(&self, address: &str) -> Option<&SymbolRecord> {
+        let clean = address.trim();
+        if clean.is_empty() {
+            return None;
+        }
+        let canon = LadderProgram::canonical_address(clean);
+        self.records.iter().find(|r| {
+            r.address.eq_ignore_ascii_case(clean) || r.address.eq_ignore_ascii_case(&canon)
+        })
+    }
+
+    /// Check if a symbol name is already in use by another address.
+    pub fn is_symbol_taken_by_other(&self, symbol: &str, current_address: &str) -> bool {
+        let sym_trimmed = symbol.trim();
+        if sym_trimmed.is_empty() {
+            return false;
+        }
+        let clean_addr = current_address.trim();
+        let canon_addr = LadderProgram::canonical_address(clean_addr);
+        self.records.iter().any(|r| {
+            r.symbol.eq_ignore_ascii_case(sym_trimmed)
+                && !r.address.eq_ignore_ascii_case(clean_addr)
+                && !r.address.eq_ignore_ascii_case(&canon_addr)
+        })
+    }
+
+    /// Set or update the symbol for an address.
+    pub fn set_symbol(&mut self, address: &str, symbol: &str, comment: Option<&str>) {
+        let clean_addr = address.trim();
+        if clean_addr.is_empty() {
+            return;
+        }
+        let canon = LadderProgram::canonical_address(clean_addr);
+        let sym_clean = symbol.trim().to_string();
+
+        if let Some(existing) = self.records.iter_mut().find(|r| {
+            r.address.eq_ignore_ascii_case(clean_addr) || r.address.eq_ignore_ascii_case(&canon)
+        }) {
+            existing.symbol = sym_clean;
+            if let Some(c) = comment {
+                existing.comment = c.to_string();
+            }
+        } else {
+            self.records.push(SymbolRecord {
+                address: canon,
+                symbol: sym_clean,
+                comment: comment.unwrap_or("").to_string(),
+                data_type: default_symbol_datatype(),
+            });
+        }
+    }
+
+    /// Remove a symbol record by address.
+    pub fn remove_symbol(&mut self, address: &str) -> bool {
+        let clean = address.trim();
+        let canon = LadderProgram::canonical_address(clean);
+        let len_before = self.records.len();
+        self.records.retain(|r| {
+            !r.address.eq_ignore_ascii_case(clean) && !r.address.eq_ignore_ascii_case(&canon)
+        });
+        self.records.len() < len_before
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LadderProgram {
     pub title: String,
     pub hardware: String,      // e.g. "Arduino UNO R3"
     pub rungs: Vec<Rung>,
+    #[serde(default)]
+    pub symbols: GlobalSymbolTable,
     pub io_mappings: Vec<IOPortMapping>,
     pub next_element_id: u64,
 }
@@ -793,6 +896,7 @@ impl LadderProgram {
             title: "Ladder Program By LaduinoPLC [PksofttecH]".to_string(),
             hardware: "Arduino UNO R3".to_string(),
             rungs: vec![Rung::new(0)],
+            symbols: GlobalSymbolTable::default(),
             io_mappings: Vec::new(),
             next_element_id: 1,
         }
@@ -961,13 +1065,16 @@ impl LadderProgram {
             is_energized: false,
         };
 
-        Self {
+        let mut prog = Self {
             title: "Ladder Program By LaduinoPLC [PksofttecH]".to_string(),
             hardware: "Arduino UNO R3".to_string(),
             rungs: vec![rung0, rung1, rung2],
+            symbols: GlobalSymbolTable::default(),
             io_mappings: Self::default_arduino_io(),
             next_element_id: id_counter + 1,
-        }
+        };
+        prog.sync_symbols_from_elements_and_io();
+        prog
     }
 
     pub fn add_rung(&mut self) -> usize {
@@ -1034,9 +1141,118 @@ impl LadderProgram {
         }
     }
 
+    /// Return canonical IEC / standard address string (e.g. "X0" -> "%IX0.0", "Y1" -> "%QX0.1", "M0" -> "%MX0.0", "V0" -> "%MW0")
+    pub fn canonical_address(addr: &str) -> String {
+        let trimmed = addr.trim();
+        let upper = trimmed.to_ascii_uppercase();
+        if upper.starts_with('%') {
+            upper
+        } else if let Some(rest) = upper.strip_prefix('X').or_else(|| upper.strip_prefix('I')) {
+            if let Ok(n) = rest.parse::<usize>() {
+                format!("%IX{}.{}", n / 8, n % 8)
+            } else {
+                upper
+            }
+        } else if let Some(rest) = upper.strip_prefix('Y').or_else(|| upper.strip_prefix('Q')) {
+            if let Ok(n) = rest.parse::<usize>() {
+                format!("%QX{}.{}", n / 8, n % 8)
+            } else {
+                upper
+            }
+        } else if let Some(rest) = upper.strip_prefix('M') {
+            if let Ok(n) = rest.parse::<usize>() {
+                format!("%MX{}.{}", n / 8, n % 8)
+            } else {
+                upper
+            }
+        } else if let Some(rest) = upper.strip_prefix('V').or_else(|| upper.strip_prefix('R')).or_else(|| upper.strip_prefix('D')) {
+            if let Ok(n) = rest.parse::<usize>() {
+                format!("%MW{}", n)
+            } else {
+                upper
+            }
+        } else {
+            upper
+        }
+    }
+
+    /// Resolve symbol for an address: checks GlobalSymbolTable first, then io_mappings.
+    pub fn resolve_symbol(&self, addr: &str) -> Option<&str> {
+        let clean = addr.trim();
+        if clean.is_empty() {
+            return None;
+        }
+        if let Some(sym) = self.symbols.get_symbol(clean) {
+            if !sym.is_empty() {
+                return Some(sym);
+            }
+        }
+        let canon = Self::canonical_address(clean);
+        for io in &self.io_mappings {
+            if io.plc_address.eq_ignore_ascii_case(clean)
+                || io.iec_address.eq_ignore_ascii_case(clean)
+                || io.plc_address.eq_ignore_ascii_case(&canon)
+                || io.iec_address.eq_ignore_ascii_case(&canon)
+            {
+                if !io.symbol.is_empty() {
+                    return Some(&io.symbol);
+                }
+            }
+        }
+        None
+    }
+
+    /// Harvest and synchronize symbols from `io_mappings` and all ladder elements
+    /// into the GlobalSymbolTable (`self.symbols`).
+    pub fn sync_symbols_from_elements_and_io(&mut self) {
+        for io in &self.io_mappings {
+            if !io.symbol.is_empty() {
+                let addr = if !io.iec_address.is_empty() {
+                    &io.iec_address
+                } else {
+                    &io.plc_address
+                };
+                if self.symbols.get_symbol(addr).is_none() {
+                    self.symbols.set_symbol(addr, &io.symbol, Some(&io.description));
+                }
+            }
+        }
+
+        fn harvest_from_elem(el: &LadderElement, syms: &mut GlobalSymbolTable) {
+            if el.element_type != TypeTag::Branch {
+                if !el.symbol.is_empty() && !el.symbol.eq_ignore_ascii_case(&el.name) {
+                    if syms.get_symbol(&el.name).is_none() {
+                        syms.set_symbol(&el.name, &el.symbol, Some(&el.comment));
+                    }
+                }
+            }
+            for path in &el.branch_paths {
+                for sub in path {
+                    harvest_from_elem(sub, syms);
+                }
+            }
+        }
+
+        for rung in &self.rungs {
+            for el in &rung.elements {
+                harvest_from_elem(el, &mut self.symbols);
+            }
+        }
+    }
+
     /// Resolve an element's address and symbol into standard IEC 61131-3 address and symbol.
     pub fn resolve_iec_and_symbol(&self, addr: &str, elem_symbol: &str) -> (String, String) {
         let trimmed = addr.trim();
+        let canon = Self::canonical_address(trimmed);
+
+        // 1. Check GlobalSymbolTable first (Single Source of Truth)
+        if let Some(sym) = self.symbols.get_symbol(trimmed) {
+            if !sym.is_empty() {
+                return (canon, sym.to_string());
+            }
+        }
+
+        // 2. Check I/O mappings
         let mut in_idx = 0;
         let mut out_idx = 0;
         for io in &self.io_mappings {
@@ -1066,43 +1282,12 @@ impl LadderProgram {
             }
         }
 
-        let upper = trimmed.to_ascii_uppercase();
-        let iec = if upper.starts_with('%') {
-            upper
-        } else if let Some(rest) = upper.strip_prefix('X').or_else(|| upper.strip_prefix('I')) {
-            if let Ok(n) = rest.parse::<usize>() {
-                format!("%IX{}.{}", n / 8, n % 8)
-            } else {
-                upper
-            }
-        } else if let Some(rest) = upper.strip_prefix('Y').or_else(|| upper.strip_prefix('Q')) {
-            if let Ok(n) = rest.parse::<usize>() {
-                format!("%QX{}.{}", n / 8, n % 8)
-            } else {
-                upper
-            }
-        } else if let Some(rest) = upper.strip_prefix('M') {
-            if let Ok(n) = rest.parse::<usize>() {
-                format!("%MX{}.{}", n / 8, n % 8)
-            } else {
-                upper
-            }
-        } else if let Some(rest) = upper.strip_prefix('V').or_else(|| upper.strip_prefix('R')) {
-            if let Ok(n) = rest.parse::<usize>() {
-                format!("%MW{}", n)
-            } else {
-                upper
-            }
-        } else {
-            trimmed.to_string()
-        };
-
         let sym = if !elem_symbol.trim().is_empty() {
             elem_symbol.trim().to_string()
         } else {
-            iec.clone()
+            canon.clone()
         };
-        (iec, sym)
+        (canon, sym)
     }
 
     /// Collect all unique leaf elements in the program with resolved (raw_name, iec_address, symbol, el_type, val_str)

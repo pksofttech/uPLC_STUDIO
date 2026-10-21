@@ -12,8 +12,8 @@ pub use bytecode::{
 };
 pub use document::Document;
 pub use ladder::{
-    parse_int_literal, CoilMode, CoilStyle, ContactMode, ContactStyle, FbParams, IOPortMapping, IecVarEntry, InsertPosition,
-    LadderElement, LadderProgram, Rung, SchematicStyle, TypeTag,
+    parse_int_literal, CoilMode, CoilStyle, ContactMode, ContactStyle, FbParams, GlobalSymbolTable, IOPortMapping,
+    IecVarEntry, InsertPosition, LadderElement, LadderProgram, Rung, SchematicStyle, SymbolRecord, TypeTag,
 };
 pub use il_format::{IlParser, LdParser};
 pub use shape::{ColorRgb, Point2D, Shape, ShapeKind};

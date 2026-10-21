@@ -946,13 +946,16 @@ impl IlParser {
             Self::enrich_elements_with_symbols(&mut rung.elements, &var_symbols);
         }
 
-        Ok(LadderProgram {
+        let mut prog = LadderProgram {
             title: "Ladder Program (IEC 61131-3 IL) [PksofttecH]".to_string(),
             hardware,
             rungs,
+            symbols: crate::ladder::GlobalSymbolTable::default(),
             io_mappings,
             next_element_id: next_id + 1,
-        })
+        };
+        prog.sync_symbols_from_elements_and_io();
+        Ok(prog)
     }
 
     fn enrich_elements_with_symbols(
@@ -1733,13 +1736,16 @@ impl IlParser {
             io_mappings = LadderProgram::default_arduino_io();
         }
 
-        Ok(LadderProgram {
+        let mut prog = LadderProgram {
             title: "Ladder Program By LaduinoPLC [PksofttecH]".to_string(),
             hardware,
             rungs,
+            symbols: crate::ladder::GlobalSymbolTable::default(),
             io_mappings,
             next_element_id: next_id + 1,
-        })
+        };
+        prog.sync_symbols_from_elements_and_io();
+        Ok(prog)
     }
 
     fn parse_single_element(line: &str, next_id: &mut u64) -> Option<LadderElement> {

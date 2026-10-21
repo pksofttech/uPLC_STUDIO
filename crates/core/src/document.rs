@@ -448,23 +448,108 @@ impl Document {
 
     /// Return all occurrences `(rung_idx, elem_id, element_type)` of a given PLC address
     pub fn find_address_usages(&self, addr: &str) -> Vec<(usize, u64, TypeTag)> {
+        let clean = addr.trim();
+        let canon = LadderProgram::canonical_address(clean);
         let mut usages = Vec::new();
         for (r_idx, rung) in self.program.rungs.iter().enumerate() {
             for el in &rung.elements {
                 if el.element_type == TypeTag::Branch {
                     for path in &el.branch_paths {
                         for sub in path {
-                            if sub.name.eq_ignore_ascii_case(addr) {
+                            if sub.name.eq_ignore_ascii_case(clean)
+                                || sub.name.eq_ignore_ascii_case(&canon)
+                                || LadderProgram::canonical_address(&sub.name).eq_ignore_ascii_case(&canon)
+                            {
                                 usages.push((r_idx, sub.id, sub.element_type));
                             }
                         }
                     }
-                } else if el.name.eq_ignore_ascii_case(addr) {
+                } else if el.name.eq_ignore_ascii_case(clean)
+                    || el.name.eq_ignore_ascii_case(&canon)
+                    || LadderProgram::canonical_address(&el.name).eq_ignore_ascii_case(&canon)
+                {
                     usages.push((r_idx, el.id, el.element_type));
                 }
             }
         }
         usages
+    }
+
+    /// Resolve symbol name for an address from GlobalSymbolTable or IO mappings.
+    pub fn resolve_symbol_for_address(&self, address: &str) -> Option<String> {
+        self.program.resolve_symbol(address).map(|s| s.to_string())
+    }
+
+    /// Resolve display symbol for an element: checks GlobalSymbolTable, then IO table, then elem.symbol.
+    pub fn resolve_element_symbol<'a>(&'a self, elem: &'a LadderElement) -> &'a str {
+        if let Some(sym) = self.program.resolve_symbol(&elem.name) {
+            sym
+        } else if !elem.symbol.is_empty() {
+            &elem.symbol
+        } else {
+            &elem.name
+        }
+    }
+
+    /// Set symbol in Global Symbol Table (Single Source of Truth) and cascade update across all
+    /// elements in the project that reference this address, as well as the IO mapping table.
+    pub fn set_global_symbol(&mut self, address: &str, symbol: &str, comment: Option<&str>) -> usize {
+        let clean_addr = address.trim();
+        if clean_addr.is_empty() {
+            return 0;
+        }
+        let canon = LadderProgram::canonical_address(clean_addr);
+        let clean_sym = symbol.trim();
+
+        // 1. Update GlobalSymbolTable
+        self.program.symbols.set_symbol(clean_addr, clean_sym, comment);
+
+        // 2. Synchronize IO mappings table
+        for io in &mut self.program.io_mappings {
+            if io.plc_address.eq_ignore_ascii_case(clean_addr)
+                || io.iec_address.eq_ignore_ascii_case(clean_addr)
+                || io.plc_address.eq_ignore_ascii_case(&canon)
+                || io.iec_address.eq_ignore_ascii_case(&canon)
+            {
+                io.symbol = clean_sym.to_string();
+                if let Some(c) = comment {
+                    if !c.is_empty() {
+                        io.description = c.to_string();
+                    }
+                }
+            }
+        }
+
+        // 3. Cascade update all matching elements across all rungs (including parallel branches)
+        let mut count = 0;
+        fn update_elem_sym(el: &mut LadderElement, raw_addr: &str, canon_addr: &str, new_sym: &str, count: &mut usize) {
+            if el.element_type != TypeTag::Branch {
+                if el.name.eq_ignore_ascii_case(raw_addr)
+                    || el.name.eq_ignore_ascii_case(canon_addr)
+                    || LadderProgram::canonical_address(&el.name).eq_ignore_ascii_case(canon_addr)
+                {
+                    el.symbol = new_sym.to_string();
+                    *count += 1;
+                }
+            }
+            for path in &mut el.branch_paths {
+                for sub in path {
+                    update_elem_sym(sub, raw_addr, canon_addr, new_sym, count);
+                }
+            }
+        }
+
+        for rung in &mut self.program.rungs {
+            for el in &mut rung.elements {
+                update_elem_sym(el, clean_addr, &canon, clean_sym, &mut count);
+            }
+        }
+
+        if count > 0 {
+            self.is_dirty = true;
+        }
+
+        count
     }
 
     /// Navigate left/right across elements in the currently selected rung
@@ -783,7 +868,14 @@ impl Document {
         self.insert_existing_element(elem, pos);
     }
 
-    fn insert_existing_element(&mut self, elem: LadderElement, pos: InsertPosition) {
+    fn insert_existing_element(&mut self, mut elem: LadderElement, pos: InsertPosition) {
+        // Resolve symbol from Global Symbol Table (Single Source of Truth) if present
+        if let Some(sym) = self.program.resolve_symbol(&elem.name) {
+            if !sym.is_empty() {
+                elem.symbol = sym.to_string();
+            }
+        }
+
         let elem_id = elem.id;
         let branch_alloc_id = self.program.alloc_id();
 
@@ -968,7 +1060,8 @@ impl Document {
     }
 
     pub fn load_from_il_str(&mut self, content: &str) -> Result<(), String> {
-        let prog = IlParser::parse(content)?;
+        let mut prog = IlParser::parse(content)?;
+        prog.sync_symbols_from_elements_and_io();
         self.push_undo_snapshot();
         self.program = prog;
         self.simulator.reset(&mut self.program);

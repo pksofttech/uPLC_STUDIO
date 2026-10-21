@@ -1930,6 +1930,7 @@ impl CanvasViewport {
                             }
                             _ => {}
                         }
+                        doc.is_dirty = true;
                     }
                 }
                 CanvasAction::ToggleSelectedModes => {
@@ -2730,15 +2731,16 @@ impl CanvasViewport {
                     }
 
                     ContactStyle::DinEuropean => {
-                        // --- European Standard DIN EN 60617 (Hinged Lever Arm) ---
-                        let gap = 15.0 * self.zoom;
+                        // --- European Standard DIN EN 60617 / Industrial Ladder (Reference: RRun_Auto & Cclose_gate) ---
+                        // Left terminal has filled hinge dot (●).
+                        // NO: Blade angles UP-RIGHT (/) towards vertical contact stub pointing UP.
+                        // NC: Blade angles DOWN-RIGHT (\) towards vertical contact stub pointing DOWN.
+                        let gap = 11.0 * self.zoom;
                         let c_left = pos2(center.x - gap, mid_y);
                         let c_right = pos2(center.x + gap, mid_y);
 
                         self.draw_power_wire(painter, pos2(x0, mid_y), c_left, power_in && sim_active, palette);
                         self.draw_power_wire(painter, c_right, pos2(x0 + w, mid_y), is_energized, palette);
-
-                        painter.circle_filled(c_left, 2.8 * self.zoom, contact_color);
 
                         let is_closed_now = if is_nc {
                             if sim_active { is_closed } else { true }
@@ -2746,20 +2748,64 @@ impl CanvasViewport {
                             if sim_active { is_closed } else { false }
                         };
 
+                        let blade_stroke = Stroke::new(2.4 * self.zoom, contact_color);
+                        let stub_stroke = Stroke::new(2.0 * self.zoom, contact_color);
+                        let stub_h = 7.5 * self.zoom;
+
+                        // Left hinge terminal dot (●)
+                        let dot_color = if power_in && sim_active {
+                            palette.wire_energized
+                        } else {
+                            contact_color
+                        };
+                        painter.circle_filled(c_left, 3.0 * self.zoom, dot_color);
+
                         if is_nc {
-                            painter.line_segment([c_right, pos2(c_right.x, mid_y - 6.0 * self.zoom)], Stroke::new(2.0 * self.zoom, contact_color));
+                            // --- Normally Closed (NC): Blade angles DOWN-RIGHT (\), stub points DOWN ---
+                            let stub_bottom = pos2(c_right.x, mid_y + stub_h);
+                            // Right vertical stub pointing DOWN
+                            painter.line_segment([c_right, stub_bottom], stub_stroke);
+
                             if is_closed_now {
-                                painter.line_segment([c_left, pos2(c_right.x, mid_y - 6.0 * self.zoom)], Stroke::new(2.4 * self.zoom, contact_color));
+                                // Resting / Closed: Blade connects from left dot to bottom of stub
+                                painter.line_segment([c_left, pos2(stub_bottom.x + 1.5 * self.zoom, stub_bottom.y)], blade_stroke);
                             } else {
-                                painter.line_segment([c_left, pos2(c_right.x - 3.0 * self.zoom, mid_y - 14.0 * self.zoom)], Stroke::new(2.4 * self.zoom, contact_color));
+                                // Actuated / Open: Blade lifts UP away from the bottom stub
+                                let blade_tip = pos2(c_right.x - 3.0 * self.zoom, mid_y - 6.0 * self.zoom);
+                                painter.line_segment([c_left, blade_tip], blade_stroke);
                             }
                         } else {
-                            painter.line_segment([c_right, pos2(c_right.x - 4.0 * self.zoom, mid_y)], Stroke::new(2.0 * self.zoom, contact_color));
+                            // --- Normally Open (NO): Blade angles UP-RIGHT (/), stub points UP ---
+                            let stub_top = pos2(c_right.x, mid_y - stub_h);
+                            // Right vertical stub pointing UP
+                            painter.line_segment([c_right, stub_top], stub_stroke);
+
                             if is_closed_now {
-                                painter.line_segment([c_left, pos2(c_right.x - 4.0 * self.zoom, mid_y)], Stroke::new(2.4 * self.zoom, contact_color));
+                                // Actuated / Closed: Blade connects from left dot to top of stub
+                                painter.line_segment([c_left, pos2(stub_top.x + 1.5 * self.zoom, stub_top.y)], blade_stroke);
                             } else {
-                                painter.line_segment([c_left, pos2(c_right.x - 3.0 * self.zoom, mid_y - 12.0 * self.zoom)], Stroke::new(2.4 * self.zoom, contact_color));
+                                // Resting / Open: Blade tilted up, open above the stub
+                                let blade_tip = pos2(c_right.x - 2.5 * self.zoom, mid_y - stub_h - 7.0 * self.zoom);
+                                painter.line_segment([c_left, blade_tip], blade_stroke);
                             }
+                        }
+
+                        if elem.contact_mode == ContactMode::PositiveTransition {
+                            painter.text(
+                                pos2(center.x, mid_y + 11.0 * self.zoom),
+                                Align2::CENTER_CENTER,
+                                "P",
+                                self.font_mono(11.0),
+                                contact_color,
+                            );
+                        } else if elem.contact_mode == ContactMode::NegativeTransition {
+                            painter.text(
+                                pos2(center.x, mid_y + 11.0 * self.zoom),
+                                Align2::CENTER_CENTER,
+                                "N",
+                                self.font_mono(11.0),
+                                contact_color,
+                            );
                         }
                     }
 
@@ -3003,9 +3049,9 @@ impl CanvasViewport {
 
                         if is_on {
                             painter.circle_filled(center, coil_r + 4.0 * self.zoom, palette.wire_glow);
-                            painter.circle_filled(center, coil_r - 2.0 * self.zoom, Color32::from_rgba_unmultiplied(45, 215, 95, 80));
+                            painter.circle_filled(center, coil_r, Color32::from_rgba_unmultiplied(45, 215, 95, 80));
                         } else {
-                            painter.circle_filled(center, coil_r - 2.0 * self.zoom, palette.card_bg);
+                            painter.circle_filled(center, coil_r, palette.card_bg);
                         }
                         painter.circle_stroke(center, coil_r, Stroke::new(2.8 * self.zoom, coil_color));
 

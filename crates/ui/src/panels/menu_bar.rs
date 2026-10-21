@@ -65,7 +65,11 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 }
             });
             ui.separator();
-            if ui.button("Save Program (Ctrl+S)...").clicked() {
+            if ui.button("Save Program (Ctrl+S)").clicked() {
+                app.save_or_save_as();
+                ui.close();
+            }
+            if ui.button("Save Program As (.il)...").clicked() {
                 app.save_program_dialog();
                 ui.close();
             }

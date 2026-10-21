@@ -300,6 +300,7 @@ pub struct CanvasApp {
     pub online_worker_rx: Option<Receiver<(PlcStatusSnapshot, String)>>,
     pub online_worker_cmd_tx: Option<mpsc::Sender<Vec<u8>>>,
     pub last_folder: Option<PathBuf>,
+    pub is_example_template: bool,
     pub pending_action: Option<PendingAction>,
     pub allow_exit: bool,
     pub current_window_title: String,
@@ -378,6 +379,7 @@ impl Default for CanvasApp {
             online_worker_rx: None,
             online_worker_cmd_tx: None,
             last_folder: settings.last_folder,
+            is_example_template: false,
             pending_action: None,
             allow_exit: false,
             current_window_title: String::new(),
@@ -865,24 +867,40 @@ impl CanvasApp {
         }
     }
 
-    /// Return the directory where file dialogs should open:
-    /// Priority: 1. `last_folder` (if exists), 2. `example` folder, 3. current working directory.
-    pub fn dialog_directory(&self) -> PathBuf {
-        if let Some(ref folder) = self.last_folder {
-            if folder.exists() && folder.is_dir() {
-                return folder.clone();
+    /// Return whether the active document is a bundled example template or loaded from an example directory.
+    pub fn is_example_file(&self) -> bool {
+        if self.is_example_template {
+            return true;
+        }
+        if let Some(ref path) = self.doc.file_path {
+            let norm = path.replace('\\', "/");
+            if norm.starts_with("example/") || norm.starts_with("./example/") || norm.contains("/example/") {
+                return true;
             }
         }
-        let example_dir = std::path::Path::new("example");
-        if example_dir.exists() {
-            return example_dir.to_path_buf();
+        false
+    }
+
+    /// Return the directory where file dialogs should open:
+    /// Priority: 1. `last_folder` (if exists and not example directory), 2. current working directory.
+    pub fn dialog_directory(&self) -> PathBuf {
+        if let Some(ref folder) = self.last_folder {
+            let s = folder.to_string_lossy().replace('\\', "/");
+            if folder.exists() && folder.is_dir() && s != "example" && !s.ends_with("/example") {
+                return folder.clone();
+            }
         }
         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
     }
 
     /// Record the parent directory of a selected file as `last_folder` and persist it.
+    /// Does not store bundled example directories as `last_folder` to keep user projects clean.
     pub fn set_last_folder_from_path(&mut self, file_path: &std::path::Path) {
         if let Some(parent) = file_path.parent() {
+            let s = parent.to_string_lossy().replace('\\', "/");
+            if s == "example" || s == "./example" || s.ends_with("/example") {
+                return;
+            }
             if parent.exists() {
                 self.last_folder = Some(parent.to_path_buf());
                 self.save_settings();
@@ -915,6 +933,7 @@ impl CanvasApp {
         }
         self.doc.file_path = Some(path.display().to_string());
         self.doc.is_dirty = false;
+        self.is_example_template = false;
         self.add_recent_file(&path.display().to_string());
         Ok(())
     }
@@ -1062,6 +1081,7 @@ impl CanvasApp {
             if std::fs::write(&path, il_text).is_ok() {
                 self.doc.file_path = Some(path.display().to_string());
                 self.doc.is_dirty = false;
+                self.is_example_template = false;
                 self.add_recent_file(&path.display().to_string());
                 return true;
             }
@@ -1086,6 +1106,7 @@ impl CanvasApp {
                 if std::fs::write(&path, json).is_ok() {
                     self.doc.file_path = Some(path.display().to_string());
                     self.doc.is_dirty = false;
+                    self.is_example_template = false;
                     self.add_recent_file(&path.display().to_string());
                     return true;
                 }
@@ -1096,12 +1117,18 @@ impl CanvasApp {
 
     /// Quick-save directly to existing file_path if known; otherwise open Save dialog. Returns true if saved.
     pub fn save_or_save_as(&mut self) -> bool {
+        // If current document is a demo/example template, do not overwrite original template. Prompt Save dialog.
+        if self.is_example_file() {
+            return self.save_program_dialog();
+        }
+
         if let Some(current_path) = self.doc.file_path.clone() {
             let path = std::path::Path::new(&current_path);
             if path.extension().and_then(|e| e.to_str()) == Some("json") {
                 if let Ok(json) = serde_json::to_string_pretty(&self.doc) {
                     if std::fs::write(path, json).is_ok() {
                         self.doc.is_dirty = false;
+                        self.is_example_template = false;
                         self.add_recent_file(&current_path);
                         return true;
                     }
@@ -1110,6 +1137,7 @@ impl CanvasApp {
                 let il_text = self.doc.export_to_il_str();
                 if std::fs::write(path, il_text).is_ok() {
                     self.doc.is_dirty = false;
+                    self.is_example_template = false;
                     self.add_recent_file(&current_path);
                     return true;
                 }
@@ -1129,6 +1157,7 @@ impl CanvasApp {
                 let _ = self.doc.load_from_il_str(&content);
                 self.doc.file_path = Some(path.display().to_string());
                 self.doc.is_dirty = false;
+                self.is_example_template = false;
             }
         }
     }
@@ -1191,15 +1220,18 @@ impl CanvasApp {
     /// Load example file directly into document.
     pub fn load_example_file(&mut self, path_str: &str) {
         let content = std::fs::read_to_string(path_str)
+            .or_else(|_| std::fs::read_to_string(format!("../../{}", path_str)))
             .or_else(|_| {
                 if let Ok(exe) = std::env::current_exe() {
-                    if let Some(parent) = exe.parent() {
-                        if let Ok(c) = std::fs::read_to_string(parent.join(path_str)) {
-                            return Ok(c);
+                    let mut cur = exe.parent();
+                    while let Some(dir) = cur {
+                        let candidate = dir.join(path_str);
+                        if candidate.exists() {
+                            if let Ok(c) = std::fs::read_to_string(&candidate) {
+                                return Ok(c);
+                            }
                         }
-                        if let Ok(c) = std::fs::read_to_string(parent.join("../..").join(path_str)) {
-                            return Ok(c);
-                        }
+                        cur = dir.parent();
                     }
                 }
                 Err(std::io::Error::new(std::io::ErrorKind::NotFound, "not found"))
@@ -1208,7 +1240,7 @@ impl CanvasApp {
             let _ = self.doc.load_from_il_str(&c);
             self.doc.file_path = Some(path_str.to_string());
             self.doc.is_dirty = false;
-            self.set_last_folder_from_path(std::path::Path::new(path_str));
+            self.is_example_template = true;
         }
     }
 
@@ -1239,19 +1271,20 @@ impl CanvasApp {
     /// Render Unsaved Changes modal dialog with Save, Don't Save, and Cancel options.
     pub fn render_unsaved_changes_modal(&mut self, ctx: &egui::Context) {
         let palette = self.theme.palette();
+        let is_demo = self.is_example_file();
         let file_name = self.doc.file_path.as_deref().map(|p| {
             std::path::Path::new(p)
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or(p)
-        }).unwrap_or("Untitled Program (โปรแกรมยังไม่ได้บันทึก)");
+        }).unwrap_or("Untitled Program");
 
         let action_desc = match self.pending_action.as_ref() {
-            Some(PendingAction::NewProgram) => "creating a new program / ก่อนสร้างโปรแกรมใหม่",
-            Some(PendingAction::OpenProgram) => "opening another program / ก่อนเปิดโปรแกรมใหม่",
-            Some(PendingAction::LoadExample(_)) => "loading example / ก่อนโหลดตัวอย่าง",
-            Some(PendingAction::OpenRecent(_)) => "opening a recent program / ก่อนเปิดไฟล์ล่าสุด",
-            Some(PendingAction::ExitApp) => "closing application / ก่อนออกจากโปรแกรม",
+            Some(PendingAction::NewProgram) => "creating a new program",
+            Some(PendingAction::OpenProgram) => "opening another program",
+            Some(PendingAction::LoadExample(_)) => "loading an example",
+            Some(PendingAction::OpenRecent(_)) => "opening a recent program",
+            Some(PendingAction::ExitApp) => "closing the application",
             None => "",
         };
 
@@ -1259,26 +1292,37 @@ impl CanvasApp {
         let mut do_discard = false;
         let mut do_cancel = false;
 
-        egui::Window::new("⚠ Unsaved Changes / บันทึกการเปลี่ยนแปลง")
+        egui::Window::new("⚠ Unsaved Changes")
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .fixed_size([460.0, 160.0])
+            .fixed_size([460.0, 150.0])
             .show(ctx, |ui| {
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("⚠").size(28.0).color(palette.accent_warn));
                     ui.add_space(8.0);
                     ui.vertical(|ui| {
+                        let prompt_title = if is_demo {
+                            format!("Save modified example \"{}\" as a new file?", file_name)
+                        } else {
+                            format!("Do you want to save changes to \"{}\"?", file_name)
+                        };
+                        let prompt_subtext = if is_demo {
+                            format!("This example has unsaved changes. Save it to a new file before {}?", action_desc)
+                        } else {
+                            format!("Your changes will be lost if you don't save them before {}.", action_desc)
+                        };
+
                         ui.label(
-                            RichText::new(format!("Do you want to save changes to \"{}\"?", file_name))
+                            RichText::new(prompt_title)
                                 .strong()
                                 .size(14.0)
                                 .color(palette.text_primary),
                         );
                         ui.add_space(4.0);
                         ui.label(
-                            RichText::new(format!("มีข้อมูลที่มีการเปลี่ยนแปลง ต้องการบันทึกก่อน {} หรือไม่?", action_desc))
+                            RichText::new(prompt_subtext)
                                 .size(11.5)
                                 .color(palette.symbol_subtext),
                         );
@@ -1292,21 +1336,26 @@ impl CanvasApp {
                 ui.horizontal(|ui| {
                     // Right aligned buttons: Cancel, Don't Save, Save
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Cancel (ยกเลิก)").clicked()
+                        if ui.button("Cancel").clicked()
                             || ui.input(|i| i.key_pressed(egui::Key::Escape))
                         {
                             do_cancel = true;
                         }
 
                         let discard_btn = egui::Button::new(
-                            RichText::new("Don't Save (ไม่บันทึก)").color(palette.accent_danger)
+                            RichText::new("Don't Save").color(palette.accent_danger)
                         );
                         if ui.add(discard_btn).clicked() {
                             do_discard = true;
                         }
 
+                        let save_text = if is_demo {
+                            "💾 Save As..."
+                        } else {
+                            "💾 Save"
+                        };
                         let save_btn = egui::Button::new(
-                            RichText::new("💾 Save (บันทึก)").color(Color32::WHITE)
+                            RichText::new(save_text).color(Color32::WHITE)
                         ).fill(palette.accent_ok);
                         if ui.add(save_btn).clicked()
                             || ui.input(|i| i.key_pressed(egui::Key::Enter))
@@ -1320,6 +1369,9 @@ impl CanvasApp {
         if do_save {
             if self.save_or_save_as() {
                 self.execute_pending_action(ctx);
+            } else {
+                // User cancelled the file save dialog; reset pending action so modal doesn't get trapped
+                self.pending_action = None;
             }
         } else if do_discard {
             self.doc.is_dirty = false;
@@ -1672,6 +1724,7 @@ impl CanvasApp {
 
     pub fn new_program(&mut self) {
         self.doc.clear();
+        self.is_example_template = false;
         self.elem_modal.close();
         self.canvas.context_menu_elem = None;
         self.canvas.reset_view();
@@ -1712,7 +1765,7 @@ impl eframe::App for CanvasApp {
             }
         }
 
-        // Dynamic Window Title with Dirty Marker (*)
+        // Dynamic Window Title with Dirty Marker (*) and Demo indicator
         let file_title = if let Some(ref p) = self.doc.file_path {
             std::path::Path::new(p)
                 .file_name()
@@ -1721,8 +1774,9 @@ impl eframe::App for CanvasApp {
         } else {
             "Untitled"
         };
+        let demo_tag = if self.is_example_file() { " [Demo]" } else { "" };
         let dirty_suffix = if self.doc.is_dirty { "*" } else { "" };
-        let full_title = format!("LaduinoPLC - {}{}", file_title, dirty_suffix);
+        let full_title = format!("LaduinoPLC - {}{}{}", file_title, demo_tag, dirty_suffix);
         if self.current_window_title != full_title {
             self.current_window_title = full_title.clone();
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Title(full_title));
@@ -2517,7 +2571,7 @@ impl eframe::App for CanvasApp {
                             });
                         });
 
-                    // 2. MEANINGFUL EXPLANATION / CONCEPT (สื่อความหมาย)
+                    // 2. MEANINGFUL EXPLANATION / CONCEPT
                     egui::Frame::new()
                         .fill(if palette.is_light() {
                             Color32::from_rgb(243, 244, 246)
@@ -2529,19 +2583,19 @@ impl eframe::App for CanvasApp {
                         .inner_margin(egui::Margin::symmetric(12, 9))
                         .show(ui, |ui| {
                             ui.label(
-                                RichText::new("💡 ความหมาย & วัตถุประสงค์ (Concept & Mission)")
+                                RichText::new("💡 Concept & Mission")
                                     .strong()
                                     .color(palette.accent_heading),
                             );
                             ui.add_space(3.0);
                             ui.label(
-                                RichText::new("LaduinoPLC (Ladder + Arduino + PLC) เชื่อมโยงมาตรฐานควบคุมอุตสาหกรรม (IEC 61131-3) เข้ากับบอร์ดไมโครคอนโทรลเลอร์แบบเปิด ช่วยให้วิศวกร ช่างเทคนิค และผู้สร้างสรรค์ ออกแบบ Ladder Diagram, จำลองผลล่วงหน้าแบบ Real-Time และ Flash ลงชิปฮาร์ดแวร์เพื่อใช้งานควบคุมอัตโนมัติจริงได้ทันที โดยไม่มีค่าลิขสิทธิ์ราคาแพง")
+                                RichText::new("LaduinoPLC (Ladder + Arduino + PLC) bridges industrial automation standards (IEC 61131-3) with open microcontroller platforms. It empowers engineers, technicians, educators, and makers to design Ladder Diagrams, run real-time simulations, and deploy compiled bytecode onto microcontroller hardware with zero expensive proprietary license fees.")
                                     .size(11.5)
                                     .color(palette.text_primary),
                             );
                         });
 
-                    // 3. PILLARS GRID (4 เสาหลักฟังก์ชันการทำงาน)
+                    // 3. PILLARS GRID (4 Core Architecture Pillars)
                     egui::Grid::new("about_pillars_grid")
                         .num_columns(2)
                         .spacing([10.0, 8.0])
@@ -2555,7 +2609,7 @@ impl eframe::App for CanvasApp {
                                 .show(ui, |ui| {
                                     ui.set_width(250.0);
                                     ui.label(RichText::new("⚡ Visual Ladder CAD").strong().color(palette.accent_heading));
-                                    ui.label(RichText::new("Dark CAD Canvas พร้อม Live Power Flow Visualizer แสดงกระแสไฟและคอยล์ติดสว่างเรียลไทม์ 10ms").size(11.0).color(palette.rung_text_dim));
+                                    ui.label(RichText::new("CAD canvas with live power flow visualizer displaying real-time electrical conduction and coil energization (10ms cycle).").size(11.0).color(palette.rung_text_dim));
                                 });
 
                             // Column 2 - Card 2: Micro-VM & Hardware
@@ -2567,7 +2621,7 @@ impl eframe::App for CanvasApp {
                                 .show(ui, |ui| {
                                     ui.set_width(250.0);
                                     ui.label(RichText::new("🔌 Embedded Micro-VM").strong().color(palette.accent_ok));
-                                    ui.label(RichText::new("คอมไพล์เป็น Bytecode และอัปโหลดไปยัง Arduino UNO/Nano/Mega และ RP2040 Pico (Embassy Async)").size(11.0).color(palette.rung_text_dim));
+                                    ui.label(RichText::new("Compiles ladder logic into compact 32-bit bytecode uploaded to Arduino UNO/Nano/Mega and RP2040 Pico (Embassy Async).").size(11.0).color(palette.rung_text_dim));
                                 });
                             ui.end_row();
 
@@ -2580,7 +2634,7 @@ impl eframe::App for CanvasApp {
                                 .show(ui, |ui| {
                                     ui.set_width(250.0);
                                     ui.label(RichText::new("📡 Live Telemetry & Modbus").strong().color(palette.accent_warn));
-                                    ui.label(RichText::new("Online Monitoring ผ่าน USB พร้อม Data Watch Table, Force I/O และ Modbus RTU Master ในตัว").size(11.0).color(palette.rung_text_dim));
+                                    ui.label(RichText::new("USB online monitoring with real-time Data Watch Table, Force I/O, and integrated Modbus RTU master.").size(11.0).color(palette.rung_text_dim));
                                 });
 
                             // Column 2 - Card 4: IEC 61131-3 & Interop
@@ -2592,14 +2646,14 @@ impl eframe::App for CanvasApp {
                                 .show(ui, |ui| {
                                     ui.set_width(250.0);
                                     ui.label(RichText::new("📐 IEC 61131-3 Interop").strong().color(Color32::from_rgb(168, 85, 247)));
-                                    ui.label(RichText::new("รองรับ Instruction List (.il) นำเข้า/ส่งออกสอดคล้องกับ OpenPLC และ CODESYS อย่างโปร่งใส").size(11.0).color(palette.rung_text_dim));
+                                    ui.label(RichText::new("Native Instruction List (.il) import and export fully compatible with OpenPLC and CODESYS.").size(11.0).color(palette.rung_text_dim));
                                 });
                             ui.end_row();
                         });
 
                     // 4. HARDWARE COMPATIBILITY BADGES
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("ฮาร์ดแวร์:").size(11.0).color(palette.rung_text_dim));
+                        ui.label(RichText::new("Hardware:").size(11.0).color(palette.rung_text_dim));
                         let hw_targets = [
                             "Arduino UNO R3",
                             "Arduino Nano",
@@ -3800,6 +3854,58 @@ mod tests {
         app.execute_pending_action(&ctx);
         assert!(app.pending_action.is_none());
         assert!(app.allow_exit);
+    }
+
+    #[test]
+    fn test_example_demo_file_save_and_exit_handling() {
+        let mut app = CanvasApp::default();
+        let ctx = egui::Context::default();
+
+        // 1. Initial state
+        assert!(!app.is_example_file());
+
+        // 2. Load demo
+        app.load_example_file("example/08_rp2040_demo_led_blink.il");
+        assert!(app.is_example_file());
+        assert!(app.is_example_template);
+        // Ensure last_folder was not set to "example"
+        assert_ne!(app.last_folder.as_ref().and_then(|p| p.to_str()), Some("example"));
+
+        // 3. Not dirty immediately after loading demo
+        assert!(!app.doc.is_dirty);
+
+        // 4. User modifies demo (e.g. inserting an element)
+        let new_id = app.doc.program.alloc_id();
+        let new_elem = my_canvas_core::LadderElement::new_contact(
+            new_id,
+            "%IX0.0",
+            "TEST_IN",
+            my_canvas_core::ContactMode::NormallyOpen,
+        );
+        app.doc.insert_element(new_elem, my_canvas_core::InsertPosition::AppendRung);
+        assert!(app.doc.is_dirty);
+
+        // 5. Exit requested while dirty -> intercepted with pending action ExitApp
+        app.request_exit(&ctx);
+        assert_eq!(app.pending_action, Some(PendingAction::ExitApp));
+        assert!(!app.allow_exit);
+
+        // 6. If user cancels save, pending_action is cleared so UI is not trapped
+        app.pending_action = None;
+        assert!(app.pending_action.is_none());
+        assert!(!app.allow_exit);
+
+        // 7. If user chooses Don't Save / Discard, exit proceeds
+        app.pending_action = Some(PendingAction::ExitApp);
+        app.doc.is_dirty = false;
+        app.execute_pending_action(&ctx);
+        assert!(app.pending_action.is_none());
+        assert!(app.allow_exit);
+
+        // 8. Creating new program resets example template flag
+        app.new_program();
+        assert!(!app.is_example_file());
+        assert!(!app.is_example_template);
     }
 
     #[test]

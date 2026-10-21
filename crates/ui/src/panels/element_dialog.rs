@@ -132,6 +132,12 @@ impl ElementConfigModal {
                                 );
                                 if resp.changed() {
                                     self.draft.name = self.draft.name.to_ascii_uppercase();
+                                    // Auto-resolve symbol from Global Symbol Table if present
+                                    if let Some(sym) = doc.resolve_symbol_for_address(&self.draft.name) {
+                                        if !sym.is_empty() {
+                                            self.draft.symbol = sym;
+                                        }
+                                    }
                                 }
 
                                 // Dropdown to pick from existing IEC elements or I/O mappings
@@ -175,11 +181,31 @@ impl ElementConfigModal {
 
                             ui.label("Symbol:");
                             let full_field_w = (ui.available_width() - 4.0).max(430.0);
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.draft.symbol)
-                                    .hint_text("e.g. START_PB, MOTOR_RUN")
-                                    .desired_width(full_field_w),
-                            );
+                            ui.vertical(|ui| {
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.draft.symbol)
+                                        .hint_text("e.g. START_PB, MOTOR_RUN")
+                                        .desired_width(full_field_w),
+                                );
+                                // Global Symbol Table conflict / usage indicators
+                                if doc.program.symbols.is_symbol_taken_by_other(&self.draft.symbol, &self.draft.name) {
+                                    ui.colored_label(
+                                        Color32::from_rgb(230, 126, 34),
+                                        "⚠ Warning: Symbol is already used by another address in Global Symbol Table",
+                                    );
+                                }
+                                let usages = doc.find_address_usages(&self.draft.name);
+                                if usages.len() > 1 {
+                                    ui.label(
+                                        RichText::new(format!(
+                                            "ℹ Synced across {} elements in project (Single Source of Truth)",
+                                            usages.len()
+                                        ))
+                                        .small()
+                                        .color(palette.rung_text_dim),
+                                    );
+                                }
+                            });
                             ui.end_row();
 
                             ui.label("Remark:");
@@ -1571,13 +1597,22 @@ impl ElementConfigModal {
         } else if apply_clicked {
             doc.push_undo_snapshot();
             let clean_name = self.draft.name.trim().replace(' ', "_");
+            let clean_symbol = self.draft.symbol.trim().to_string();
+
             if let Some(target) = doc.element_by_id_mut(self.target_id) {
                 let mut updated = self.draft.clone();
                 if !clean_name.is_empty() {
-                    updated.name = clean_name;
+                    updated.name = clean_name.clone();
                 }
+                updated.symbol = clean_symbol.clone();
                 *target = updated;
             }
+
+            // Global Symbol Table (Single Source of Truth) update & cascade propagate to all elements with this address
+            if !clean_name.is_empty() {
+                doc.set_global_symbol(&clean_name, &clean_symbol, Some(&self.draft.comment));
+            }
+
             if let Some(r_idx) = self.rung_idx {
                 if let Some(rung) = doc.program.rungs.get_mut(r_idx) {
                     rung.comment = self.rung_comment.trim().to_string();
@@ -1690,17 +1725,32 @@ impl ElementConfigModal {
                     p.line_segment([pos2(c.x - 6.0, bar_y - 8.0), pos2(c.x + 6.0, bar_y - 8.0)], Stroke::new(3.0, palette.accent_warn));
                 }
                 ContactStyle::DinEuropean => {
-                    let gap = 14.0;
-                    let p_left = pos2(c.x - gap, c.y);
-                    let p_right = pos2(c.x + gap, c.y);
-                    p.line_segment([pos2(c.x - 24.0, c.y), p_left], Stroke::new(2.0, wire_col));
-                    p.line_segment([p_right, pos2(c.x + 24.0, c.y)], Stroke::new(2.0, wire_col));
-                    p.circle_filled(p_left, 2.5, stroke_col);
+                    let gap = 11.0;
+                    let c_left = pos2(c.x - gap, c.y);
+                    let c_right = pos2(c.x + gap, c.y);
+
+                    p.line_segment([pos2(c.x - 24.0, c.y), c_left], Stroke::new(2.0, wire_col));
+                    p.line_segment([c_right, pos2(c.x + 24.0, c.y)], Stroke::new(2.0, wire_col));
+
+                    // Left hinge terminal dot
+                    p.circle_filled(c_left, 3.0, stroke_col);
+
+                    let stub_h = 7.5;
                     if is_nc {
-                        p.line_segment([p_left, pos2(c.x + gap - 1.0, c.y)], Stroke::new(2.6, stroke_col));
-                        p.line_segment([pos2(c.x + gap - 1.0, c.y), pos2(c.x + gap + 2.0, c.y - 7.0)], Stroke::new(2.0, palette.accent_danger));
+                        let stub_bottom = pos2(c_right.x, c.y + stub_h);
+                        p.line_segment([c_right, stub_bottom], Stroke::new(2.0, stroke_col));
+                        p.line_segment([c_left, pos2(stub_bottom.x + 1.5, stub_bottom.y)], Stroke::new(2.4, stroke_col));
                     } else {
-                        p.line_segment([p_left, pos2(c.x + gap - 3.0, c.y - 12.0)], Stroke::new(2.6, stroke_col));
+                        let stub_top = pos2(c_right.x, c.y - stub_h);
+                        p.line_segment([c_right, stub_top], Stroke::new(2.0, stroke_col));
+                        p.line_segment([c_left, pos2(c_right.x - 2.5, c.y - stub_h - 7.0)], Stroke::new(2.4, stroke_col));
+                    }
+
+                    let text_y = c.y + 11.0;
+                    if self.draft.contact_mode == ContactMode::PositiveTransition {
+                        p.text(pos2(c.x, text_y), Align2::CENTER_CENTER, "P", FontId::monospace(10.0), stroke_col);
+                    } else if self.draft.contact_mode == ContactMode::NegativeTransition {
+                        p.text(pos2(c.x, text_y), Align2::CENTER_CENTER, "N", FontId::monospace(10.0), stroke_col);
                     }
                 }
                 ContactStyle::ToggleSwitch => {

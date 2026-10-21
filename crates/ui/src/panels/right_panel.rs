@@ -150,6 +150,11 @@ fn render_element_inspector(
     palette: ThemePalette,
     sim_active: bool,
 ) {
+    let initial_elem = app.doc.selected_element().cloned();
+    let initial_comment = app.doc.selected_rung_idx
+        .and_then(|i| app.doc.program.rungs.get(i))
+        .map(|r| r.comment.clone());
+
     egui::ScrollArea::vertical()
         .id_salt("element_inspector_scroll")
         .auto_shrink([false, false])
@@ -1124,25 +1129,30 @@ fn render_element_inspector(
                 app.doc.push_undo_snapshot();
                 if let Some(elem) = app.doc.selected_element_mut() {
                     elem.contact_mode = cm;
+                    app.doc.is_dirty = true;
                 }
             }
             if let Some(cm) = new_coil_mode {
                 app.doc.push_undo_snapshot();
                 if let Some(elem) = app.doc.selected_element_mut() {
                     elem.coil_mode = cm;
+                    app.doc.is_dirty = true;
                 }
             }
             if let Some((addr, sym)) = quick_assign {
                 app.doc.push_undo_snapshot();
                 if let Some(elem) = app.doc.selected_element_mut() {
-                    elem.name = addr;
-                    elem.symbol = sym;
+                    elem.name = addr.clone();
+                    elem.symbol = sym.clone();
+                    app.doc.is_dirty = true;
                 }
+                app.doc.set_global_symbol(&addr, &sym, None);
             }
             if let Some(val) = set_preset {
                 app.doc.push_undo_snapshot();
                 if let Some(elem) = app.doc.selected_element_mut() {
                     elem.preset_value = val;
+                    app.doc.is_dirty = true;
                 }
             }
             if let Some(v) = toggle_input_var {
@@ -1159,6 +1169,40 @@ fn render_element_inspector(
             }
             if open_full_dialog {
                 app.open_config_for_selected();
+            }
+
+            // Detect any inline DragValue / TextEdit changes to active element or network comment
+            if let Some(ref init_el) = initial_elem {
+                let sym_diff = if let Some(curr_el) = app.doc.selected_element() {
+                    if curr_el != init_el {
+                        let diff = if curr_el.symbol != init_el.symbol || curr_el.name != init_el.name {
+                            Some((curr_el.name.clone(), curr_el.symbol.clone(), curr_el.comment.clone()))
+                        } else {
+                            None
+                        };
+                        Some(diff)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                if let Some(diff) = sym_diff {
+                    app.doc.is_dirty = true;
+                    if let Some((c_name, c_sym, c_rem)) = diff {
+                        app.doc.set_global_symbol(&c_name, &c_sym, Some(&c_rem));
+                    }
+                }
+            }
+            if let Some(ref init_c) = initial_comment {
+                if let Some(r_idx) = app.doc.selected_rung_idx {
+                    if let Some(rung) = app.doc.program.rungs.get(r_idx) {
+                        if &rung.comment != init_c {
+                            app.doc.is_dirty = true;
+                        }
+                    }
+                }
             }
         });
 }
@@ -1476,6 +1520,8 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette, _sim
                 });
                 ui.separator();
 
+                let mut input_sym_changed: Option<(String, String, String, String)> = None;
+
                 egui::Grid::new("input_ports_grid")
                     .striped(true)
                     .num_columns(4)
@@ -1573,10 +1619,18 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette, _sim
                             let sym_w = (ui.available_width() - 4.0).max(70.0);
                             if ui.add(egui::TextEdit::singleline(&mut io.symbol).desired_width(sym_w)).changed() {
                                 app.doc.is_dirty = true;
+                                input_sym_changed = Some((io.iec_address.clone(), io.plc_address.clone(), io.symbol.clone(), io.description.clone()));
                             }
                             ui.end_row();
                         }
                     });
+
+                if let Some((iec_addr, plc_addr, new_sym, desc)) = input_sym_changed {
+                    app.doc.set_global_symbol(&iec_addr, &new_sym, Some(&desc));
+                    if !plc_addr.is_empty() {
+                        app.doc.set_global_symbol(&plc_addr, &new_sym, Some(&desc));
+                    }
+                }
             });
 
             ui.add_space(4.0);
@@ -1601,6 +1655,8 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette, _sim
                     });
                 });
                 ui.separator();
+
+                let mut output_sym_changed: Option<(String, String, String, String)> = None;
 
                 egui::Grid::new("output_ports_grid")
                     .striped(true)
@@ -1685,10 +1741,18 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette, _sim
                             let sym_w = (ui.available_width() - 4.0).max(70.0);
                             if ui.add(egui::TextEdit::singleline(&mut io.symbol).desired_width(sym_w)).changed() {
                                 app.doc.is_dirty = true;
+                                output_sym_changed = Some((io.iec_address.clone(), io.plc_address.clone(), io.symbol.clone(), io.description.clone()));
                             }
                             ui.end_row();
                         }
                     });
+
+                if let Some((iec_addr, plc_addr, new_sym, desc)) = output_sym_changed {
+                    app.doc.set_global_symbol(&iec_addr, &new_sym, Some(&desc));
+                    if !plc_addr.is_empty() {
+                        app.doc.set_global_symbol(&plc_addr, &new_sym, Some(&desc));
+                    }
+                }
             });
 
             ui.add_space(4.0);
