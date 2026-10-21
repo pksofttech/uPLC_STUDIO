@@ -33,6 +33,7 @@ use uplc_vm::{
     MicroVm, CMD_DOWNLOAD_PROGRAM, CMD_FORCE_IO, CMD_FORCE_IO_RESPONSE, CMD_MONITOR_STATUS,
     CMD_RUN_STOP, CMD_STEP, CMD_UPLOAD_PROGRAM, CMD_WRITE_VALUE, CMD_WRITE_VALUE_RESPONSE,
     CMD_PERSIST_SAVE, CMD_PERSIST_SAVE_RESPONSE, CMD_PERSIST_CLEAR, CMD_PERSIST_CLEAR_RESPONSE,
+    CMD_ENTER_BOOTSEL, CMD_ENTER_BOOTSEL_RESPONSE,
     MAX_INSTRUCTIONS, PACKET_SOF,
 };
 use panic_halt as _;
@@ -431,6 +432,26 @@ async fn usb_cdc_comm_task(mut class: CdcAcmClass<'static, UsbDriver<'static, US
                                 } else {
                                     let _ = class.write_packet(&[PACKET_SOF, 0xFF, 0x09]).await;
                                 }
+                            }
+                            Ok(CMD_ENTER_BOOTSEL) => {
+                                info!("USB-CDC CMD 0x0A: Saving RETAIN data and rebooting RP2040 into USB BOOTSEL mode...");
+                                let (bit_latch, word_latch) = {
+                                    let vm = SHARED_VM.lock().await;
+                                    let mut b = [0u8; 32];
+                                    let mut w = [0i32; 32];
+                                    b.copy_from_slice(&vm.bit_mem[LATCH_BIT_START_ADDR as usize..LATCH_BIT_START_ADDR as usize + 32]);
+                                    w.copy_from_slice(&vm.word_mem[LATCH_WORD_START_ADDR as usize..LATCH_WORD_START_ADDR as usize + 32]);
+                                    (b, w)
+                                };
+                                {
+                                    let mut fl_guard = SHARED_FLASH.lock().await;
+                                    if let Some(flash) = fl_guard.as_mut() {
+                                        let _ = save_persistent_data_to_flash(flash, &bit_latch, &word_latch);
+                                    }
+                                }
+                                let _ = class.write_packet(&[PACKET_SOF, CMD_ENTER_BOOTSEL_RESPONSE, 0x00]).await;
+                                embassy_time::Timer::after(Duration::from_millis(30)).await;
+                                embassy_rp::rom_data::reset_to_usb_boot(0, 0);
                             }
                             Err(e) => {
                                 info!("USB-CDC Packet Error: {}", e);

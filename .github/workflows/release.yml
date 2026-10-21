@@ -1,0 +1,79 @@
+name: Release Build & Auto-Update Assets
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive_ext: tar.gz
+            bin_name: laduino-plc
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive_ext: zip
+            bin_name: laduino-plc.exe
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libudev-dev pkg-config libx11-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libssl-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }},thumbv6m-none-eabi
+
+      - name: Build RP2040 UF2 Firmware for Product Bundle
+        run: |
+          cargo install flip-link elf2uf2-rs --locked
+          cd firmware/rp2040-embassy
+          cargo build --release
+          elf2uf2-rs target/thumbv6m-none-eabi/release/uplc-rp2040-embassy ../uplc-rp2040-embassy.uf2
+
+      - name: Build release binary
+        run: cargo build --release --package laduino-plc --target ${{ matrix.target }}
+
+      - name: Package Linux tar.gz archive for self_update
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          ARCHIVE="laduino-plc-v${VERSION}-${{ matrix.target }}.tar.gz"
+          cp "target/${{ matrix.target }}/release/${{ matrix.bin_name }}" .
+          tar -czf "${ARCHIVE}" "${{ matrix.bin_name }}" example firmware/uplc-rp2040-embassy.uf2
+          echo "ARCHIVE_PATH=${ARCHIVE}" >> $GITHUB_ENV
+
+      - name: Package Windows zip archive for self_update
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $Version = $env:GITHUB_REF_NAME -replace '^v', ''
+          $Archive = "laduino-plc-v$Version-${{ matrix.target }}.zip"
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.bin_name }}" .
+          Compress-Archive -Path "${{ matrix.bin_name }}", "example", "firmware/uplc-rp2040-embassy.uf2" -DestinationPath $Archive
+          Add-Content -Path $env:GITHUB_ENV -Value "ARCHIVE_PATH=$Archive"
+
+      - name: Upload Release Asset to GitHub Releases
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ARCHIVE_PATH }}
+          generate_release_notes: true

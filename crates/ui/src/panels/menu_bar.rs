@@ -283,12 +283,20 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 app.show_update_plc = true;
                 ui.close();
             }
+            if ui.button("🔥 Flash MCU Firmware (USB)...").clicked() {
+                app.firmware_flasher.show_window = true;
+                ui.close();
+            }
         });
 
         // --- TOOLS MENU ---
         ui.menu_button("Tools", |ui| {
             if ui.button("⚡ Update to PLC (Compile IL → Bytecode)...").clicked() {
                 app.show_update_plc = true;
+                ui.close();
+            }
+            if ui.button("🔥 Flash MCU Firmware (USB)...").clicked() {
+                app.firmware_flasher.show_window = true;
                 ui.close();
             }
             if ui.button("Preview / Export IEC 61131-3 IL Code").clicked() {
@@ -387,10 +395,38 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
 
         // --- HELP MENU ---
         ui.menu_button("Help", |ui| {
+            if ui.button("🔄 Check for Updates...").clicked() {
+                app.updater.show_window = true;
+                if matches!(app.updater.status, crate::updater::UpdateStatus::Idle) {
+                    app.updater.check_for_updates(ui.ctx().clone());
+                }
+                ui.close();
+            }
+            ui.separator();
             if ui.button("About LaduinoPLC").clicked() {
                 app.show_about = true;
                 ui.close();
             }
         });
+
+        if let Some(new_ver) = app.updater.has_pending_update().map(|s| s.to_string()) {
+            ui.separator();
+            let badge_btn = egui::Button::new(
+                RichText::new(format!("🟢 Update v{} Available", new_ver))
+                    .size(11.0)
+                    .strong()
+                    .color(egui::Color32::WHITE),
+            )
+            .fill(egui::Color32::from_rgb(24, 130, 90))
+            .corner_radius(egui::CornerRadius::same(4));
+
+            if ui
+                .add(badge_btn)
+                .on_hover_text("Click to open Software Update & Release Manager")
+                .clicked()
+            {
+                app.updater.show_window = true;
+            }
+        }
     });
 }

@@ -103,6 +103,22 @@ pub struct AppSettings {
     /// Most-recently opened/saved program files (newest first, max [`MAX_RECENT_FILES`]).
     #[serde(default)]
     pub recent_files: Vec<String>,
+    #[serde(default)]
+    pub update_use_custom_server: bool,
+    #[serde(default = "default_update_repo_owner")]
+    pub update_repo_owner: String,
+    #[serde(default = "default_update_repo_name")]
+    pub update_repo_name: String,
+    #[serde(default)]
+    pub update_custom_manifest_url: String,
+}
+
+fn default_update_repo_owner() -> String {
+    crate::updater::DEFAULT_REPO_OWNER.to_string()
+}
+
+fn default_update_repo_name() -> String {
+    crate::updater::DEFAULT_REPO_NAME.to_string()
 }
 
 /// Maximum number of entries kept in File → Open Recent.
@@ -146,6 +162,10 @@ impl Default for AppSettings {
             last_folder: None,
             watch_rows: default_watch_rows(),
             recent_files: Vec::new(),
+            update_use_custom_server: false,
+            update_repo_owner: default_update_repo_owner(),
+            update_repo_name: default_update_repo_name(),
+            update_custom_manifest_url: String::new(),
         }
     }
 }
@@ -310,6 +330,8 @@ pub struct CanvasApp {
     pub uart_rx_input: String,
     pub uart_rx_mode: u8,
     pub uart_hex_view: bool,
+    pub updater: crate::updater::AppUpdater,
+    pub firmware_flasher: crate::firmware_flasher::FirmwareFlasher,
 }
 
 impl Default for CanvasApp {
@@ -389,6 +411,21 @@ impl Default for CanvasApp {
             uart_rx_input: String::new(),
             uart_rx_mode: 0,
             uart_hex_view: false,
+            updater: crate::updater::AppUpdater::with_settings(
+                settings.update_use_custom_server,
+                if settings.update_repo_owner.trim().is_empty() {
+                    default_update_repo_owner()
+                } else {
+                    settings.update_repo_owner
+                },
+                if settings.update_repo_name.trim().is_empty() {
+                    default_update_repo_name()
+                } else {
+                    settings.update_repo_name
+                },
+                settings.update_custom_manifest_url,
+            ),
+            firmware_flasher: crate::firmware_flasher::FirmwareFlasher::default(),
         }
     }
 }
@@ -575,6 +612,12 @@ impl CanvasApp {
                             my_canvas_core::PlcSerialCommand::PersistClear => {
                                 self.update_plc_status = "🗑 Clear RETAIN (0x09) sent to hardware".to_string();
                             }
+                            my_canvas_core::PlcSerialCommand::EnterBootsel => {
+                                self.plc_remote_running = false;
+                                self.stop_online_monitoring();
+                                self.update_plc_status =
+                                    "⚡ Rebooting RP2040 into USB BOOTSEL (RPI-RP2) mode...".to_string();
+                            }
                             _ => {}
                         }
                         return;
@@ -668,6 +711,13 @@ impl CanvasApp {
                         my_canvas_core::PlcSerialCommand::PersistClear => {
                             self.update_plc_status = format!("🗑 Clear RETAIN (0x09) sent to {}", port_path);
                         }
+                        my_canvas_core::PlcSerialCommand::EnterBootsel => {
+                            self.plc_remote_running = false;
+                            self.update_plc_status = format!(
+                                "⚡ Reboot to BOOTSEL (0x0A) sent to {} — RP2040 is mounting as RPI-RP2 drive",
+                                port_path
+                            );
+                        }
                     }
                 }
                 Err(e) => {
@@ -716,6 +766,10 @@ impl CanvasApp {
             last_folder: self.last_folder.clone(),
             watch_rows: self.watch_rows.clone(),
             recent_files: self.recent_files.clone(),
+            update_use_custom_server: self.updater.use_custom_server,
+            update_repo_owner: self.updater.repo_owner.clone(),
+            update_repo_name: self.updater.repo_name.clone(),
+            update_custom_manifest_url: self.updater.custom_manifest_url.clone(),
         }
     }
 
@@ -1969,7 +2023,12 @@ impl eframe::App for CanvasApp {
             || self.show_io_config
             || self.show_code_export
             || self.show_update_plc
+            || self.updater.show_window
+            || self.firmware_flasher.show_window
             || self.pending_action.is_some();
+
+        self.updater.poll();
+        self.firmware_flasher.poll();
 
         // Global Keyboard Shortcuts (Ctrl+N / Ctrl+Z / Ctrl+Y work anytime; Arrow/Enter/Del/F5 when not typing & modal closed)
         if !any_modal_open {
@@ -3694,6 +3753,12 @@ impl eframe::App for CanvasApp {
             self.render_unsaved_changes_modal(ui.ctx());
         }
 
+        // Software Update & Release Manager modal
+        crate::updater::render_update_dialog(&ui.ctx().clone(), self);
+
+        // MCU Firmware Manager & USB Flasher modal
+        crate::firmware_flasher::render_firmware_flasher_dialog(&ui.ctx().clone(), self);
+
         // Floating (non-modal) Find / Replace window
         find_dialog::render(&ui.ctx().clone(), self);
     }
@@ -3731,6 +3796,10 @@ mod tests {
                     last_folder: Some(PathBuf::from("/tmp/projects")),
                     watch_rows: default_watch_rows(),
                     recent_files: vec!["/tmp/projects/a.il".to_string()],
+                    update_use_custom_server: false,
+                    update_repo_owner: default_update_repo_owner(),
+                    update_repo_name: default_update_repo_name(),
+                    update_custom_manifest_url: String::new(),
                 };
                 let json = serde_json::to_string_pretty(&settings).unwrap();
                 let loaded: AppSettings = serde_json::from_str(&json).unwrap();

@@ -43,6 +43,8 @@ pub const CMD_PERSIST_SAVE: u8 = 0x08;
 pub const CMD_PERSIST_SAVE_RESPONSE: u8 = 0x88;
 pub const CMD_PERSIST_CLEAR: u8 = 0x09;
 pub const CMD_PERSIST_CLEAR_RESPONSE: u8 = 0x89;
+pub const CMD_ENTER_BOOTSEL: u8 = 0x0A;
+pub const CMD_ENTER_BOOTSEL_RESPONSE: u8 = 0x8A;
 
 /// RETAIN area (Flash-latched): `M64..M95` = `bit_mem[0x80..0xA0]`, `D96..D127` = `word_mem[0x80..0xA0]`
 pub const RETAIN_BIT_START: usize = 0x80;
@@ -1097,6 +1099,13 @@ impl MicroVm {
             }
             CMD_PERSIST_SAVE => Ok(CMD_PERSIST_SAVE),
             CMD_PERSIST_CLEAR => Ok(CMD_PERSIST_CLEAR),
+            CMD_ENTER_BOOTSEL => {
+                self.running = false;
+                for y in 0x20..=0x3F {
+                    self.bit_mem[y] = 0;
+                }
+                Ok(CMD_ENTER_BOOTSEL)
+            }
             _ => Err("Unknown command code"),
         }
     }
@@ -1226,6 +1235,13 @@ mod tests {
         assert!(vm.running, "VM should return to RUN state");
         vm.step_scan(1);
         assert!(vm.get_digital_output(0), "Y0 should be ON again after resuming RUN");
+
+        // Build ENTER_BOOTSEL packet: SOF=0xAA, CMD=0x0A, LEN=0, CRC8
+        let mut bootsel_pkt = [0xAA, CMD_ENTER_BOOTSEL, 0x00, 0x00, 0x00];
+        bootsel_pkt[4] = MicroVm::compute_crc8(&bootsel_pkt[1..4]);
+        assert_eq!(vm.process_serial_packet(&bootsel_pkt), Ok(CMD_ENTER_BOOTSEL));
+        assert!(!vm.running, "VM should safely stop before entering BOOTSEL");
+        assert!(!vm.get_digital_output(0), "Outputs should be turned OFF before entering BOOTSEL");
     }
 
     #[test]

@@ -30,6 +30,8 @@ pub enum PlcSerialCommand {
     PersistSave = 0x08,
     /// 0x09: Clear the RETAIN area in RAM and Flash
     PersistClear = 0x09,
+    /// 0x0A: Safely stop PLC, save RETAIN area, and reboot RP2040 into USB BOOTSEL mode (`RPI-RP2`)
+    EnterBootsel = 0x0A,
     /// 0x02 (Payload = 0x00): Stop / HALT PLC Scan Execution & Safe Output Shutdown
     StopPlc = 0x12,
 }
@@ -739,6 +741,7 @@ impl BytecodeProgram {
             PlcSerialCommand::WriteValue => (0x07u8, Vec::new()),
             PlcSerialCommand::PersistSave => (0x08u8, Vec::new()),
             PlcSerialCommand::PersistClear => (0x09u8, Vec::new()),
+            PlcSerialCommand::EnterBootsel => (0x0Au8, Vec::new()),
         };
         let len = (payload.len() as u16).to_le_bytes();
         let mut packet = Vec::with_capacity(5 + payload.len());

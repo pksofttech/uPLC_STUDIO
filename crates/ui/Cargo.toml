@@ -12,3 +12,4 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png"] }
 serialport = "4"
+self_update = { workspace = true }
