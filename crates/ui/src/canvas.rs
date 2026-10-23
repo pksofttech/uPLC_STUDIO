@@ -2545,6 +2545,11 @@ impl CanvasViewport {
         let badge_color = match prefix {
             'X' | 'I' => palette.accent_warn,
             'Y' | 'Q' => palette.accent_heading,
+            'M' => if palette.is_light() {
+                Color32::from_rgb(130, 40, 200)
+            } else {
+                Color32::from_rgb(190, 130, 255)
+            },
             'T' => palette.accent_ok,
             'C' => if palette.is_light() {
                 Color32::from_rgb(108, 42, 190)
@@ -2889,8 +2894,16 @@ impl CanvasViewport {
                 );
 
                 // Bottom Symbol Tag
+                let is_memory = elem.name.trim_start_matches('%').starts_with('M');
                 let bottom_text = if !elem.symbol.is_empty() && elem.symbol != elem.name {
                     elem.symbol.as_str()
+                } else if is_memory {
+                    match elem.contact_mode {
+                        ContactMode::NormallyOpen => "Memory (NO)",
+                        ContactMode::NormallyClosed => "Memory (NC)",
+                        ContactMode::PositiveTransition => "Memory Edge (P)",
+                        ContactMode::NegativeTransition => "Memory Edge (N)",
+                    }
                 } else {
                     match elem.contact_mode {
                         ContactMode::NormallyOpen => "NO Contact",
@@ -2909,7 +2922,7 @@ impl CanvasViewport {
             }
 
             TypeTag::Coil => {
-                let active_style = default_coil_style;
+                let active_style = elem.coil_style.unwrap_or(default_coil_style);
                 let is_on = elem.is_done && sim_active;
                 let coil_color = if is_on {
                     palette.wire_energized
@@ -3212,17 +3225,27 @@ impl CanvasViewport {
                 );
 
                 // Bottom Symbol Tag
+                let is_memory = elem.name.trim_start_matches('%').starts_with('M');
                 let bottom_text = if !elem.symbol.is_empty() && elem.symbol != elem.name {
                     elem.symbol.as_str()
+                } else if is_memory {
+                    match elem.coil_mode {
+                        CoilMode::Normal => "Memory Relay (M)",
+                        CoilMode::Negated => "Negated Memory (M)",
+                        CoilMode::SetLatch => "Set Memory (S)",
+                        CoilMode::ResetUnlatch => "Reset Memory (R)",
+                        CoilMode::PositiveTransition => "Pulse Memory (P)",
+                        CoilMode::NegativeTransition => "Pulse Memory (N)",
+                    }
                 } else {
                     match active_style {
                         CoilStyle::IecParentheses => match elem.coil_mode {
-                            CoilMode::Normal => "Output Coil",
-                            CoilMode::Negated => "Negated Coil",
-                            CoilMode::SetLatch => "Set (Latch)",
-                            CoilMode::ResetUnlatch => "Reset (Unlatch)",
-                            CoilMode::PositiveTransition => "Pulse Coil (P)",
-                            CoilMode::NegativeTransition => "Pulse Coil (N)",
+                            CoilMode::Normal => "Output Coil (Q)",
+                            CoilMode::Negated => "Negated Output (Q)",
+                            CoilMode::SetLatch => "Set Output (S)",
+                            CoilMode::ResetUnlatch => "Reset Output (R)",
+                            CoilMode::PositiveTransition => "Pulse Output (P)",
+                            CoilMode::NegativeTransition => "Pulse Output (N)",
                         },
                         CoilStyle::CircleRelay => "Relay Coil",
                         CoilStyle::NemaBox => "Motor Starter",

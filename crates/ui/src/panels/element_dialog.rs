@@ -370,6 +370,52 @@ impl ElementConfigModal {
                             ));
                             ui.separator();
                         }
+
+                        // Type Classifier Badge (Memory Helper vs Physical Hardware)
+                        let norm_addr = self.draft.name.trim().to_ascii_uppercase();
+                        if norm_addr.starts_with("%MX")
+                            || (norm_addr.starts_with('M')
+                                && norm_addr.len() > 1
+                                && norm_addr[1..].chars().next().map_or(false, |c| c.is_ascii_digit()))
+                        {
+                            ui.label(
+                                RichText::new("🧠 Memory Relay (%M)")
+                                    .small()
+                                    .strong()
+                                    .color(Color32::from_rgb(190, 130, 255))
+                                    .background_color(Color32::from_rgb(190, 130, 255).gamma_multiply(0.15)),
+                            )
+                            .on_hover_text("Internal CPU Memory Bit: auxiliary relay for program logic (no physical terminal)");
+                            ui.separator();
+                        } else if norm_addr.starts_with("%QX")
+                            || (norm_addr.starts_with('Y')
+                                && norm_addr.len() > 1
+                                && norm_addr[1..].chars().next().map_or(false, |c| c.is_ascii_digit()))
+                        {
+                            ui.label(
+                                RichText::new("🔌 Physical Output (%Q)")
+                                    .small()
+                                    .strong()
+                                    .color(palette.accent_heading)
+                                    .background_color(palette.accent_heading.gamma_multiply(0.15)),
+                            )
+                            .on_hover_text("Hardware Output Terminal: physically drives relay, actuator or motor");
+                            ui.separator();
+                        } else if norm_addr.starts_with("%IX")
+                            || (norm_addr.starts_with('X')
+                                && norm_addr.len() > 1
+                                && norm_addr[1..].chars().next().map_or(false, |c| c.is_ascii_digit()))
+                        {
+                            ui.label(
+                                RichText::new("📥 Physical Input (%I)")
+                                    .small()
+                                    .strong()
+                                    .color(palette.accent_warn)
+                                    .background_color(palette.accent_warn.gamma_multiply(0.15)),
+                            )
+                            .on_hover_text("Hardware Input Terminal: receives signal from external switch/sensor");
+                            ui.separator();
+                        }
                         let usage_str = if usages.is_empty() {
                             "New IEC address (not used elsewhere yet)".to_string()
                         } else {
@@ -558,6 +604,28 @@ impl ElementConfigModal {
                                     );
                                     ui.end_row();
                                 });
+
+                            ui.add_space(8.0);
+                            ui.label(RichText::new("Coil Visual Style (Symbol Representation):").strong());
+                            ui.horizontal_wrapped(|ui| {
+                                let is_auto = self.draft.coil_style.is_none();
+                                if ui.selectable_label(is_auto, "Auto (Global)").clicked() {
+                                    self.draft.coil_style = None;
+                                }
+                                for &st in &CoilStyle::ALL {
+                                    let selected = self.draft.coil_style == Some(st);
+                                    let label = match st {
+                                        CoilStyle::IecParentheses => "IEC —( )—",
+                                        CoilStyle::CircleRelay => "DIN Relay —○—",
+                                        CoilStyle::NemaBox => "NEMA Starter —[ ]—",
+                                        CoilStyle::SolenoidValve => "Solenoid —[ ⧖ ]—",
+                                        CoilStyle::PilotLight => "Pilot Lamp —( ⨂ )—",
+                                    };
+                                    if ui.selectable_label(selected, label).clicked() {
+                                        self.draft.coil_style = Some(st);
+                                    }
+                                }
+                            });
                         }
 
                         TypeTag::Ton | TypeTag::Tof | TypeTag::Tp => {
@@ -1776,8 +1844,13 @@ impl ElementConfigModal {
                 }
             }
         } else if self.draft.element_type == TypeTag::Coil {
-            let active_style = global_coil_style;
-            let stroke_col = palette.accent_heading;
+            let active_style = self.draft.coil_style.unwrap_or(global_coil_style);
+            let is_memory = self.draft.name.trim_start_matches('%').starts_with('M');
+            let stroke_col = if is_memory {
+                Color32::from_rgb(190, 130, 255)
+            } else {
+                palette.accent_heading
+            };
             let wire_col = palette.wire_idle;
 
             match active_style {
@@ -2032,10 +2105,17 @@ impl ElementConfigModal {
                     )
                 }
                 TypeTag::Coil => {
-                    let st = global_coil_style;
+                    let st = self.draft.coil_style.unwrap_or(global_coil_style);
+                    let norm_n = self.draft.name.trim().to_ascii_uppercase();
+                    let is_mem = norm_n.starts_with("%MX")
+                        || (norm_n.starts_with('M')
+                            && norm_n.len() > 1
+                            && norm_n[1..].chars().next().map_or(false, |c| c.is_ascii_digit()));
+                    let role_tag = if is_mem { "🧠 Memory Relay (%M)" } else { "🔌 Physical Output (%Q)" };
                     format!(
-                        "Address: {}  |  Action: {:?}  |  Theme: {}",
+                        "Target: {} ({})  |  Action: {:?}  |  Symbol: {}",
                         self.draft.name,
+                        role_tag,
                         self.draft.coil_mode,
                         st.short_name()
                     )
