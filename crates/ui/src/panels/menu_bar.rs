@@ -82,11 +82,11 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 ui.close();
             }
             if ui.button("Import IEC 61131-3 IL (.il)...").clicked() {
-                app.import_il_dialog();
+                app.request_import_il();
                 ui.close();
             }
             if ui.button("📥 Upload Program from Connected PLC...").clicked() {
-                app.transmit_bytecode_to_plc(my_canvas_core::PlcSerialCommand::UploadProgram);
+                app.request_upload_from_plc();
                 ui.close();
             }
             ui.separator();

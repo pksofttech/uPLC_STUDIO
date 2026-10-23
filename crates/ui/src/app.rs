@@ -259,6 +259,8 @@ impl AppSettings {
 pub enum PendingAction {
     NewProgram,
     OpenProgram,
+    ImportIl,
+    UploadFromPlc,
     LoadExample(String),
     OpenRecent(String),
     ExitApp,
@@ -562,8 +564,14 @@ impl CanvasApp {
             match self.upload_program_from_plc() {
                 Ok(ladder) => {
                     let n_rungs = ladder.rungs.len();
+                    self.doc.push_undo_snapshot();
                     self.doc.program = ladder;
                     self.doc.selected_rung_idx = Some(0);
+                    self.doc.selected_element_id = None;
+                    self.doc.selected_element_ids.clear();
+                    self.doc.file_path = None;
+                    self.doc.is_dirty = true;
+                    self.is_example_template = false;
                     self.update_plc_is_error = false;
                     self.update_plc_status = format!(
                         "✔ Successfully uploaded & decompiled program from PLC ({} Networks)",
@@ -1252,6 +1260,24 @@ impl CanvasApp {
         }
     }
 
+    /// Request importing an IL file. Prompts if unsaved changes exist.
+    pub fn request_import_il(&mut self) {
+        if self.doc.is_dirty {
+            self.pending_action = Some(PendingAction::ImportIl);
+        } else {
+            self.import_il_dialog();
+        }
+    }
+
+    /// Request uploading & decompiling program from connected PLC. Prompts if unsaved changes exist.
+    pub fn request_upload_from_plc(&mut self) {
+        if self.doc.is_dirty {
+            self.pending_action = Some(PendingAction::UploadFromPlc);
+        } else {
+            self.transmit_bytecode_to_plc(my_canvas_core::PlcSerialCommand::UploadProgram);
+        }
+    }
+
     /// Request loading an example program. Prompts if unsaved changes exist.
     pub fn request_load_example(&mut self, path_str: String) {
         if self.doc.is_dirty {
@@ -1308,6 +1334,12 @@ impl CanvasApp {
                 PendingAction::OpenProgram => {
                     self.open_program_dialog();
                 }
+                PendingAction::ImportIl => {
+                    self.import_il_dialog();
+                }
+                PendingAction::UploadFromPlc => {
+                    self.transmit_bytecode_to_plc(my_canvas_core::PlcSerialCommand::UploadProgram);
+                }
                 PendingAction::LoadExample(path_str) => {
                     self.load_example_file(&path_str);
                 }
@@ -1336,6 +1368,8 @@ impl CanvasApp {
         let action_desc = match self.pending_action.as_ref() {
             Some(PendingAction::NewProgram) => "creating a new program",
             Some(PendingAction::OpenProgram) => "opening another program",
+            Some(PendingAction::ImportIl) => "importing an IL file",
+            Some(PendingAction::UploadFromPlc) => "reading the program from PLC",
             Some(PendingAction::LoadExample(_)) => "loading an example",
             Some(PendingAction::OpenRecent(_)) => "opening a recent program",
             Some(PendingAction::ExitApp) => "closing the application",
@@ -1347,6 +1381,7 @@ impl CanvasApp {
         let mut do_cancel = false;
 
         egui::Window::new("⚠ Unsaved Changes")
+            .order(egui::Order::Foreground)
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
@@ -2509,7 +2544,11 @@ impl eframe::App for CanvasApp {
             });
 
         if let Some(cmd) = banner_cmd {
-            self.transmit_bytecode_to_plc(cmd);
+            if cmd == my_canvas_core::PlcSerialCommand::UploadProgram {
+                self.request_upload_from_plc();
+            } else {
+                self.transmit_bytecode_to_plc(cmd);
+            }
         }
         if open_upload_dialog {
             self.show_update_plc = true;
@@ -3913,7 +3952,17 @@ mod tests {
         assert!(app.pending_action.is_none());
         assert!(!app.doc.is_dirty);
 
-        // 4. Dirty: request_exit sets PendingAction::ExitApp
+        // 4. Dirty: request_import_il and request_upload_from_plc set PendingAction
+        app.doc.is_dirty = true;
+        app.request_import_il();
+        assert_eq!(app.pending_action, Some(PendingAction::ImportIl));
+        app.pending_action = None;
+
+        app.request_upload_from_plc();
+        assert_eq!(app.pending_action, Some(PendingAction::UploadFromPlc));
+        app.pending_action = None;
+
+        // 5. Dirty: request_exit sets PendingAction::ExitApp
         app.doc.is_dirty = true;
         app.request_exit(&ctx);
         assert_eq!(app.pending_action, Some(PendingAction::ExitApp));
