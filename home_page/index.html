@@ -643,14 +643,37 @@
           </div>
         </div>
 
+        <!-- Live Visitor & Download Analytics Dashboard -->
+        <div class="analytics-bar" aria-label="Live Website & Download Statistics">
+          <div class="analytics-metric">
+            <span class="analytics-label" data-i18n="an_views_lbl">👁️ ยอดเข้าชมเว็บไซต์ (Page Views)</span>
+            <strong id="stat-page-views">—</strong>
+          </div>
+          <div class="analytics-metric">
+            <span class="analytics-label" data-i18n="an_dl_lbl">⬇️ ยอดดาวน์โหลดรวม (Total Downloads)</span>
+            <strong id="stat-total-downloads">—</strong>
+          </div>
+          <div class="analytics-metric">
+            <span class="analytics-label" data-i18n="an_stars_lbl">⭐ ดาวบน GitHub (GitHub Stars)</span>
+            <strong id="stat-gh-stars">—</strong>
+          </div>
+          <div class="analytics-metric">
+            <span class="analytics-label" data-i18n="an_env_lbl">💻 ระบบที่ตรวจพบ (Detected OS)</span>
+            <strong id="stat-client-env">—</strong>
+          </div>
+        </div>
+
         <div class="download-grid">
           <!-- Windows -->
           <div class="dl-card featured">
             <div>
               <div class="dl-header">
                 <span class="dl-os-icon">🪟</span>
-                <div>
-                  <h3>LaduinoPLC for Windows</h3>
+                <div style="flex: 1;">
+                  <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+                    <h3>LaduinoPLC for Windows</h3>
+                    <span class="dl-count-pill" id="stat-dl-win" title="Windows Downloads">⬇ 0</span>
+                  </div>
                   <small style="color: var(--text-secondary);" data-i18n="dl_win_sub">สำหรับ Windows 10 / 11 (64-bit)</small>
                 </div>
               </div>
@@ -670,8 +693,11 @@
             <div>
               <div class="dl-header">
                 <span class="dl-os-icon">🐧</span>
-                <div>
-                  <h3>LaduinoPLC for Linux</h3>
+                <div style="flex: 1;">
+                  <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+                    <h3>LaduinoPLC for Linux</h3>
+                    <span class="dl-count-pill" id="stat-dl-lin" title="Linux Downloads">⬇ 0</span>
+                  </div>
                   <small style="color: var(--text-secondary);" data-i18n="dl_lin_sub">สำหรับ Ubuntu / Debian / Arch / Fedora (x86_64)</small>
                 </div>
               </div>
@@ -691,8 +717,11 @@
             <div>
               <div class="dl-header">
                 <span class="dl-os-icon">🍓</span>
-                <div>
-                  <h3>RP2040 Micro-VM (.uf2)</h3>
+                <div style="flex: 1;">
+                  <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+                    <h3>RP2040 Micro-VM (.uf2)</h3>
+                    <span class="dl-count-pill" id="stat-dl-fw" title="RP2040 Firmware Downloads">⬇ 0</span>
+                  </div>
                   <small style="color: var(--text-secondary);" data-i18n="dl_fw_sub">32-bit Micro-VM Runtime สำหรับ Raspberry Pi Pico</small>
                 </div>
               </div>
@@ -874,6 +903,11 @@
         <span data-i18n="footer_copy">พัฒนาโดย pksofttech.org • ซอฟต์แวร์ออกแบบและจำลองวงจร PLC มาตรฐาน IEC 61131-3</span>
       </div>
       <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+        <span class="footer-stat-pill" title="Live Visitor Counter">
+          <span class="pill-dot" style="width: 7px; height: 7px;"></span>
+          <span data-i18n="footer_views_lbl">ผู้เข้าชม:</span>
+          <strong id="footer-visit-count">—</strong>
+        </span>
         <a href="https://www.facebook.com/sharer/sharer.php?u=https%3A%2F%2Fpksofttech.github.io%2FuPLC_STUDIO%2F" target="_blank" rel="noopener" class="btn btn-sm btn-outline">
           📢 Share on Facebook
         </a>

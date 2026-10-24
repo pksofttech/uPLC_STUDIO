@@ -22,7 +22,12 @@ const SITE_CONFIG = {
   promptPayId: "3660600255351",
   githubSponsorsUrl: "https://github.com/sponsors/pksofttech",
   buyMeACoffeeUrl: "https://buymeacoffee.com/pksofttech",
-  reportEmail: "pksofttech@gmail.com"
+  reportEmail: "pksofttech@gmail.com",
+
+  // ข้อมูลระบบวิเคราะห์สถิติผู้เยี่ยมชม (Visitor & Download Analytics)
+  counterNamespace: "pksofttech-uplc-studio",
+  githubApiRepo: "pksofttech/uPLC_STUDIO",
+  googleAnalyticsId: "" // ใส่รหัส GA4 เช่น "G-XXXXXXXXXX" หากต้องการเชื่อมต่อ Google Analytics เพิ่มเติม
 };
 
 /**
@@ -166,6 +171,11 @@ const I18N = {
     dl_tag: "DOWNLOAD RELEASES",
     dl_title: "ดาวน์โหลด LaduinoPLC & เฟิร์มแวร์",
     dl_subtitle: "ฟรีและโอเพนซอร์ส — ดาวน์โหลดเวอร์ชันล่าสุดได้โดยตรงจาก GitHub Releases",
+    an_views_lbl: "👁️ ยอดเข้าชมเว็บไซต์ (Page Views)",
+    an_dl_lbl: "⬇️ ยอดดาวน์โหลดรวม (Total Downloads)",
+    an_stars_lbl: "⭐ ดาวบน GitHub (GitHub Stars)",
+    an_env_lbl: "💻 ระบบที่ตรวจพบ (Detected OS)",
+    footer_views_lbl: "ผู้เข้าชม:",
     dl_win_sub: "สำหรับ Windows 10 / 11 (64-bit)",
     dl_win_l1: "ไฟล์โปรแกรมพร้อมรัน (laduino-plc.exe)",
     dl_win_l2: "รวมไฟล์เฟิร์มแวร์ RP2040 (.uf2) ในตัว",
@@ -357,6 +367,11 @@ const I18N = {
     dl_tag: "DOWNLOAD RELEASES",
     dl_title: "Download LaduinoPLC & Firmware",
     dl_subtitle: "Free & Open-Source — Get the latest pre-built packages directly from GitHub Releases.",
+    an_views_lbl: "👁️ Total Website Visits (Page Views)",
+    an_dl_lbl: "⬇️ Total Release Downloads",
+    an_stars_lbl: "⭐ GitHub Stars & Forks",
+    an_env_lbl: "💻 Detected OS & Browser",
+    footer_views_lbl: "Visitors:",
     dl_win_sub: "For Windows 10 / 11 (64-bit)",
     dl_win_l1: "Standalone executable (laduino-plc.exe)",
     dl_win_l2: "Includes bundled RP2040 .uf2 firmware",
@@ -734,4 +749,158 @@ document.addEventListener("DOMContentLoaded", () => {
       link.addEventListener("click", () => navMenu.classList.remove("mobile-open"));
     });
   }
+
+  // Initialize Visitor & Download Analytics
+  initVisitorAnalytics();
 });
+
+/**
+ * ระบบนับสถิติผู้เยี่ยมชมเว็บไซต์และยอดดาวน์โหลด (Visitor & Download Analytics)
+ * - นับจำนวนผู้เข้าชมหน้าเว็บผ่าน Abacus Counter API (แยก Session เพื่อไม่ให้นับซ้ำเวลากด Refresh รัวๆ)
+ * - ดึงยอดดาวน์โหลดจริงของแต่ละแพลตฟอร์มจาก GitHub Releases API + นับจำนวนคลิกปุ่มดาวน์โหลด
+ * - ดึงจำนวน GitHub Stars & Watchers
+ * - ตรวจจับ OS / Browser ของผู้เข้าชมเพื่อวิเคราะห์กลุ่มผู้ใช้งาน
+ * - รองรับ Google Analytics 4 (GA4) อัตโนมัติหากระบุ googleAnalyticsId ใน SITE_CONFIG
+ */
+function initVisitorAnalytics() {
+  // 1. Optional Google Analytics 4 (gtag.js)
+  if (SITE_CONFIG.googleAnalyticsId && SITE_CONFIG.googleAnalyticsId.startsWith("G-")) {
+    const gaScript = document.createElement("script");
+    gaScript.async = true;
+    gaScript.src = `https://www.googletagmanager.com/gtag/js?id=${SITE_CONFIG.googleAnalyticsId}`;
+    document.head.appendChild(gaScript);
+    window.dataLayer = window.dataLayer || [];
+    function gtag() {
+      window.dataLayer.push(arguments);
+    }
+    gtag("js", new Date());
+    gtag("config", SITE_CONFIG.googleAnalyticsId);
+  }
+
+  // 2. Detect Client Environment (OS / Browser)
+  const envEl = document.getElementById("stat-client-env");
+  if (envEl) {
+    const ua = navigator.userAgent || "";
+    let os = "Desktop";
+    if (/Windows/i.test(ua)) os = "Windows";
+    else if (/Linux/i.test(ua) && !/Android/i.test(ua)) os = "Linux";
+    else if (/Mac OS X/i.test(ua) && !/iPhone|iPad/i.test(ua)) os = "macOS";
+    else if (/Android/i.test(ua)) os = "Android";
+    else if (/iPhone|iPad/i.test(ua)) os = "iOS";
+
+    let browser = "Browser";
+    if (/Edg\//i.test(ua)) browser = "Edge";
+    else if (/Chrome\//i.test(ua)) browser = "Chrome";
+    else if (/Firefox\//i.test(ua)) browser = "Firefox";
+    else if (/Safari\//i.test(ua)) browser = "Safari";
+
+    envEl.textContent = `${os} • ${browser}`;
+  }
+
+  const ns = SITE_CONFIG.counterNamespace || "pksofttech-uplc-studio";
+  const abacusBase = `https://abacus.jasoncameron.dev`;
+
+  // 3. Page Views Counter (hit once per browser session, otherwise get)
+  const viewsEl = document.getElementById("stat-page-views");
+  const footerViewsEl = document.getElementById("footer-visit-count");
+  const sessionKey = "uplc_visited_session";
+  const alreadyVisited = sessionStorage.getItem(sessionKey);
+  const viewEndpoint = alreadyVisited
+    ? `${abacusBase}/get/${ns}/visits`
+    : `${abacusBase}/hit/${ns}/visits`;
+
+  fetch(viewEndpoint)
+    .then((res) => (res.ok ? res.json() : Promise.reject(res.status)))
+    .then((data) => {
+      if (!alreadyVisited) sessionStorage.setItem(sessionKey, "1");
+      const count = Number(data?.value || 1).toLocaleString();
+      if (viewsEl) viewsEl.textContent = count;
+      if (footerViewsEl) footerViewsEl.textContent = count;
+    })
+    .catch(() => {
+      if (viewsEl) viewsEl.textContent = "1+";
+      if (footerViewsEl) footerViewsEl.textContent = "1+";
+    });
+
+  // 4. GitHub Repository Stars & Releases Download Statistics
+  const starsEl = document.getElementById("stat-gh-stars");
+  const totalDlEl = document.getElementById("stat-total-downloads");
+  const winDlEl = document.getElementById("stat-dl-win");
+  const linDlEl = document.getElementById("stat-dl-lin");
+  const fwDlEl = document.getElementById("stat-dl-fw");
+
+  if (SITE_CONFIG.githubApiRepo) {
+    // Fetch Repo Stars & Forks
+    fetch(`https://api.github.com/repos/${SITE_CONFIG.githubApiRepo}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((repo) => {
+        if (repo && starsEl) {
+          const stars = Number(repo.stargazers_count || 0);
+          const forks = Number(repo.forks_count || 0);
+          starsEl.textContent = `${stars.toLocaleString()} ★ / ${forks} ⑂`;
+        }
+      })
+      .catch(() => {
+        if (starsEl) starsEl.textContent = "GitHub";
+      });
+
+    // Fetch Per-Platform Download Counts from GitHub Releases
+    fetch(`https://api.github.com/repos/${SITE_CONFIG.githubApiRepo}/releases`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((releases) => {
+        let winCount = 0;
+        let linCount = 0;
+        let fwCount = 0;
+        let totalCount = 0;
+
+        if (Array.isArray(releases)) {
+          releases.forEach((rel) => {
+            (rel.assets || []).forEach((asset) => {
+              const name = (asset.name || "").toLowerCase();
+              const dl = Number(asset.download_count || 0);
+              totalCount += dl;
+              if (name.includes("windows") || name.endsWith(".zip")) {
+                winCount += dl;
+              } else if (name.includes("linux") || name.endsWith(".tar.gz")) {
+                linCount += dl;
+              } else if (name.endsWith(".uf2")) {
+                fwCount += dl;
+              }
+            });
+          });
+        }
+
+        if (totalDlEl) totalDlEl.textContent = totalCount.toLocaleString();
+        if (winDlEl) winDlEl.textContent = `${winCount.toLocaleString()} downloads`;
+        if (linDlEl) linDlEl.textContent = `${linCount.toLocaleString()} downloads`;
+        if (fwDlEl) fwDlEl.textContent = `${fwCount.toLocaleString()} downloads`;
+      })
+      .catch(() => {
+        if (totalDlEl) totalDlEl.textContent = "0";
+      });
+  }
+
+  // 5. Track Download Button Clicks in Abacus for Real-Time Click Analytics
+  const trackDownloadClick = (buttonId, keyName, badgeEl) => {
+    const btn = document.getElementById(buttonId);
+    if (!btn) return;
+    btn.addEventListener("click", () => {
+      fetch(`${abacusBase}/hit/${ns}/${keyName}`).catch(() => {});
+      if (badgeEl) {
+        const currentMatch = (badgeEl.textContent || "0").match(/\d+/);
+        const nextVal = currentMatch ? parseInt(currentMatch[0], 10) + 1 : 1;
+        badgeEl.textContent = `${nextVal.toLocaleString()} downloads`;
+      }
+      if (totalDlEl) {
+        const totalMatch = (totalDlEl.textContent || "0").replace(/,/g, "").match(/\d+/);
+        if (totalMatch) {
+          totalDlEl.textContent = (parseInt(totalMatch[0], 10) + 1).toLocaleString();
+        }
+      }
+    });
+  };
+
+  trackDownloadClick("dl-win-link", "dl-windows", winDlEl);
+  trackDownloadClick("dl-lin-link", "dl-linux", linDlEl);
+  trackDownloadClick("dl-fw-link", "dl-uf2", fwDlEl);
+}
