@@ -4,13 +4,24 @@
  * แก้ไขข้อมูลลิงก์ดาวน์โหลด, เลขพร้อมเพย์, รูป QR Code และลิงก์รับบริจาคได้ที่บล็อกนี้
  * ============================================================================
  */
+const IS_LOCAL_ENV =
+  window.location.protocol === "file:" ||
+  window.location.hostname === "localhost" ||
+  window.location.hostname === "127.0.0.1";
+
 const SITE_CONFIG = {
   version: "v0.1.0",
   githubRepoUrl: "https://github.com/pksofttech/uPLC_STUDIO",
   releasesUrl: "#download",
-  windowsDownloadUrl: "../releases/laduino-plc-v0.1.0-x86_64-pc-windows-gnu.zip",
-  linuxDownloadUrl: "../releases/laduino-plc-v0.1.0-x86_64-unknown-linux-gnu.tar.gz",
-  firmwareUf2Url: "../releases/uplc-rp2040-embassy.uf2",
+  windowsDownloadUrl: IS_LOCAL_ENV
+    ? "../releases/laduino-plc-v0.1.0-x86_64-pc-windows-gnu.zip"
+    : "https://github.com/pksofttech/uPLC_STUDIO/releases/latest/download/laduino-plc-v0.1.0-x86_64-pc-windows-msvc.zip",
+  linuxDownloadUrl: IS_LOCAL_ENV
+    ? "../releases/laduino-plc-v0.1.0-x86_64-unknown-linux-gnu.tar.gz"
+    : "https://github.com/pksofttech/uPLC_STUDIO/releases/latest/download/laduino-plc-v0.1.0-x86_64-unknown-linux-gnu.tar.gz",
+  firmwareUf2Url: IS_LOCAL_ENV
+    ? "../releases/uplc-rp2040-embassy.uf2"
+    : "https://github.com/pksofttech/uPLC_STUDIO/releases/latest/download/uplc-rp2040-embassy.uf2",
 
   // ข้อมูลรับบริจาค / Support & Donate
   promptPayQrImage: "assets/promptpay-qr.svg",

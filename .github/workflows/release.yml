@@ -75,5 +75,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ env.ARCHIVE_PATH }}
+          files: |
+            ${{ env.ARCHIVE_PATH }}
+            firmware/uplc-rp2040-embassy.uf2
           generate_release_notes: true
