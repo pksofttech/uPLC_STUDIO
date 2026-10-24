@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://pksofttech.github.io/uPLC_STUDIO/sitemap.xml

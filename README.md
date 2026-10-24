@@ -1,83 +1,74 @@
-# LaduinoPLC
+<div align="center">
+  <img src="assets/logo_full_card.png" alt="LaduinoPLC by pksofttech.org" width="560" />
 
-A modern, high-performance Rust Ladder Diagram (PLC) editor and real-time simulator inspired by **MICROPLC** and **LDMICRO**.
+  <h1>LaduinoPLC — IEC 61131-3 Ladder Diagram IDE & RP2040 Micro-VM</h1>
 
-## Features
+  <p>
+    <strong>ซอฟต์แวร์ออกแบบและจำลองวงจร PLC มาตรฐาน IEC 61131-3 พร้อมรันไทม์ 32-bit Micro-VM สำหรับบอร์ด Raspberry Pi Pico (RP2040)</strong><br />
+    <em>Fast, modern IEC 61131-3 Ladder Logic & Instruction List (<code>.il</code>) IDE, Real-Time Simulator, and Embedded Microcontroller Runtime written in Rust.</em>
+  </p>
 
-- **Ladder Logic Editor**:
-  - Industrial Dark CAD Canvas with Power Rails (L1 Hot Rail & L2 Ground Rail).
-  - Rung management (Add, Insert, Move Up/Down, Delete).
-  - Elements:
-    - Contacts: Normally Open (`--| |--`), Normally Closed (`--|/|--`)
-    - Coils: Normal (`--(--)--`), Set Latch (`--(S)--`), Reset Unlatch (`--(R)--`), Negated
-    - Timers: `TON` (On-Delay), `TOF` (Off-Delay)
-    - Counters: `CTU` (Up Counter), `CTD` (Down Counter), `CTC`
-    - Branches: Parallel seal-in / bypass logic (`[┬] PARALLEL`)
-    - Math & Comparison: `ADD`, `SUB`, `CMP`, `MOV`
-    - Rung Comments: `//`
-- **Real-Time Simulation Engine**:
-  - Cyclic 10ms logic scan.
-  - Live **Power Flow Visualization**: wires and energized elements glow bright RED when active.
-  - **Live Virtual PLC Rack**:
-    - Digital Inputs `X0`–`X7` (interactive toggle switches)
-    - Digital Outputs `Y0`–`Y7` (LED indicator lights)
-    - Internal Relays / Markers `M0`–`M15`
-    - Live Timer Accumulators and Done status
-  - Click on contacts directly in the diagram to toggle inputs during simulation!
-- **OpenPLC & CODESYS Compatibility (IEC 61131-3)**:
-  - Open & export standard IEC 61131-3 Instruction List (`.il`) files.
-  - Transparent auto-detection between IEC 61131-3 IL and legacy formats.
-  - Hardware mapping (Arduino UNO R3, Nano, Mega, ESP32).
-  - Live preview & export of IEC 61131-3 IL source code.
-
-## How to Run
-
-```bash
-cargo run -p laduino-plc
-```
-
-## Run Tests
-
-```bash
-cargo test
-```
-
-## Build Release
-
-### Linux Binary
-```bash
-cargo build --release -p laduino-plc
-```
-
-### Windows (.exe)
-```bash
-cross build --target x86_64-pc-windows-gnu --release -p laduino-plc
-```
-The output executable will be located at `target/x86_64-pc-windows-gnu/release/laduino-plc.exe`.
-
+  <p>
+    <a href="https://pksofttech.github.io/uPLC_STUDIO/">
+      <img src="https://img.shields.io/badge/🌐_Live_Website_&_Interactive_Demo-pksofttech.github.io-000000?style=for-the-badge" alt="Official Website" />
+    </a>
+    <a href="https://github.com/pksofttech/uPLC_STUDIO/releases/latest">
+      <img src="https://img.shields.io/badge/⬇_Download_Releases-v0.1.0_(Pre--Release)-10b981?style=for-the-badge" alt="Download Release" />
+    </a>
+  </p>
+</div>
 
 ---
 
-## ⚡ RP2040 Firmware (Micro-VM & Hardware PLC)
+## 📦 ดาวน์โหลดเวอร์ชันพร้อมใช้งาน (Pre-Built Downloads — `v0.1.0`)
 
-LaduinoPLC can flash and communicate directly with a physical **Raspberry Pi Pico (RP2040)** running our async Embassy runtime.
+🌐 **หน้าเว็บไซต์หลัก & ทดลองจำลองวงจรออนไลน์**: **[https://pksofttech.github.io/uPLC_STUDIO](https://pksofttech.github.io/uPLC_STUDIO)**
 
-- **Source & Full Documentation**: See [firmware/rp2040-embassy/README.md](firmware/rp2040-embassy/README.md).
+| แพลตฟอร์ม (Platform) | ลิงก์ดาวน์โหลดตรง (Direct Download) | รายละเอียด (Contents) |
+| :--- | :--- | :--- |
+| 🪟 **Windows 10 / 11 (64-bit)** | [**⬇ ดาวน์โหลด `.zip` สำหรับ Windows**](https://github.com/pksofttech/uPLC_STUDIO/releases/latest/download/laduino-plc-v0.1.0-x86_64-pc-windows-msvc.zip) | `laduino-plc.exe` + เฟิร์มแวร์ `.uf2` + 14 ตัวอย่างวงจร `.il` |
+| 🐧 **Linux (x86_64)** | [**⬇ ดาวน์โหลด `.tar.gz` สำหรับ Linux**](https://github.com/pksofttech/uPLC_STUDIO/releases/latest/download/laduino-plc-v0.1.0-x86_64-unknown-linux-gnu.tar.gz) | ไบนารี `laduino-plc` + เฟิร์มแวร์ `.uf2` + 14 ตัวอย่างวงจร `.il` |
+| 🍓 **RP2040 Micro-VM (`.uf2`)** | [**⚡ ดาวน์โหลดเฟิร์มแวร์ `.uf2`**](https://github.com/pksofttech/uPLC_STUDIO/releases/latest/download/uplc-rp2040-embassy.uf2) | เฟิร์มแวร์สำหรับลากวางลงไดรฟ์ `RPI-RP2` (USB BOOTSEL) |
 
-### Quick Build & Flash
+---
+
+## ✨ ฟีเจอร์หลัก (Key Capabilities)
+
+- **IEC 61131-3 Ladder & IL Editor**:
+  - วาดวงจรด้วยเมาส์และคีย์ลัดความเร็วสูง รองรับ Contact (`NO`, `NC`, `P-Edge`, `N-Edge`), Coil (`Normal`, `Negated`, `Set`, `Reset`), Parallel Branch, Multi-line Network Comment
+  - แปลงโค้ดไป-กลับระหว่างผังวงจร **Ladder Diagram** และ **Instruction List (`.il`)** มาตรฐาน IEC 61131-3 แบบไร้การสูญเสีย
+- **Industrial Function Blocks**:
+  - **Timers & Counters**: `TON`, `TOF`, `TP`, `CTU`, `CTD`, `CTUD`
+  - **Math, Logic & Data**: `ADD`, `SUB`, `MUL`, `DIV`, `MOD`, `MOV`, `SHL`, `SHR`, `AND`, `OR`, `XOR`
+  - **Process Control**: `PID` Controller, Linear `SCALE`, `LIMIT`, `DRUM` Sequencer, 12-bit `ADC` (`%IW0..%IW3`)
+  - **Industrial Communication**: `MB_MASTER` (**Modbus RTU Master** ผ่าน RS-485 Functions `03`, `04`, `06`) และ `UART`
+- **Real-Time Simulator & Hardware Online Monitor**:
+  - จำลองการทำงานแบบออฟไลน์ได้ทันทีบนคอมพิวเตอร์ (`F5 = Run/Stop`, `F6 = Single Step`)
+  - เชื่อมต่อบอร์ด **Raspberry Pi Pico (RP2040)** ผ่านพอร์ต USB-CDC เพื่อดูสถานะกระแสไหลจริง (`F7 = Online Monitor`), สั่ง **Force I/O** และตรวจสอบโค้ดตรงกันด้วย **CRC16**
+  - รองรับหน่วยความจำจำค่าเมื่อไฟดับ (**RETAIN Flash**: `M64..M95`, `D96..D127` / `%MW96..%MW127`)
+- **1-Click USB BOOTSEL Flasher**:
+  - มีหน้าต่างแฟลชเฟิร์มแวร์ `.uf2` ลงบอร์ด RP2040 ในตัวโดยไม่ต้องติดตั้งเครื่องมือคอมไพล์เสริม
+
+---
+
+## 🛠️ การคอมไพล์จากซอร์สโค้ด (Build from Source)
 
 ```bash
-cd firmware/rp2040-embassy
+# รันโปรแกรมบนเครื่อง (Desktop IDE)
+cargo run --release -p laduino-plc
 
-# 1. Build release binary
-cargo build --release
+# รันชุดทดสอบทั้งหมด (Unit + Differential VM Tests)
+cargo test --workspace
 
-# 2. Flash via Debug Probe (SWD / CMSIS-DAP)
-cargo run --release
-
-# OR Flash via USB BOOTSEL (Hold BOOTSEL button while plugging in USB)
-elf2uf2-rs -d -s target/thumbv6m-none-eabi/release/uplc-rp2040-embassy
+# สร้างแพ็กเกจ Release ทั้งหมด (Windows + Linux + RP2040 .uf2) ลงโฟลเดอร์ releases/
+bash .agents/skills/uplc-product-release/scripts/package_release.sh
 ```
 
-Once flashed, connect the Pico's micro-USB to your PC and use **"⚡ Update to PLC"** or **"Online Monitor"** in LaduinoPLC to download ladder programs and monitor I/O live!
+---
 
+## 💖 ร่วมสนับสนุนการพัฒนา (Support & Donate)
+
+หากโปรแกรม **LaduinoPLC** เป็นประโยชน์ต่อการเรียนการสอนหรือการทำงานของคุณ สามารถร่วมสนับสนุนทีมพัฒนา (**pksofttech.org**) ได้ที่:
+- ☕ **Buy Me a Coffee**: [https://buymeacoffee.com/pksofttech](https://buymeacoffee.com/pksofttech)
+- 💜 **GitHub Sponsors**: [https://github.com/sponsors/pksofttech](https://github.com/sponsors/pksofttech)
+- 🇹🇭 **PromptPay (พร้อมเพย์)**: ดู QR Code ได้ที่หน้าเว็บไซต์ [https://pksofttech.github.io/uPLC_STUDIO/#donate](https://pksofttech.github.io/uPLC_STUDIO/#donate)
