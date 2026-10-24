@@ -72,6 +72,7 @@
         <li><a href="#examples" data-i18n="nav_examples">ตัวอย่างวงจร</a></li>
         <li><a href="#roadmap" data-i18n="nav_roadmap">แผนพัฒนา</a></li>
         <li><a href="#download" data-i18n="nav_download">ดาวน์โหลด</a></li>
+        <li><a href="#report" data-i18n="nav_report">แจ้งปัญหา</a></li>
       </ul>
 
       <div class="nav-actions">
@@ -811,6 +812,54 @@
                 ☕ Buy Me a Coffee
               </a>
             </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Bug Report & Feedback Section -->
+    <section id="report">
+      <div class="container">
+        <div class="section-header">
+          <span class="section-tag" data-i18n="rep_tag">BUG REPORT & FEEDBACK</span>
+          <h2 data-i18n="rep_title">แจ้งปัญหาการใช้งาน & รายงานข้อผิดพลาดของระบบ</h2>
+          <p data-i18n="rep_subtitle">
+            เนื่องจากปัจจุบันอยู่ในช่วงปรับปรุงก่อนปล่อยอย่างเป็นทางการ (Pre-Release) หากคุณพบข้อผิดพลาด (Bug), ปัญหาการจำลองวงจร หรือมีข้อเสนอแนะ สามารถส่งรายงานถึงทีมพัฒนาได้โดยตรงครับ
+          </p>
+        </div>
+
+        <div class="report-container">
+          <div class="report-card-main">
+            <span class="wiring-tag" data-i18n="rep_direct_tag">DIRECT DEVELOPER CONTACT</span>
+            <h3 data-i18n="rep_card_title">ส่งรายงานผ่านอีเมลถึงทีมพัฒนา</h3>
+            <p data-i18n="rep_card_desc">
+              คลิกปุ่มด้านล่างเพื่อเปิดโปรแกรมส่งอีเมลพร้อมแบบฟอร์มแจ้งปัญหาอัตโนมัติ หรือคัดลอกที่อยู่อีเมลเพื่อส่งไฟล์วงจร (.il) และภาพหน้าจอประกอบ
+            </p>
+
+            <div class="email-pill-row">
+              <span class="email-icon">✉️</span>
+              <span id="report-email-text">pksofttech@gmail.com</span>
+              <button type="button" id="copy-email-btn" class="copy-btn" data-i18n="btn_copy_email">คัดลอกอีเมล</button>
+            </div>
+
+            <div class="report-actions">
+              <a id="mailto-report-link" href="mailto:pksofttech@gmail.com?subject=%5BLaduinoPLC%20Bug%20Report%5D%20%E0%B9%81%E0%B8%88%E0%B9%89%E0%B8%87%E0%B8%9B%E0%B8%B1%E0%B8%8D%E0%B8%AB%E0%B8%B2%E0%B8%81%E0%B8%B2%E0%B8%A3%E0%B9%83%E0%B8%8A%E0%B9%89%E0%B8%87%E0%B8%B2%E0%B8%99&body=OS%20(Windows%20%2F%20Linux)%3A%20%0ALaduinoPLC%20Version%3A%20v0.1.0%0A%0A%E0%B8%A3%E0%B8%B2%E0%B8%A2%E0%B8%A5%E0%B8%B0%E0%B9%80%E0%B8%AD%E0%B8%B5%E0%B8%A2%E0%B8%94%E0%B8%9B%E0%B8%B1%E0%B8%8D%E0%B8%AB%E0%B8%B2%20(Issue%20Description)%3A%0A" class="btn btn-primary" data-i18n="rep_btn_email">
+                ✉️ ส่งอีเมลแจ้งปัญหา (pksofttech@gmail.com)
+              </a>
+              <a href="https://github.com/pksofttech/uPLC_STUDIO/issues/new" target="_blank" rel="noopener" class="btn btn-outline" data-i18n="rep_btn_gh">
+                🐞 แจ้งผ่าน GitHub Issues
+              </a>
+            </div>
+          </div>
+
+          <div class="report-card-tips">
+            <h4 data-i18n="rep_tips_title">📋 ข้อมูลที่แนะนำให้แนบมาพร้อมรายงาน</h4>
+            <ul>
+              <li data-i18n="rep_tip_1">ระบบปฏิบัติการที่ใช้งาน (เช่น Windows 10/11 หรือ Ubuntu/Arch Linux)</li>
+              <li data-i18n="rep_tip_2">ลำดับขั้นตอนที่ทำให้เกิดปัญหา หรือแนบไฟล์โปรเจกต์วงจร (.il) ที่พบอาการ</li>
+              <li data-i18n="rep_tip_3">ภาพถ่ายหน้าจอ (Screenshot) หรือข้อความแจ้งเตือนที่แสดงบนโปรแกรม</li>
+              <li data-i18n="rep_tip_4">ข้อมูลบอร์ดไมโครคอนโทรลเลอร์ (กรณีพบปัญหาการเชื่อมต่อพอร์ต USB หรือการแฟลช .uf2)</li>
+            </ul>
           </div>
         </div>
       </div>

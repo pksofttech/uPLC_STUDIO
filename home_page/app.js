@@ -21,7 +21,8 @@ const SITE_CONFIG = {
   promptPayNameEn: "บรรณพต นุ่มนาค",
   promptPayId: "3660600255351",
   githubSponsorsUrl: "https://github.com/sponsors/pksofttech",
-  buyMeACoffeeUrl: "https://buymeacoffee.com/pksofttech"
+  buyMeACoffeeUrl: "https://buymeacoffee.com/pksofttech",
+  reportEmail: "pksofttech@gmail.com"
 };
 
 /**
@@ -35,6 +36,7 @@ const I18N = {
     nav_examples: "ตัวอย่างวงจร",
     nav_roadmap: "แผนพัฒนา",
     nav_download: "ดาวน์โหลด",
+    nav_report: "แจ้งปัญหา",
     nav_donate: "☕ สนับสนุนผู้พัฒนา",
 
     hero_badge: "IEC 61131-3 Ladder IDE & RP2040 Micro-VM",
@@ -199,6 +201,21 @@ const I18N = {
     don_bmc_desc: "เลี้ยงกาแฟทีมผู้พัฒนาเพื่อเป็นกำลังใจในการพัฒนาฟีเจอร์ใหม่ๆ ผ่านทาง Buy Me a Coffee ได้อย่างสะดวกและปลอดภัย",
     don_bmc_btn: "☕ Buy Me a Coffee",
 
+    rep_tag: "BUG REPORT & FEEDBACK",
+    rep_title: "แจ้งปัญหาการใช้งาน & รายงานข้อผิดพลาดของระบบ",
+    rep_subtitle: "เนื่องจากปัจจุบันอยู่ในช่วงปรับปรุงก่อนปล่อยอย่างเป็นทางการ (Pre-Release) หากคุณพบข้อผิดพลาด (Bug), ปัญหาการจำลองวงจร หรือมีข้อเสนอแนะ สามารถส่งรายงานถึงทีมพัฒนาได้โดยตรงครับ",
+    rep_direct_tag: "DIRECT DEVELOPER CONTACT",
+    rep_card_title: "ส่งรายงานผ่านอีเมลถึงทีมพัฒนา",
+    rep_card_desc: "คลิกปุ่มด้านล่างเพื่อเปิดโปรแกรมส่งอีเมลพร้อมแบบฟอร์มแจ้งปัญหาอัตโนมัติ หรือคัดลอกที่อยู่อีเมลเพื่อส่งไฟล์วงจร (.il) และภาพหน้าจอประกอบ",
+    btn_copy_email: "คัดลอกอีเมล",
+    rep_btn_email: "✉️ ส่งอีเมลแจ้งปัญหา (pksofttech@gmail.com)",
+    rep_btn_gh: "🐞 แจ้งผ่าน GitHub Issues",
+    rep_tips_title: "📋 ข้อมูลที่แนะนำให้แนบมาพร้อมรายงาน",
+    rep_tip_1: "ระบบปฏิบัติการที่ใช้งาน (เช่น Windows 10/11 หรือ Ubuntu/Arch Linux)",
+    rep_tip_2: "ลำดับขั้นตอนที่ทำให้เกิดปัญหา หรือแนบไฟล์โปรเจกต์วงจร (.il) ที่พบอาการ",
+    rep_tip_3: "ภาพถ่ายหน้าจอ (Screenshot) หรือข้อความแจ้งเตือนที่แสดงบนโปรแกรม",
+    rep_tip_4: "ข้อมูลบอร์ดไมโครคอนโทรลเลอร์ (กรณีพบปัญหาการเชื่อมต่อพอร์ต USB หรือการแฟลช .uf2)",
+
     footer_copy: "พัฒนาโดย pksofttech.org • ซอฟต์แวร์ออกแบบและจำลองวงจร PLC มาตรฐาน IEC 61131-3",
     modal_close: "ปิดหน้าต่าง (Close)"
   },
@@ -210,6 +227,7 @@ const I18N = {
     nav_examples: "Examples",
     nav_roadmap: "Roadmap",
     nav_download: "Download",
+    nav_report: "Report Issue",
     nav_donate: "☕ Donate / Support",
 
     hero_badge: "IEC 61131-3 Ladder IDE & RP2040 Micro-VM",
@@ -373,6 +391,21 @@ const I18N = {
     don_bmc_title: "☕ Buy Me a Coffee",
     don_bmc_desc: "Buy the developer a coffee to support ongoing development via Buy Me a Coffee.",
     don_bmc_btn: "☕ Buy Me a Coffee",
+
+    rep_tag: "BUG REPORT & FEEDBACK",
+    rep_title: "Report System Bugs & Send Feedback",
+    rep_subtitle: "As LaduinoPLC is currently in Pre-Release refinement, please report any bugs, simulation issues, or feature suggestions directly to the developer.",
+    rep_direct_tag: "DIRECT DEVELOPER CONTACT",
+    rep_card_title: "Send Bug Report via Email",
+    rep_card_desc: "Click below to launch your email client with a pre-filled report template, or copy the email address to attach .il files and screenshots.",
+    btn_copy_email: "Copy Email",
+    rep_btn_email: "✉️ Email Bug Report (pksofttech@gmail.com)",
+    rep_btn_gh: "🐞 Open GitHub Issue",
+    rep_tips_title: "📋 Helpful Details to Include in Your Report",
+    rep_tip_1: "Operating System version (e.g. Windows 10/11 or Ubuntu/Arch Linux)",
+    rep_tip_2: "Steps to reproduce the issue, or attach the .il ladder circuit file",
+    rep_tip_3: "Screenshots or any error messages displayed in the IDE",
+    rep_tip_4: "MCU board details (if reporting USB-CDC or .uf2 flashing issues)",
 
     footer_copy: "Developed by pksofttech.org • IEC 61131-3 PLC Ladder Diagram IDE & Micro-VM Runtime",
     modal_close: "Close Window"
@@ -641,6 +674,18 @@ document.addEventListener("DOMContentLoaded", () => {
       copyBtn.textContent = dict.btn_copied;
       setTimeout(() => {
         copyBtn.textContent = I18N[currentLang].btn_copy_id;
+      }, 1800);
+    });
+  }
+
+  // Copy Report Email Address
+  const copyEmailBtn = document.getElementById("copy-email-btn");
+  if (copyEmailBtn) {
+    copyEmailBtn.addEventListener("click", () => {
+      navigator.clipboard?.writeText(SITE_CONFIG.reportEmail);
+      copyEmailBtn.textContent = I18N[currentLang].btn_copied;
+      setTimeout(() => {
+        copyEmailBtn.textContent = I18N[currentLang].btn_copy_email;
       }, 1800);
     });
   }

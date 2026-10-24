@@ -1550,11 +1550,113 @@ footer {
 }
 
 /* ============================================================================
+ * Bug Report & Feedback Section (#report)
+ * ============================================================================ */
+.report-container {
+  display: grid;
+  grid-template-columns: 1.15fr 0.85fr;
+  gap: 26px;
+  align-items: stretch;
+}
+
+.report-card-main,
+.report-card-tips {
+  background: var(--bg-card);
+  backdrop-filter: blur(20px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 34px;
+  box-shadow: var(--shadow-sm);
+  transition: all 0.35s var(--ease-out-expo);
+}
+
+.report-card-main {
+  background: #ffffff;
+  border: 1.5px solid #000000;
+  box-shadow: var(--shadow-lg);
+}
+
+.report-card-main h3 {
+  font-family: var(--font-display);
+  font-size: 1.38rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: #000000;
+  margin-bottom: 10px;
+}
+
+.report-card-main p {
+  font-size: 0.93rem;
+  color: var(--text-secondary);
+  margin-bottom: 20px;
+}
+
+.email-pill-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  background: #f4f4f6;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: var(--radius-pill);
+  padding: 8px 10px 8px 16px;
+  margin-bottom: 22px;
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #000000;
+}
+
+.report-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.report-card-tips h4 {
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: #000000;
+  margin-bottom: 16px;
+}
+
+.report-card-tips ul {
+  list-style: none;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.report-card-tips ul li {
+  margin-bottom: 12px;
+  padding-left: 24px;
+  position: relative;
+  line-height: 1.55;
+}
+
+.report-card-tips ul li::before {
+  content: "✓";
+  position: absolute;
+  left: 0;
+  top: 2px;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: #000000;
+  color: #ffffff;
+  font-size: 0.65rem;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ============================================================================
  * Responsive Breakpoints
  * ============================================================================ */
 @media (max-width: 960px) {
   .hero-grid,
-  .donate-container {
+  .donate-container,
+  .report-container {
     grid-template-columns: 1fr;
   }
   .mobile-menu-pill {
