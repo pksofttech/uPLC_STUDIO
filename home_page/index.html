@@ -1,14 +1,25 @@
 <!DOCTYPE html>
 <html lang="th">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>LaduinoPLC (by PksofttecH) — IEC 61131-3 Ladder Diagram IDE & RP2040 Micro-VM</title>
-  <meta name="description" content="LaduinoPLC by PksofttecH — Modern IEC 61131-3 Ladder Diagram IDE, Real-Time PLC Simulator, Instruction List (.il) Generator, and RP2040 32-bit Micro-VM Runtime." />
+  <title>LaduinoPLC (by pksofttech.org) — IEC 61131-3 Ladder Diagram IDE & RP2040 Micro-VM</title>
+  <meta name="description" content="LaduinoPLC by pksofttech.org — Modern IEC 61131-3 Ladder Diagram IDE, Real-Time PLC Simulator, Instruction List (.il) Generator, and RP2040 32-bit Micro-VM Runtime." />
   <link rel="icon" type="image/svg+xml" href="assets/laduinoplc.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&family=Noto+Sans+Thai:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
 </head>
+
 <body>
+  <!-- Human-Machine Iridescent Ambient Halo Background -->
+  <div class="hm-ambient-halo" aria-hidden="true">
+    <div class="hm-halo-ring"></div>
+    <div class="hm-halo-core"></div>
+  </div>
+  <div class="hm-bottom-fade" aria-hidden="true"></div>
 
   <!-- Sticky Navigation Bar -->
   <header class="navbar">
@@ -17,7 +28,7 @@
         <img src="assets/laduinoplc.svg" alt="LaduinoPLC Logo" />
         <div>
           LaduinoPLC
-          <span class="brand-sub">by PksofttecH • <span id="site-version-badge">v0.2.0</span></span>
+          <span class="brand-sub">by pksofttech.org • <span id="site-version-badge">v0.2.0</span></span>
         </div>
       </a>
 
@@ -26,7 +37,6 @@
         <li><a href="#getting-started" data-i18n="nav_getting_started">เริ่มต้นใช้งาน</a></li>
         <li><a href="#hardware" data-i18n="nav_hardware">ฮาร์ดแวร์ & พิน</a></li>
         <li><a href="#download" data-i18n="nav_download">ดาวน์โหลด</a></li>
-        <li><a href="#donate" data-i18n="nav_donate">☕ สนับสนุนผู้พัฒนา</a></li>
       </ul>
 
       <div class="nav-actions">
@@ -44,9 +54,15 @@
     <section class="hero" style="border-top: none;">
       <div class="container hero-grid">
         <div>
-          <div class="pill-badge">
-            <span class="pill-dot"></span>
-            <span data-i18n="hero_badge">IEC 61131-3 Ladder IDE & RP2040 Micro-VM</span>
+          <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 22px;">
+            <div class="pill-badge" style="margin-bottom: 0;">
+              <span class="pill-dot"></span>
+              <span data-i18n="hero_badge">IEC 61131-3 Ladder IDE & RP2040 Micro-VM</span>
+            </div>
+            <div class="status-notice-pill">
+              <span class="status-dot-amber"></span>
+              <span data-i18n="status_prerelease_short">สถานะ: ปรับปรุงก่อนปล่อยออกอย่างเป็นทางการ</span>
+            </div>
           </div>
 
           <h1>
@@ -55,11 +71,12 @@
           </h1>
 
           <p class="hero-desc" data-i18n="hero_desc">
-            LaduinoPLC โดย PksofttecH — โปรแกรมออกแบบวงจร Ladder Diagram มาตรฐาน IEC 61131-3 พร้อมระบบจำลองการทำงานแบบเรียลไทม์ (Real-Time Simulator), แปลงโค้ด Instruction List (.il) อัตโนมัติ และรันบนไมโครคอนโทรลเลอร์ Raspberry Pi Pico (RP2040) ด้วย 32-bit Micro-VM ความเร็วสูง
+            LaduinoPLC โดย pksofttech.org — โปรแกรมออกแบบวงจร Ladder Diagram มาตรฐาน IEC 61131-3 พร้อมระบบจำลองการทำงานแบบเรียลไทม์ (Real-Time Simulator), แปลงโค้ด Instruction List (.il) อัตโนมัติ และรันบนไมโครคอนโทรลเลอร์ Raspberry Pi Pico (RP2040)
+            ด้วย 32-bit Micro-VM ความเร็วสูง
           </p>
 
           <div class="hero-cta">
-            <a id="hero-dl-btn" href="https://github.com/pksofttech/uPLC_STUDIO/releases" target="_blank" rel="noopener" class="btn btn-primary" data-i18n="btn_download_now">
+            <a id="hero-dl-btn" href="#download" class="btn btn-primary" data-i18n="btn_download_now">
               ⬇ ดาวน์โหลดฟรี (GitHub Releases)
             </a>
             <a href="#getting-started" class="btn btn-outline" data-i18n="btn_quickstart">
@@ -418,6 +435,10 @@
           <p data-i18n="dl_subtitle">
             ฟรีและโอเพนซอร์ส — ดาวน์โหลดเวอร์ชันล่าสุดได้โดยตรงจาก GitHub Releases
           </p>
+          <div class="prerelease-banner">
+            <span class="status-badge-tag" data-i18n="status_prerelease_tag">PRE-RELEASE</span>
+            <span data-i18n="status_prerelease_desc">ปรับปรุงก่อนปล่อยออกอย่างเป็นทางการ — รุ่นทดสอบสำหรับตรวจสอบความเสถียรและฟีเจอร์ก่อนเปิดตัวเวอร์ชันสมบูรณ์</span>
+          </div>
         </div>
 
         <div class="download-grid">
@@ -437,7 +458,7 @@
                 <li data-i18n="dl_win_l3">รวมตัวอย่างวงจร Ladder มาตรฐานครบชุด</li>
               </ul>
             </div>
-            <a id="dl-win-link" href="https://github.com/pksofttech/uPLC_STUDIO/releases" target="_blank" rel="noopener" class="btn btn-primary" data-i18n="dl_win_btn">
+            <a id="dl-win-link" href="../releases/laduino-plc-v0.1.0-x86_64-pc-windows-gnu.zip" download class="btn btn-primary" data-i18n="dl_win_btn">
               ⬇ ดาวน์โหลดสำหรับ Windows
             </a>
           </div>
@@ -458,7 +479,7 @@
                 <li data-i18n="dl_lin_l3">รวมไฟล์เฟิร์มแวร์ .uf2 และตัวอย่างครบชุด</li>
               </ul>
             </div>
-            <a id="dl-lin-link" href="https://github.com/pksofttech/uPLC_STUDIO/releases" target="_blank" rel="noopener" class="btn btn-outline" data-i18n="dl_lin_btn">
+            <a id="dl-lin-link" href="../releases/laduino-plc-v0.1.0-x86_64-unknown-linux-gnu.tar.gz" download class="btn btn-outline" data-i18n="dl_lin_btn">
               ⬇ ดาวน์โหลดสำหรับ Linux
             </a>
           </div>
@@ -479,7 +500,7 @@
                 <li data-i18n="dl_fw_l3">รองรับ PID, SCALE, LIMIT, UART, Modbus RTU</li>
               </ul>
             </div>
-            <a id="dl-fw-link" href="https://github.com/pksofttech/uPLC_STUDIO/releases" target="_blank" rel="noopener" class="btn btn-emerald" data-i18n="dl_fw_btn">
+            <a id="dl-fw-link" href="../releases/uplc-rp2040-embassy.uf2" download class="btn btn-emerald" data-i18n="dl_fw_btn">
               ⚡ ดาวน์โหลดเฟิร์มแวร์ (.uf2)
             </a>
           </div>
@@ -494,7 +515,7 @@
           <span class="section-tag" data-i18n="don_tag">SUPPORT & DONATE</span>
           <h2 data-i18n="don_title">ร่วมสนับสนุนการพัฒนา LaduinoPLC</h2>
           <p data-i18n="don_subtitle">
-            หากโปรแกรม LaduinoPLC ช่วยให้งานของคุณง่ายขึ้น หรือเป็นประโยชน์ต่อการเรียนรู้ คุณสามารถร่วมบริจาคสนับสนุนทีมผู้พัฒนา (PksofttecH) เพื่อเป็นกำลังใจในการพัฒนาฟีเจอร์ใหม่ๆ ต่อไปได้ครับ
+            หากโปรแกรม LaduinoPLC ช่วยให้งานของคุณง่ายขึ้น หรือเป็นประโยชน์ต่อการเรียนรู้ คุณสามารถร่วมบริจาคสนับสนุนทีมผู้พัฒนา (pksofttech.org) เพื่อเป็นกำลังใจในการพัฒนาฟีเจอร์ใหม่ๆ ต่อไปได้ครับ
           </p>
         </div>
 
@@ -502,12 +523,12 @@
           <!-- PromptPay QR Card -->
           <div class="qr-box">
             <img id="promptpay-qr-img" src="assets/promptpay-qr.svg" alt="PromptPay QR Code" />
-            <div id="promptpay-acct-name" class="qr-acct-name">PksofttecH (สนับสนุนพัฒนา LaduinoPLC)</div>
+            <div id="promptpay-acct-name" class="qr-acct-name">บรรณพต นุ่มนาค</div>
             <div style="font-size: 0.78rem; color: #64748b; margin-top: 2px;" data-i18n="qr_scan_label">
               สแกน QR Code ด้วยแอปธนาคาร (PromptPay / พร้อมเพย์)
             </div>
             <div class="qr-id-row">
-              <span id="promptpay-id-text">08X-XXX-XXXX</span>
+              <span id="promptpay-id-text">3660600255351</span>
               <button type="button" id="copy-promptpay-btn" class="copy-btn" data-i18n="btn_copy_id">คัดลอก</button>
             </div>
             <div style="font-size: 0.75rem; color: #0284c7; margin-top: 8px;" data-i18n="qr_zoom_hint">
@@ -565,7 +586,7 @@
     <div class="container footer-inner">
       <div style="display: flex; align-items: center; gap: 10px;">
         <img src="assets/laduinoplc.svg" alt="LaduinoPLC" width="28" height="28" />
-        <span data-i18n="footer_copy">พัฒนาโดย PksofttecH • ซอฟต์แวร์ออกแบบและจำลองวงจร PLC มาตรฐาน IEC 61131-3</span>
+        <span data-i18n="footer_copy">พัฒนาโดย pksofttech.org • ซอฟต์แวร์ออกแบบและจำลองวงจร PLC มาตรฐาน IEC 61131-3</span>
       </div>
       <div>
         <a id="footer-gh-link" href="https://github.com/pksofttech/uPLC_STUDIO" target="_blank" rel="noopener" style="color: var(--accent-cyan);">
@@ -587,4 +608,5 @@
 
   <script src="app.js"></script>
 </body>
+
 </html>

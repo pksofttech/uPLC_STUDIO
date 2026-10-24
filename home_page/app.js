@@ -1,22 +1,22 @@
 /**
  * ============================================================================
- * LaduinoPLC (by PksofttecH) — Official Landing Page Configuration
+ * LaduinoPLC (by pksofttech.org) — Official Landing Page Configuration
  * แก้ไขข้อมูลลิงก์ดาวน์โหลด, เลขพร้อมเพย์, รูป QR Code และลิงก์รับบริจาคได้ที่บล็อกนี้
  * ============================================================================
  */
 const SITE_CONFIG = {
-  version: "v0.2.0",
+  version: "v0.1.0",
   githubRepoUrl: "https://github.com/pksofttech/uPLC_STUDIO",
-  releasesUrl: "https://github.com/pksofttech/uPLC_STUDIO/releases",
-  windowsDownloadUrl: "https://github.com/pksofttech/uPLC_STUDIO/releases/latest",
-  linuxDownloadUrl: "https://github.com/pksofttech/uPLC_STUDIO/releases/latest",
-  firmwareUf2Url: "https://github.com/pksofttech/uPLC_STUDIO/releases/latest",
+  releasesUrl: "#download",
+  windowsDownloadUrl: "../releases/laduino-plc-v0.1.0-x86_64-pc-windows-gnu.zip",
+  linuxDownloadUrl: "../releases/laduino-plc-v0.1.0-x86_64-unknown-linux-gnu.tar.gz",
+  firmwareUf2Url: "../releases/uplc-rp2040-embassy.uf2",
 
   // ข้อมูลรับบริจาค / Support & Donate
-  promptPayQrImage: "assets/promptpay-qr.svg", // เปลี่ยนเป็น "assets/promptpay-qr.png" เมื่อวางไฟล์รูปจริง
-  promptPayNameTh: "PksofttecH (สนับสนุนพัฒนา LaduinoPLC)",
-  promptPayNameEn: "PksofttecH (LaduinoPLC Development)",
-  promptPayId: "08X-XXX-XXXX", // ใส่เบอร์พร้อมเพย์ หรือ เลขบัญชีธนาคารของคุณที่นี่
+  promptPayQrImage: "assets/promptpay-qr.svg",
+  promptPayNameTh: "บรรณพต นุ่มนาค",
+  promptPayNameEn: "บรรณพต นุ่มนาค",
+  promptPayId: "3660600255351",
   githubSponsorsUrl: "https://github.com/sponsors/pksofttech",
   buyMeACoffeeUrl: "https://buymeacoffee.com/pksofttech"
 };
@@ -33,10 +33,13 @@ const I18N = {
     nav_donate: "☕ สนับสนุนผู้พัฒนา",
 
     hero_badge: "IEC 61131-3 Ladder IDE & RP2040 Micro-VM",
+    status_prerelease_short: "สถานะ: ปรับปรุงก่อนปล่อยออกอย่างเป็นทางการ",
+    status_prerelease_tag: "PRE-RELEASE",
+    status_prerelease_desc: "ปรับปรุงก่อนปล่อยออกอย่างเป็นทางการ — รุ่นทดสอบสำหรับตรวจสอบความเสถียรและฟีเจอร์ก่อนเปิดตัวเวอร์ชันสมบูรณ์",
     hero_title_1: "เขียนวงจร PLC Ladder",
     hero_title_2: "จำลองและแฟลชลงบอร์ดจริงในคลิกเดียว",
     hero_desc:
-      "LaduinoPLC โดย PksofttecH — โปรแกรมออกแบบวงจร Ladder Diagram มาตรฐาน IEC 61131-3 พร้อมระบบจำลองการทำงานแบบเรียลไทม์ (Real-Time Simulator), แปลงโค้ด Instruction List (.il) อัตโนมัติ และรันบนไมโครคอนโทรลเลอร์ Raspberry Pi Pico (RP2040) ด้วย 32-bit Micro-VM ความเร็วสูง",
+      "LaduinoPLC โดย pksofttech.org — โปรแกรมออกแบบวงจร Ladder Diagram มาตรฐาน IEC 61131-3 พร้อมระบบจำลองการทำงานแบบเรียลไทม์ (Real-Time Simulator), แปลงโค้ด Instruction List (.il) อัตโนมัติ และรันบนไมโครคอนโทรลเลอร์ Raspberry Pi Pico (RP2040) ด้วย 32-bit Micro-VM ความเร็วสูง",
     btn_download_now: "⬇ ดาวน์โหลดฟรี (GitHub Releases)",
     btn_quickstart: "🚀 คู่มือเริ่มต้นใช้งาน",
     btn_support_dev: "💖 ร่วมบริจาคสนับสนุน",
@@ -130,7 +133,7 @@ const I18N = {
 
     don_tag: "SUPPORT & DONATE",
     don_title: "ร่วมสนับสนุนการพัฒนา LaduinoPLC",
-    don_subtitle: "หากโปรแกรม LaduinoPLC ช่วยให้งานของคุณง่ายขึ้น หรือเป็นประโยชน์ต่อการเรียนรู้ คุณสามารถร่วมบริจาคสนับสนุนทีมผู้พัฒนา (PksofttecH) เพื่อเป็นกำลังใจในการพัฒนาฟีเจอร์ใหม่ๆ ต่อไปได้ครับ",
+    don_subtitle: "หากโปรแกรม LaduinoPLC ช่วยให้งานของคุณง่ายขึ้น หรือเป็นประโยชน์ต่อการเรียนรู้ คุณสามารถร่วมบริจาคสนับสนุนทีมผู้พัฒนา (pksofttech.org) เพื่อเป็นกำลังใจในการพัฒนาฟีเจอร์ใหม่ๆ ต่อไปได้ครับ",
     qr_scan_label: "สแกน QR Code ด้วยแอปธนาคาร (PromptPay / พร้อมเพย์)",
     qr_zoom_hint: "🔍 คลิกที่รูป QR เพื่อขยายใหญ่",
     btn_copy_id: "คัดลอก",
@@ -145,7 +148,7 @@ const I18N = {
     don_bmc_desc: "เลี้ยงกาแฟทีมผู้พัฒนาเพื่อเป็นกำลังใจในการพัฒนาฟีเจอร์ใหม่ๆ ผ่านทาง Buy Me a Coffee ได้อย่างสะดวกและปลอดภัย",
     don_bmc_btn: "☕ Buy Me a Coffee",
 
-    footer_copy: "พัฒนาโดย PksofttecH • ซอฟต์แวร์ออกแบบและจำลองวงจร PLC มาตรฐาน IEC 61131-3",
+    footer_copy: "พัฒนาโดย pksofttech.org • ซอฟต์แวร์ออกแบบและจำลองวงจร PLC มาตรฐาน IEC 61131-3",
     modal_close: "ปิดหน้าต่าง (Close)"
   },
 
@@ -157,10 +160,13 @@ const I18N = {
     nav_donate: "☕ Donate / Support",
 
     hero_badge: "IEC 61131-3 Ladder IDE & RP2040 Micro-VM",
+    status_prerelease_short: "Status: Refining before official release",
+    status_prerelease_tag: "PRE-RELEASE",
+    status_prerelease_desc: "Under final refinement before official release — Pre-release build for stability & feature verification.",
     hero_title_1: "Industrial PLC Ladder IDE",
     hero_title_2: "Simulate & Flash to Hardware in One Click",
     hero_desc:
-      "LaduinoPLC by PksofttecH — A fast, modern IEC 61131-3 Ladder Diagram IDE with a built-in Real-Time Simulator, bidirectional Instruction List (.il) code generator, and a 32-bit Micro-VM firmware runtime for Raspberry Pi Pico (RP2040).",
+      "LaduinoPLC by pksofttech.org — A fast, modern IEC 61131-3 Ladder Diagram IDE with a built-in Real-Time Simulator, bidirectional Instruction List (.il) code generator, and a 32-bit Micro-VM firmware runtime for Raspberry Pi Pico (RP2040).",
     btn_download_now: "⬇ Free Download (GitHub Releases)",
     btn_quickstart: "🚀 Getting Started Guide",
     btn_support_dev: "💖 Support the Developer",
@@ -254,7 +260,7 @@ const I18N = {
 
     don_tag: "SUPPORT & DONATE",
     don_title: "Support LaduinoPLC Development",
-    don_subtitle: "If LaduinoPLC helps your projects, teaching, or automation work, consider supporting PksofttecH to help fund ongoing development and new hardware features.",
+    don_subtitle: "If LaduinoPLC helps your projects, teaching, or automation work, consider supporting pksofttech.org to help fund ongoing development and new hardware features.",
     qr_scan_label: "Scan via Thai Banking App (PromptPay QR)",
     qr_zoom_hint: "🔍 Click QR image to enlarge",
     btn_copy_id: "Copy",
@@ -269,7 +275,7 @@ const I18N = {
     don_bmc_desc: "Buy the developer a coffee to support ongoing development via Buy Me a Coffee.",
     don_bmc_btn: "☕ Buy Me a Coffee",
 
-    footer_copy: "Developed by PksofttecH • IEC 61131-3 PLC Ladder Diagram IDE & Micro-VM Runtime",
+    footer_copy: "Developed by pksofttech.org • IEC 61131-3 PLC Ladder Diagram IDE & Micro-VM Runtime",
     modal_close: "Close Window"
   }
 };
