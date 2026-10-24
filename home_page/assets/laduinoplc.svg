@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <!-- Background Gradient -->
+    <linearGradient id="chipGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1E293B"/>
+      <stop offset="50%" stop-color="#0F172A"/>
+      <stop offset="100%" stop-color="#090D16"/>
+    </linearGradient>
+
+    <!-- Metallic Pin Gradient -->
+    <linearGradient id="pinGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#94A3B8"/>
+      <stop offset="50%" stop-color="#F1F5F9"/>
+      <stop offset="100%" stop-color="#64748B"/>
+    </linearGradient>
+
+    <!-- Border Glow Gradient -->
+    <linearGradient id="borderGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00F0FF"/>
+      <stop offset="50%" stop-color="#0EA5E9"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+
+    <!-- Filter for subtle neon glow -->
+    <filter id="glowCyan" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <filter id="glowGreen" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Metallic IC Pins Top -->
+  <rect x="64" y="10" width="18" height="30" rx="3" fill="url(#pinGrad)"/>
+  <rect x="98" y="10" width="18" height="30" rx="3" fill="url(#pinGrad)"/>
+  <rect x="140" y="10" width="18" height="30" rx="3" fill="url(#pinGrad)"/>
+  <rect x="174" y="10" width="18" height="30" rx="3" fill="url(#pinGrad)"/>
+
+  <!-- Metallic IC Pins Bottom -->
+  <rect x="64" y="216" width="18" height="30" rx="3" fill="url(#pinGrad)"/>
+  <rect x="98" y="216" width="18" height="30" rx="3" fill="url(#pinGrad)"/>
+  <rect x="140" y="216" width="18" height="30" rx="3" fill="url(#pinGrad)"/>
+  <rect x="174" y="216" width="18" height="30" rx="3" fill="url(#pinGrad)"/>
+
+  <!-- Microchip Outer Bezel / Border -->
+  <rect x="30" y="30" width="196" height="196" rx="36" fill="url(#chipGrad)" stroke="url(#borderGrad)" stroke-width="4.5"/>
+
+  <!-- Subtle Inner Recessed Plate -->
+  <rect x="42" y="42" width="172" height="172" rx="26" fill="#0C121E" fill-opacity="0.85" stroke="#1E293B" stroke-width="2"/>
+
+  <!-- Pin 1 Index Indicator Notch -->
+  <circle cx="58" cy="58" r="6" fill="#00F0FF" opacity="0.9"/>
+  <circle cx="58" cy="58" r="9" fill="none" stroke="#00F0FF" stroke-width="1.5" opacity="0.4"/>
+
+  <!-- Ladder Logic Circuit Area -->
+  <g transform="translate(0, 0)">
+    <!-- Left Power Rail (L1 Hot) - Amber Gold -->
+    <line x1="68" y1="68" x2="68" y2="188" stroke="#F59E0B" stroke-width="6" stroke-linecap="round"/>
+    <line x1="68" y1="68" x2="68" y2="188" stroke="#FBBF24" stroke-width="2" stroke-linecap="round"/>
+
+    <!-- Right Neutral Rail (L2) - Cool Slate Silver -->
+    <line x1="188" y1="68" x2="188" y2="188" stroke="#64748B" stroke-width="6" stroke-linecap="round"/>
+    <line x1="188" y1="68" x2="188" y2="188" stroke="#94A3B8" stroke-width="2" stroke-linecap="round"/>
+
+    <!-- Horizontal Wire from L1 to Contact -->
+    <line x1="68" y1="128" x2="94" y2="128" stroke="#00F0FF" stroke-width="4" stroke-linecap="round"/>
+
+    <!-- IEC Contact Normally Open: ┤ ├ in Bright Electric Cyan -->
+    <!-- Left Plate -->
+    <line x1="94" y1="102" x2="94" y2="154" stroke="#00F0FF" stroke-width="5" stroke-linecap="round" filter="url(#glowCyan)"/>
+    <!-- Right Plate -->
+    <line x1="116" y1="102" x2="116" y2="154" stroke="#00F0FF" stroke-width="5" stroke-linecap="round" filter="url(#glowCyan)"/>
+
+    <!-- Middle Wire between Contact and Coil -->
+    <line x1="116" y1="128" x2="140" y2="128" stroke="#00F0FF" stroke-width="4" stroke-linecap="round"/>
+
+    <!-- IEC Coil Output: ( ) in Vivid Emerald Green -->
+    <!-- Left arc ( -->
+    <path d="M 149 104 C 141 112, 141 144, 149 152" fill="none" stroke="#10E182" stroke-width="5" stroke-linecap="round" filter="url(#glowGreen)"/>
+    <!-- Right arc ) -->
+    <path d="M 163 104 C 171 112, 171 144, 163 152" fill="none" stroke="#10E182" stroke-width="5" stroke-linecap="round" filter="url(#glowGreen)"/>
+
+    <!-- Wire from Coil to Right Rail L2 -->
+    <line x1="163" y1="128" x2="188" y2="128" stroke="#00F0FF" stroke-width="4" stroke-linecap="round"/>
+  </g>
+
+  <!-- LaduinoPLC Laser Etching Brand Label -->
+  <text x="128" y="80" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="800" font-size="14" fill="#38BDF8" letter-spacing="3" opacity="0.85">LaduinoPLC</text>
+  <text x="128" y="196" text-anchor="middle" font-family="monospace" font-weight="600" font-size="10" fill="#64748B" letter-spacing="1.5" opacity="0.75">IEC 61131-3</text>
+</svg>

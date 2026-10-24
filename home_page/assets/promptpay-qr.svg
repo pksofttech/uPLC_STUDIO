@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 320" width="280" height="320">
+  <rect width="280" height="320" rx="18" fill="#FFFFFF"/>
+  <!-- PromptPay Header Bar -->
+  <rect x="0" y="0" width="280" height="52" rx="18" fill="#1E3A8A"/>
+  <rect x="0" y="28" width="280" height="24" fill="#1E3A8A"/>
+  <text x="140" y="33" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="800" font-size="18" fill="#FFFFFF" letter-spacing="1">PromptPay • พร้อมเพย์</text>
+
+  <!-- QR Frame -->
+  <rect x="36" y="70" width="208" height="208" rx="12" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="2"/>
+
+  <!-- Finder Patterns -->
+  <rect x="52" y="86" width="46" height="46" rx="4" fill="none" stroke="#0F172A" stroke-width="6"/>
+  <rect x="64" y="98" width="22" height="22" rx="2" fill="#0F172A"/>
+
+  <rect x="182" y="86" width="46" height="46" rx="4" fill="none" stroke="#0F172A" stroke-width="6"/>
+  <rect x="194" y="98" width="22" height="22" rx="2" fill="#0F172A"/>
+
+  <rect x="52" y="216" width="46" height="46" rx="4" fill="none" stroke="#0F172A" stroke-width="6"/>
+  <rect x="64" y="228" width="22" height="22" rx="2" fill="#0F172A"/>
+
+  <!-- Decorative QR Matrix Dots -->
+  <g fill="#0F172A">
+    <rect x="114" y="86" width="10" height="10"/><rect x="134" y="86" width="10" height="10"/><rect x="154" y="86" width="10" height="10"/>
+    <rect x="114" y="106" width="10" height="10"/><rect x="144" y="106" width="10" height="10"/>
+    <rect x="124" y="126" width="10" height="10"/><rect x="154" y="126" width="10" height="10"/>
+    <rect x="52" y="148" width="10" height="10"/><rect x="72" y="148" width="10" height="10"/><rect x="92" y="148" width="10" height="10"/>
+    <rect x="62" y="168" width="10" height="10"/><rect x="82" y="168" width="10" height="10"/>
+    <rect x="52" y="188" width="10" height="10"/><rect x="92" y="188" width="10" height="10"/>
+    <rect x="176" y="148" width="10" height="10"/><rect x="196" y="148" width="10" height="10"/><rect x="216" y="148" width="10" height="10"/>
+    <rect x="186" y="168" width="10" height="10"/><rect x="206" y="168" width="10" height="10"/>
+    <rect x="176" y="188" width="10" height="10"/><rect x="216" y="188" width="10" height="10"/>
+    <rect x="114" y="216" width="10" height="10"/><rect x="134" y="216" width="10" height="10"/><rect x="164" y="216" width="10" height="10"/>
+    <rect x="124" y="236" width="10" height="10"/><rect x="154" y="236" width="10" height="10"/><rect x="184" y="236" width="10" height="10"/><rect x="206" y="236" width="10" height="10"/>
+    <rect x="114" y="252" width="10" height="10"/><rect x="144" y="252" width="10" height="10"/><rect x="174" y="252" width="10" height="10"/><rect x="216" y="252" width="10" height="10"/>
+  </g>
+
+  <!-- Center Badge -->
+  <rect x="108" y="142" width="64" height="64" rx="12" fill="#0F172A" stroke="#0EA5E9" stroke-width="2.5"/>
+  <text x="140" y="172" text-anchor="middle" font-family="system-ui, sans-serif" font-weight="800" font-size="11" fill="#38BDF8">PksofttecH</text>
+  <text x="140" y="188" text-anchor="middle" font-family="monospace" font-weight="700" font-size="9" fill="#10E182">QR CODE</text>
+
+  <text x="140" y="300" text-anchor="middle" font-family="system-ui, sans-serif" font-weight="600" font-size="11.5" fill="#475569">Replace with your PromptPay QR in assets/promptpay-qr.png</text>
+</svg>

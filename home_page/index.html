@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LaduinoPLC (by PksofttecH) — IEC 61131-3 Ladder Diagram IDE & RP2040 Micro-VM</title>
+  <meta name="description" content="LaduinoPLC by PksofttecH — Modern IEC 61131-3 Ladder Diagram IDE, Real-Time PLC Simulator, Instruction List (.il) Generator, and RP2040 32-bit Micro-VM Runtime." />
+  <link rel="icon" type="image/svg+xml" href="assets/laduinoplc.svg" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- Sticky Navigation Bar -->
+  <header class="navbar">
+    <div class="container nav-inner">
+      <a href="#" class="brand">
+        <img src="assets/laduinoplc.svg" alt="LaduinoPLC Logo" />
+        <div>
+          LaduinoPLC
+          <span class="brand-sub">by PksofttecH • <span id="site-version-badge">v0.2.0</span></span>
+        </div>
+      </a>
+
+      <ul class="nav-links">
+        <li><a href="#features" data-i18n="nav_features">ฟีเจอร์เด่น</a></li>
+        <li><a href="#getting-started" data-i18n="nav_getting_started">เริ่มต้นใช้งาน</a></li>
+        <li><a href="#hardware" data-i18n="nav_hardware">ฮาร์ดแวร์ & พิน</a></li>
+        <li><a href="#download" data-i18n="nav_download">ดาวน์โหลด</a></li>
+        <li><a href="#donate" data-i18n="nav_donate">☕ สนับสนุนผู้พัฒนา</a></li>
+      </ul>
+
+      <div class="nav-actions">
+        <div class="lang-switch" role="group" aria-label="Language Switcher">
+          <button type="button" id="lang-th" class="lang-btn active">🇹🇭 ไทย</button>
+          <button type="button" id="lang-en" class="lang-btn">🇬🇧 EN</button>
+        </div>
+        <a href="#donate" class="btn btn-sm btn-amber" data-i18n="nav_donate">☕ สนับสนุนผู้พัฒนา</a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Hero Section -->
+  <main>
+    <section class="hero" style="border-top: none;">
+      <div class="container hero-grid">
+        <div>
+          <div class="pill-badge">
+            <span class="pill-dot"></span>
+            <span data-i18n="hero_badge">IEC 61131-3 Ladder IDE & RP2040 Micro-VM</span>
+          </div>
+
+          <h1>
+            <span data-i18n="hero_title_1">เขียนวงจร PLC Ladder</span><br />
+            <span class="gradient-text" data-i18n="hero_title_2">จำลองและแฟลชลงบอร์ดจริงในคลิกเดียว</span>
+          </h1>
+
+          <p class="hero-desc" data-i18n="hero_desc">
+            LaduinoPLC โดย PksofttecH — โปรแกรมออกแบบวงจร Ladder Diagram มาตรฐาน IEC 61131-3 พร้อมระบบจำลองการทำงานแบบเรียลไทม์ (Real-Time Simulator), แปลงโค้ด Instruction List (.il) อัตโนมัติ และรันบนไมโครคอนโทรลเลอร์ Raspberry Pi Pico (RP2040) ด้วย 32-bit Micro-VM ความเร็วสูง
+          </p>
+
+          <div class="hero-cta">
+            <a id="hero-dl-btn" href="https://github.com/pksofttech/uPLC_STUDIO/releases" target="_blank" rel="noopener" class="btn btn-primary" data-i18n="btn_download_now">
+              ⬇ ดาวน์โหลดฟรี (GitHub Releases)
+            </a>
+            <a href="#getting-started" class="btn btn-outline" data-i18n="btn_quickstart">
+              🚀 คู่มือเริ่มต้นใช้งาน
+            </a>
+            <a href="#donate" class="btn btn-emerald" data-i18n="btn_support_dev">
+              💖 ร่วมบริจาคสนับสนุน
+            </a>
+          </div>
+
+          <div class="hero-stats">
+            <div class="stat-item">
+              <strong data-i18n="stat_1_val">100% IEC</strong>
+              <span data-i18n="stat_1_lbl">มาตรฐาน IEC 61131-3 IL & Ladder</span>
+            </div>
+            <div class="stat-item">
+              <strong data-i18n="stat_2_val">32-bit VM</strong>
+              <span data-i18n="stat_2_lbl">RP2040 Embassy Async Runtime</span>
+            </div>
+            <div class="stat-item">
+              <strong data-i18n="stat_3_val">Real-Time</strong>
+              <span data-i18n="stat_3_lbl">Online Monitoring & Force I/O</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Interactive Ladder Diagram Preview -->
+        <div class="sim-card">
+          <div class="sim-topbar">
+            <div class="window-dots">
+              <span></span><span></span><span></span>
+            </div>
+            <div class="sim-title" data-i18n="sim_window_title">
+              LaduinoPLC — Live Interactive Preview (ลองคลิกปุ่มด้านล่าง!)
+            </div>
+            <div class="sim-status">● RUN (10ms)</div>
+          </div>
+
+          <div class="sim-body">
+            <div class="sim-comment-bar" data-i18n="sim_comment">
+              // Network 01: วงจรควบคุมมอเตอร์ Start / Stop พร้อมหน้าสัมผัสค้างสถานะ (Self-Holding)
+            </div>
+
+            <div class="sim-svg-wrap">
+              <svg viewBox="0 0 520 175" xmlns="http://www.w3.org/2000/svg">
+                <!-- L1 Left Power Rail -->
+                <line x1="20" y1="15" x2="20" y2="160" stroke="#f59e0b" stroke-width="5" stroke-linecap="round" />
+                <!-- L2 Right Neutral Rail -->
+                <line x1="500" y1="15" x2="500" y2="160" stroke="#64748b" stroke-width="5" stroke-linecap="round" />
+
+                <!-- Main Top Rung Wire into Start Contact -->
+                <line x1="20" y1="55" x2="95" y2="55" stroke="#10e182" stroke-width="3" />
+                <!-- Start Contact %IX0.0 -->
+                <line id="contact-start-1" x1="95" y1="37" x2="95" y2="73" stroke="#00f0ff" stroke-width="4" />
+                <line id="contact-start-2" x1="125" y1="37" x2="125" y2="73" stroke="#00f0ff" stroke-width="4" />
+                <text x="110" y="25" text-anchor="middle" fill="#38bdf8" font-family="monospace" font-size="11" font-weight="bold">%IX0.0</text>
+                <text x="110" y="88" text-anchor="middle" fill="#94a3b8" font-family="sans-serif" font-size="10">START_PB</text>
+                <line id="wire-start" x1="125" y1="55" x2="200" y2="55" stroke="#475569" stroke-width="3" />
+
+                <!-- Parallel Seal-in Branch (%QX0.0) -->
+                <line x1="55" y1="55" x2="55" y2="125" stroke="#10e182" stroke-width="3" />
+                <line x1="55" y1="125" x2="95" y2="125" stroke="#10e182" stroke-width="3" />
+                <line id="contact-seal-1" x1="95" y1="107" x2="95" y2="143" stroke="#00f0ff" stroke-width="4" />
+                <line id="contact-seal-2" x1="125" y1="107" x2="125" y2="143" stroke="#00f0ff" stroke-width="4" />
+                <text x="110" y="101" text-anchor="middle" fill="#38bdf8" font-family="monospace" font-size="11" font-weight="bold">%QX0.0</text>
+                <text x="110" y="158" text-anchor="middle" fill="#94a3b8" font-family="sans-serif" font-size="10">MOTOR_RUN</text>
+                <line id="wire-seal" x1="125" y1="125" x2="200" y2="125" stroke="#475569" stroke-width="3" />
+                <line id="wire-mid" x1="200" y1="55" x2="200" y2="125" stroke="#475569" stroke-width="3" />
+
+                <!-- Wire to Stop Contact (%IX0.1 NC) -->
+                <line x1="200" y1="55" x2="275" y2="55" stroke="#94a3b8" stroke-width="3" />
+                <line id="contact-stop-1" x1="275" y1="37" x2="275" y2="73" stroke="#00f0ff" stroke-width="4" />
+                <line id="contact-stop-2" x1="305" y1="37" x2="305" y2="73" stroke="#00f0ff" stroke-width="4" />
+                <line id="contact-stop-slash" x1="279" y1="69" x2="301" y2="41" stroke="#00f0ff" stroke-width="3" />
+                <text x="290" y="25" text-anchor="middle" fill="#38bdf8" font-family="monospace" font-size="11" font-weight="bold">%IX0.1</text>
+                <text x="290" y="88" text-anchor="middle" fill="#94a3b8" font-family="sans-serif" font-size="10">STOP_PB</text>
+
+                <!-- Wire to Output Coil (%QX0.0) -->
+                <line id="wire-out" x1="305" y1="55" x2="405" y2="55" stroke="#475569" stroke-width="3" />
+                <path id="coil-left" d="M 416 37 C 404 45, 404 65, 416 73" fill="none" stroke="#475569" stroke-width="4" stroke-linecap="round" />
+                <path id="coil-right" d="M 436 37 C 448 45, 448 65, 436 73" fill="none" stroke="#475569" stroke-width="4" stroke-linecap="round" />
+                <text x="426" y="25" text-anchor="middle" fill="#10e182" font-family="monospace" font-size="11" font-weight="bold">%QX0.0</text>
+                <text x="426" y="88" text-anchor="middle" fill="#94a3b8" font-family="sans-serif" font-size="10">MOTOR_RUN</text>
+                <line x1="445" y1="55" x2="500" y2="55" stroke="#64748b" stroke-width="3" />
+              </svg>
+            </div>
+
+            <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 8px;" data-i18n="sim_hint">
+              💡 คลิกปุ่ม %IX0.0 (START) หรือ %IX0.1 (STOP) เพื่อทดลองจำลองกระแสไหลบนหน้าเว็บ:
+            </p>
+
+            <div class="sim-controls">
+              <div class="sim-btn-group">
+                <button type="button" id="btn-sim-start" class="io-btn">%IX0.0 START_PB: OFF (0)</button>
+                <button type="button" id="btn-sim-stop" class="io-btn">%IX0.1 STOP_PB (NC): NORMAL (0)</button>
+              </div>
+              <div id="sim-motor-badge" class="motor-indicator">○ %QX0.0 MOTOR_RUN = OFF (0)</div>
+            </div>
+
+            <pre id="sim-il-preview" class="sim-il-box"></pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Key Features Section -->
+    <section id="features">
+      <div class="container">
+        <div class="section-header">
+          <span class="section-tag" data-i18n="feat_tag">KEY CAPABILITIES</span>
+          <h2 data-i18n="feat_title">ครบเครื่องเรื่อง PLC สมัยใหม่ในโปรแกรมเดียว</h2>
+          <p data-i18n="feat_subtitle">
+            ออกแบบมาเพื่องานการเรียนการสอน งานต้นแบบอัตโนมัติ และงานควบคุมอุตสาหกรรมขนาดเล็กด้วยไมโครคอนโทรลเลอร์
+          </p>
+        </div>
+
+        <div class="grid-3">
+          <div class="card">
+            <div class="card-icon">⚡</div>
+            <h3 data-i18n="f1_title">IEC 61131-3 Ladder & IL Editor</h3>
+            <p data-i18n="f1_desc">
+              วาดวงจรด้วยเมาส์และคีย์บอร์ดความเร็วสูง รองรับ Contact (NO/NC/P/N), Coil (Normal/Negated/Set/Reset), Branch ขนาน, Multi-line Network Comment และแปลงไป-กลับไฟล์ .il มาตรฐานได้ทันที
+            </p>
+            <div class="tag-list">
+              <span class="code-pill">LD / LDN / LDP</span>
+              <span class="code-pill">ST / S / R</span>
+              <span class="code-pill">Multi-line Comment</span>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-icon">🎛️</div>
+            <h3 data-i18n="f2_title">Function Blocks ระดับอุตสาหกรรม</h3>
+            <p data-i18n="f2_desc">
+              รองรับคำสั่งขั้นสูงครบครันทั้ง Timer (TON, TOF, TP), Counter (CTU, CTD, CTUD), PID Controller, Linear SCALE, LIMIT, MATH, MOVE, BITWISE, Shift Register, ADC และ UART
+            </p>
+            <div class="tag-list">
+              <span class="code-pill">TON / TOF / TP</span>
+              <span class="code-pill">CTU / CTD / CTUD</span>
+              <span class="code-pill">PID / SCALE / LIMIT</span>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-icon">🔍</div>
+            <h3 data-i18n="f3_title">Real-Time Simulator & Online Monitor</h3>
+            <p data-i18n="f3_desc">
+              ทดสอบโปรแกรมได้ทันทีโดยไม่ต้องมีบอร์ดจริง หรือเชื่อมต่อบอร์ด RP2040 ผ่าน USB เพื่อดูเส้นทางการไหลของกระแสไฟ (Live Conduction), ตาราง Watch Table และสั่ง Force I/O แบบสดๆ
+            </p>
+            <div class="tag-list">
+              <span class="code-pill">Live Power Flow</span>
+              <span class="code-pill">Watch Table</span>
+              <span class="code-pill">Force I/O</span>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-icon">🧠</div>
+            <h3 data-i18n="f4_title">RP2040 32-bit Micro-VM & RETAIN Flash</h3>
+            <p data-i18n="f4_desc">
+              คอมไพล์วงจรเป็น Bytecode ขนาดกะทัดรัดพร้อมตรวจเช็ค CRC16 บันทึกลงหน่วยความจำ Flash บนบอร์ด RP2040 และรองรับตัวแปรจำค่าเมื่อไฟดับ (RETAIN: M64..M95, D96..D127)
+            </p>
+            <div class="tag-list">
+              <span class="code-pill">CRC16 Verified</span>
+              <span class="code-pill">Flash 0x1FE000</span>
+              <span class="code-pill">RETAIN M64..M95</span>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-icon">🌐</div>
+            <h3 data-i18n="f5_title">Modbus RTU Master (RS-485)</h3>
+            <p data-i18n="f5_desc">
+              เชื่อมต่อเซนเซอร์วัดอุณหภูมิ มิเตอร์ไฟฟ้า และอินเวอร์เตอร์ (VFD) ผ่านพอร์ต RS-485 ด้วยบล็อกคำสั่ง MB_MASTER (Function 03, 04, 06) พร้อมระบบจัดการ Timeout อัตโนมัติ
+            </p>
+            <div class="tag-list">
+              <span class="code-pill">MB_MASTER</span>
+              <span class="code-pill">FC 03 / 04 / 06</span>
+              <span class="code-pill">RS-485 DE/RE</span>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-icon">🚀</div>
+            <h3 data-i18n="f6_title">1-Click USB BOOTSEL Flasher & Auto-Update</h3>
+            <p data-i18n="f6_desc">
+              มีระบบแฟลชเฟิร์มแวร์ .uf2 ลงบอร์ด Raspberry Pi Pico ในตัวผ่านโหมด USB BOOTSEL และมีระบบตรวจสอบอัปเดตเวอร์ชันโปรแกรมใหม่ผ่านออนไลน์
+            </p>
+            <div class="tag-list">
+              <span class="code-pill">USB BOOTSEL .uf2</span>
+              <span class="code-pill">Global Symbol Table</span>
+              <span class="code-pill">Auto-Updater</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Getting Started Section -->
+    <section id="getting-started">
+      <div class="container">
+        <div class="section-header">
+          <span class="section-tag" data-i18n="start_tag">GETTING STARTED</span>
+          <h2 data-i18n="start_title">เริ่มต้นใช้งาน LaduinoPLC ใน 4 ขั้นตอน</h2>
+          <p data-i18n="start_subtitle">
+            เมื่อเปิดโปรแกรมขึ้นมา ระบบจะสร้างหน้า New Ladder ที่ว่างเปล่าให้พร้อมเริ่มเขียนวงจรได้ทันที
+          </p>
+        </div>
+
+        <div class="steps-grid">
+          <div class="step-card">
+            <div class="step-num">01</div>
+            <h3 data-i18n="s1_title">ดาวน์โหลดและเปิดโปรแกรม</h3>
+            <p data-i18n="s1_desc">
+              ดาวน์โหลดไฟล์สำหรับ Windows หรือ Linux จากหน้า GitHub Releases แตกไฟล์แล้วเปิดโปรแกรม laduino-plc ได้ทันทีโดยไม่ต้องติดตั้งไลบรารีเสริม
+            </p>
+            <div class="shortcut-box" data-i18n="s1_box">
+              เปิดโปรแกรมปุ๊บ → เข้าสู่หน้า New Ladder (1 Network ว่าง) พร้อมใช้งานทันที หรือเลือกเมนู Examples เพื่อดูตัวอย่างกว่า 18 โปรเจกต์
+            </div>
+          </div>
+
+          <div class="step-card">
+            <div class="step-num">02</div>
+            <h3 data-i18n="s2_title">วางอุปกรณ์และตั้งค่า IEC Address</h3>
+            <p data-i18n="s2_desc">
+              คลิกเลือก Contact, Coil หรือ Function Block จากแถบด้านซ้ายแล้ววางลงบนเส้น Rung ดับเบิลคลิกที่ตัวอุปกรณ์เพื่อกำหนด Address (%IX0.0, %QX0.0, T0) และตั้งชื่อ Symbol
+            </p>
+            <div class="shortcut-box" data-i18n="s2_box">
+              คีย์ลัด: P = ต่อขนาน (Parallel) | S = ต่ออนุกรม (Series) | Enter = ตั้งค่าอุปกรณ์ | Ctrl+F = ค้นหาและแทนที่
+            </div>
+          </div>
+
+          <div class="step-card">
+            <div class="step-num">03</div>
+            <h3 data-i18n="s3_title">จำลองการทำงาน (Offline Simulator)</h3>
+            <p data-i18n="s3_desc">
+              สลับโหมดเป็น Simulator แล้วกดปุ่ม ▶ Run (F5) คุณสามารถคลิกที่หน้าสัมผัส Input บนผังวงจรเพื่อสลับสถานะ ON/OFF และดูค่าตัวแปรในแท็บ Watch ด้านขวาได้ทันที
+            </p>
+            <div class="shortcut-box" data-i18n="s3_box">
+              คีย์ลัดจำลอง: F5 = Run / Stop | Shift+F5 = Reset | F6 = Single Step (รันทีละ 1 สแกน)
+            </div>
+          </div>
+
+          <div class="step-card">
+            <div class="step-num">04</div>
+            <h3 data-i18n="s4_title">แฟลชเฟิร์มแวร์ & อัปโหลดลงบอร์ด RP2040</h3>
+            <p data-i18n="s4_desc">
+              กดปุ่ม ⚡ Update to PLC เลือกแท็บ Firmware Flasher เพื่อแฟลชไฟล์ .uf2 ลงบอร์ด Pico ครั้งแรก จากนั้นกด ⬆ Upload to PLC เพื่อส่งโปรแกรม Ladder ลงบอร์ดจริง
+            </p>
+            <div class="shortcut-box" data-i18n="s4_box">
+              กด F7 (Online Monitor) เพื่อดูสถานะกระแสไหลจริงจากบอร์ด RP2040 พร้อมระบบเช็ค CRC16 ตรงกับหน้าจอ
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Hardware & Memory Map Section -->
+    <section id="hardware">
+      <div class="container">
+        <div class="section-header">
+          <span class="section-tag" data-i18n="hw_tag">HARDWARE & MEMORY MAP</span>
+          <h2 data-i18n="hw_title">ตารางพินและหน่วยความจำมาตรฐาน (RP2040 Micro-VM)</h2>
+          <p data-i18n="hw_subtitle">
+            การแมปพอร์ตมาตรฐานสำหรับบอร์ด Raspberry Pi Pico (RP2040) และ Address ตามมาตรฐาน IEC 61131-3
+          </p>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th data-i18n="th_region">หมวดหมู่ (Region)</th>
+                <th data-i18n="th_iec">IEC 61131-3 Address</th>
+                <th data-i18n="th_alias">PLC Alias</th>
+                <th data-i18n="th_pin">พินฮาร์ดแวร์ RP2040</th>
+                <th data-i18n="th_desc">รายละเอียดการใช้งาน</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>Digital Inputs</strong></td>
+                <td><code>%IX0.0</code> – <code>%IX0.7</code></td>
+                <td><code>X0</code> – <code>X7</code></td>
+                <td><code>GP2</code> – <code>GP7</code>, <code>GP15</code>, <code>GP16</code></td>
+                <td data-i18n="hw_r1_desc">อินพุตดิจิทัล 8 ช่อง (Active-High / Pull-down) พร้อมระบบ Force I/O</td>
+              </tr>
+              <tr>
+                <td><strong>Digital Outputs</strong></td>
+                <td><code>%QX0.0</code> – <code>%QX0.7</code></td>
+                <td><code>Y0</code> – <code>Y7</code></td>
+                <td><code>GP25 (LED)</code>, <code>GP8</code> – <code>GP14</code></td>
+                <td data-i18n="hw_r2_desc">เอาต์พุตดิจิทัล 8 ช่อง (Y0 = GP25 LED บนบอร์ด Pico, Y1..Y7 = GP8..GP14)</td>
+              </tr>
+              <tr>
+                <td><strong>Internal Relays</strong></td>
+                <td><code>%MX0.0</code> – <code>%MX7.7</code></td>
+                <td><code>M0</code> – <code>M63</code></td>
+                <td>Internal RAM</td>
+                <td data-i18n="hw_r3_desc">รีเลย์ช่วยภายในทั่วไป (เคลียร์ค่าเมื่อเริ่มรันใหม่)</td>
+              </tr>
+              <tr>
+                <td><strong>Retentive Relays (RETAIN)</strong></td>
+                <td><code>%MX8.0</code> – <code>%MX11.7</code></td>
+                <td><code>M64</code> – <code>M95</code></td>
+                <td>RP2040 Flash</td>
+                <td data-i18n="hw_r4_desc">รีเลย์ช่วยชนิดจำค่าเมื่อไฟดับ บันทึกลง RP2040 Flash อัตโนมัติ</td>
+              </tr>
+              <tr>
+                <td><strong>Data Registers</strong></td>
+                <td><code>%MW0</code> – <code>%MW95</code></td>
+                <td><code>D0</code> – <code>D95</code></td>
+                <td>Internal RAM</td>
+                <td data-i18n="hw_r5_desc">รีจิสเตอร์ข้อมูล 16/32-bit สำหรับคำนวณ ค่านับ และงานทั่วไป</td>
+              </tr>
+              <tr>
+                <td><strong>Retentive Registers (RETAIN)</strong></td>
+                <td><code>%MW96</code> – <code>%MW127</code></td>
+                <td><code>D96</code> – <code>D127</code></td>
+                <td>RP2040 Flash</td>
+                <td data-i18n="hw_r6_desc">รีจิสเตอร์ข้อมูลชนิดจำค่าเมื่อไฟดับ (Retentive Flash Memory)</td>
+              </tr>
+              <tr>
+                <td><strong>Analog Inputs (ADC)</strong></td>
+                <td><code>%IW0</code> – <code>%IW3</code></td>
+                <td><code>AI0</code> – <code>AI3</code></td>
+                <td><code>GP26</code>, <code>GP27</code>, <code>GP28</code>, <code>Temp</code></td>
+                <td data-i18n="hw_r7_desc">อนาล็อกอินพุต 12-bit (0..4095) และเซนเซอร์วัดอุณหภูมิภายในชิป (%IW3)</td>
+              </tr>
+              <tr>
+                <td><strong>Modbus RTU (RS-485)</strong></td>
+                <td><code>MB_MASTER</code></td>
+                <td><code>MB0</code> – <code>MB7</code></td>
+                <td><code>GP20 (TX)</code>, <code>GP21 (RX)</code>, <code>GP22 (DE)</code></td>
+                <td data-i18n="hw_r8_desc">พอร์ตสื่อสาร RS-485 Half-Duplex สำหรับบล็อกคำสั่ง MB_MASTER</td>
+              </tr>
+              <tr>
+                <td><strong>Special System (%SM / %SD)</strong></td>
+                <td><code>%SM0</code>..<code>%SM11</code> / <code>%SD0</code>..<code>%SD9</code></td>
+                <td><code>M8000+</code> / <code>D8000+</code></td>
+                <td>System Runtime</td>
+                <td data-i18n="hw_r9_desc">สัญญาณนาฬิกาพัลส์ 10ms..60s, First Scan (%SM1) และค่า Scan Time / อุณหภูมิ CPU (%SD6)</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Download Section -->
+    <section id="download">
+      <div class="container">
+        <div class="section-header">
+          <span class="section-tag" data-i18n="dl_tag">DOWNLOAD RELEASES</span>
+          <h2 data-i18n="dl_title">ดาวน์โหลด LaduinoPLC & เฟิร์มแวร์</h2>
+          <p data-i18n="dl_subtitle">
+            ฟรีและโอเพนซอร์ส — ดาวน์โหลดเวอร์ชันล่าสุดได้โดยตรงจาก GitHub Releases
+          </p>
+        </div>
+
+        <div class="download-grid">
+          <!-- Windows -->
+          <div class="dl-card featured">
+            <div>
+              <div class="dl-header">
+                <span class="dl-os-icon">🪟</span>
+                <div>
+                  <h3>LaduinoPLC for Windows</h3>
+                  <small style="color: var(--text-secondary);" data-i18n="dl_win_sub">สำหรับ Windows 10 / 11 (64-bit)</small>
+                </div>
+              </div>
+              <ul>
+                <li data-i18n="dl_win_l1">ไฟล์โปรแกรมพร้อมรัน (laduino-plc.exe)</li>
+                <li data-i18n="dl_win_l2">รวมไฟล์เฟิร์มแวร์ RP2040 (.uf2) ในตัว</li>
+                <li data-i18n="dl_win_l3">รวมตัวอย่างวงจร Ladder มาตรฐานครบชุด</li>
+              </ul>
+            </div>
+            <a id="dl-win-link" href="https://github.com/pksofttech/uPLC_STUDIO/releases" target="_blank" rel="noopener" class="btn btn-primary" data-i18n="dl_win_btn">
+              ⬇ ดาวน์โหลดสำหรับ Windows
+            </a>
+          </div>
+
+          <!-- Linux -->
+          <div class="dl-card">
+            <div>
+              <div class="dl-header">
+                <span class="dl-os-icon">🐧</span>
+                <div>
+                  <h3>LaduinoPLC for Linux</h3>
+                  <small style="color: var(--text-secondary);" data-i18n="dl_lin_sub">สำหรับ Ubuntu / Debian / Arch / Fedora (x86_64)</small>
+                </div>
+              </div>
+              <ul>
+                <li data-i18n="dl_lin_l1">ไบนารีเนทีฟความเร็วสูง (wgpu / X11)</li>
+                <li data-i18n="dl_lin_l2">รองรับพอร์ต USB-CDC (/dev/ttyACM*) อัตโนมัติ</li>
+                <li data-i18n="dl_lin_l3">รวมไฟล์เฟิร์มแวร์ .uf2 และตัวอย่างครบชุด</li>
+              </ul>
+            </div>
+            <a id="dl-lin-link" href="https://github.com/pksofttech/uPLC_STUDIO/releases" target="_blank" rel="noopener" class="btn btn-outline" data-i18n="dl_lin_btn">
+              ⬇ ดาวน์โหลดสำหรับ Linux
+            </a>
+          </div>
+
+          <!-- RP2040 Firmware -->
+          <div class="dl-card">
+            <div>
+              <div class="dl-header">
+                <span class="dl-os-icon">🍓</span>
+                <div>
+                  <h3>RP2040 Micro-VM (.uf2)</h3>
+                  <small style="color: var(--text-secondary);" data-i18n="dl_fw_sub">32-bit Micro-VM Runtime สำหรับ Raspberry Pi Pico</small>
+                </div>
+              </div>
+              <ul>
+                <li data-i18n="dl_fw_l1">แฟลชง่ายผ่าน USB BOOTSEL (ลากวางไฟล์ .uf2)</li>
+                <li data-i18n="dl_fw_l2">รองรับ Online Monitoring, Force I/O, RETAIN Flash</li>
+                <li data-i18n="dl_fw_l3">รองรับ PID, SCALE, LIMIT, UART, Modbus RTU</li>
+              </ul>
+            </div>
+            <a id="dl-fw-link" href="https://github.com/pksofttech/uPLC_STUDIO/releases" target="_blank" rel="noopener" class="btn btn-emerald" data-i18n="dl_fw_btn">
+              ⚡ ดาวน์โหลดเฟิร์มแวร์ (.uf2)
+            </a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Support / Donate Section -->
+    <section id="donate">
+      <div class="container">
+        <div class="section-header">
+          <span class="section-tag" data-i18n="don_tag">SUPPORT & DONATE</span>
+          <h2 data-i18n="don_title">ร่วมสนับสนุนการพัฒนา LaduinoPLC</h2>
+          <p data-i18n="don_subtitle">
+            หากโปรแกรม LaduinoPLC ช่วยให้งานของคุณง่ายขึ้น หรือเป็นประโยชน์ต่อการเรียนรู้ คุณสามารถร่วมบริจาคสนับสนุนทีมผู้พัฒนา (PksofttecH) เพื่อเป็นกำลังใจในการพัฒนาฟีเจอร์ใหม่ๆ ต่อไปได้ครับ
+          </p>
+        </div>
+
+        <div class="donate-container">
+          <!-- PromptPay QR Card -->
+          <div class="qr-box">
+            <img id="promptpay-qr-img" src="assets/promptpay-qr.svg" alt="PromptPay QR Code" />
+            <div id="promptpay-acct-name" class="qr-acct-name">PksofttecH (สนับสนุนพัฒนา LaduinoPLC)</div>
+            <div style="font-size: 0.78rem; color: #64748b; margin-top: 2px;" data-i18n="qr_scan_label">
+              สแกน QR Code ด้วยแอปธนาคาร (PromptPay / พร้อมเพย์)
+            </div>
+            <div class="qr-id-row">
+              <span id="promptpay-id-text">08X-XXX-XXXX</span>
+              <button type="button" id="copy-promptpay-btn" class="copy-btn" data-i18n="btn_copy_id">คัดลอก</button>
+            </div>
+            <div style="font-size: 0.75rem; color: #0284c7; margin-top: 8px;" data-i18n="qr_zoom_hint">
+              🔍 คลิกที่รูป QR เพื่อขยายใหญ่
+            </div>
+          </div>
+
+          <!-- Other Support Channels -->
+          <div class="donate-methods">
+            <div class="donate-method-card">
+              <div class="donate-method-info">
+                <h4 data-i18n="don_pp_title">🇹🇭 โอนผ่านพร้อมเพย์ / ธนาคารในไทย (PromptPay)</h4>
+                <p data-i18n="don_pp_desc">
+                  สแกน QR Code ด้านซ้ายด้วยแอปพลิเคชันธนาคารใดก็ได้ หรือคัดลอกหมายเลขพร้อมเพย์เพื่อโอนสนับสนุนได้โดยตรง ไม่มีค่าธรรมเนียม
+                </p>
+              </div>
+            </div>
+
+            <div class="donate-method-card">
+              <div class="donate-method-info">
+                <h4 data-i18n="don_gh_title">💜 GitHub Sponsors & กดดาวโปรเจกต์</h4>
+                <p data-i18n="don_gh_desc">
+                  ร่วมเป็นผู้สนับสนุนรายเดือนหรือรายครั้งผ่าน GitHub Sponsors หรือช่วยกด ⭐ Star ให้โปรเจกต์บน GitHub
+                </p>
+              </div>
+              <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                <a id="don-gh-link" href="https://github.com/sponsors/pksofttech" target="_blank" rel="noopener" class="btn btn-sm btn-primary" data-i18n="don_gh_btn">
+                  💜 GitHub Sponsors
+                </a>
+                <a id="don-star-link" href="https://github.com/pksofttech/uPLC_STUDIO" target="_blank" rel="noopener" class="btn btn-sm btn-outline" data-i18n="don_star_btn">
+                  ⭐ Star on GitHub
+                </a>
+              </div>
+            </div>
+
+            <div class="donate-method-card">
+              <div class="donate-method-info">
+                <h4 data-i18n="don_py_title">🌏 PayPal (สำหรับผู้สนับสนุนทั่วโลก / International)</h4>
+                <p data-i18n="don_py_desc">
+                  สนับสนุนค่ากาแฟและค่าเซิร์ฟเวอร์ผ่านทาง PayPal ได้อย่างสะดวกและปลอดภัย
+                </p>
+              </div>
+              <a id="don-paypal-link" href="https://paypal.me/pksofttech" target="_blank" rel="noopener" class="btn btn-sm btn-amber" data-i18n="don_py_btn">
+                💳 สนับสนุนผ่าน PayPal
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Footer -->
+  <footer>
+    <div class="container footer-inner">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <img src="assets/laduinoplc.svg" alt="LaduinoPLC" width="28" height="28" />
+        <span data-i18n="footer_copy">พัฒนาโดย PksofttecH • ซอฟต์แวร์ออกแบบและจำลองวงจร PLC มาตรฐาน IEC 61131-3</span>
+      </div>
+      <div>
+        <a id="footer-gh-link" href="https://github.com/pksofttech/uPLC_STUDIO" target="_blank" rel="noopener" style="color: var(--accent-cyan);">
+          GitHub Repository ↗
+        </a>
+      </div>
+    </div>
+  </footer>
+
+  <!-- QR Zoom Modal -->
+  <div id="qr-modal" class="modal-backdrop">
+    <div class="modal-content">
+      <img id="promptpay-qr-modal-img" src="assets/promptpay-qr.svg" alt="PromptPay QR Code Large" />
+      <div style="margin-top: 14px;">
+        <button type="button" id="close-qr-modal" class="btn btn-sm btn-primary" data-i18n="modal_close">ปิดหน้าต่าง (Close)</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
