@@ -1,4 +1,0 @@
-3383408e4c7effeac55274ecd7cfda0c2485d817f8701231208a2dd262f3e6ba  laduino-plc-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
-458071e07dc8f62f59e5468fab5a53a43cce3bd44b4698283c99d91bbb60863a  laduino-plc-v0.1.0-x86_64-pc-windows-gnu.zip
-458071e07dc8f62f59e5468fab5a53a43cce3bd44b4698283c99d91bbb60863a  laduino-plc-v0.1.0-x86_64-pc-windows-msvc.zip
-e175c4a4ac7ab916c562a18257627ba1f9e956ef45c837ff1baed5526a5228ab  uplc-rp2040-embassy.uf2
