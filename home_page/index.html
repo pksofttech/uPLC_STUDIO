@@ -6,6 +6,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>LaduinoPLC (by pksofttech.org) — IEC 61131-3 Ladder Diagram IDE & RP2040 Micro-VM</title>
   <meta name="description" content="LaduinoPLC by pksofttech.org — Modern IEC 61131-3 Ladder Diagram IDE, Real-Time PLC Simulator, Instruction List (.il) Generator, and RP2040 32-bit Micro-VM Runtime." />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="LaduinoPLC (by pksofttech.org) — IEC 61131-3 Ladder IDE & RP2040 Micro-VM" />
+  <meta property="og:description" content="โปรแกรมออกแบบและจำลองวงจร PLC Ladder มาตรฐาน IEC 61131-3 พร้อม 32-bit Micro-VM สำหรับบอร์ด Raspberry Pi Pico (RP2040)" />
+  <meta property="og:image" content="assets/logo_full_card.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="LaduinoPLC — IEC 61131-3 Ladder IDE & RP2040 Micro-VM" />
+  <meta name="twitter:image" content="assets/logo_full_card.png" />
   <link rel="icon" type="image/svg+xml" href="assets/laduinoplc.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -32,10 +39,12 @@
         </div>
       </a>
 
-      <ul class="nav-links">
+      <ul class="nav-links" id="nav-links-menu">
         <li><a href="#features" data-i18n="nav_features">ฟีเจอร์เด่น</a></li>
         <li><a href="#getting-started" data-i18n="nav_getting_started">เริ่มต้นใช้งาน</a></li>
         <li><a href="#hardware" data-i18n="nav_hardware">ฮาร์ดแวร์ & พิน</a></li>
+        <li><a href="#examples" data-i18n="nav_examples">ตัวอย่างวงจร</a></li>
+        <li><a href="#roadmap" data-i18n="nav_roadmap">แผนพัฒนา</a></li>
         <li><a href="#download" data-i18n="nav_download">ดาวน์โหลด</a></li>
       </ul>
 
@@ -45,6 +54,10 @@
           <button type="button" id="lang-en" class="lang-btn">🇬🇧 EN</button>
         </div>
         <a href="#donate" class="btn btn-sm btn-amber" data-i18n="nav_donate">☕ สนับสนุนผู้พัฒนา</a>
+        <button type="button" id="mobile-menu-btn" class="mobile-menu-pill" aria-label="Toggle Menu">
+          <span class="mobile-menu-icon">+</span>
+          <span>Menu</span>
+        </button>
       </div>
     </div>
   </header>
@@ -423,6 +436,168 @@
             </tbody>
           </table>
         </div>
+
+        <!-- Hardware Wiring Schematics (3 Cards) -->
+        <div class="wiring-grid">
+          <div class="wiring-card">
+            <span class="wiring-tag" data-i18n="wire_1_tag">01 / DIGITAL INPUT WIRING</span>
+            <h3 data-i18n="wire_1_title">การต่อสวิตช์ & เซนเซอร์อินพุต (%IX0.0..%IX0.7)</h3>
+            <p data-i18n="wire_1_desc">
+              พิน GP0..GP7 ตั้งค่าเป็น Internal Pull-Down (Active-High 3.3V) สำหรับงานอุตสาหกรรม 24VDC แนะนำให้ต่อผ่านโมดูล Optocoupler (เช่น PC817)
+            </p>
+            <div class="wiring-svg-box">
+              <svg viewBox="0 0 320 110" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="8" y="20" width="82" height="70" rx="8" fill="#1E293B" stroke="#475569" stroke-width="1.5"/>
+                <text x="49" y="48" text-anchor="middle" fill="#38BDF8" font-family="monospace" font-size="10" font-weight="700">24V / 3.3V</text>
+                <text x="49" y="66" text-anchor="middle" fill="#94A3B8" font-family="monospace" font-size="9">Pushbutton</text>
+                <line x1="90" y1="55" x2="128" y2="55" stroke="#10E182" stroke-width="2" stroke-dasharray="4 3"/>
+                <rect x="128" y="24" width="76" height="62" rx="8" fill="#0F172A" stroke="#0EA5E9" stroke-width="1.5"/>
+                <text x="166" y="50" text-anchor="middle" fill="#F8FAFC" font-family="monospace" font-size="10" font-weight="700">PC817 Opto</text>
+                <text x="166" y="66" text-anchor="middle" fill="#10E182" font-family="monospace" font-size="9">3.3V Logic</text>
+                <line x1="204" y1="55" x2="236" y2="55" stroke="#10E182" stroke-width="2.5"/>
+                <rect x="236" y="20" width="76" height="70" rx="8" fill="#064E3B" stroke="#10B981" stroke-width="1.5"/>
+                <text x="274" y="48" text-anchor="middle" fill="#A7F3D0" font-family="monospace" font-size="10" font-weight="700">RP2040</text>
+                <text x="274" y="66" text-anchor="middle" fill="#FFFFFF" font-family="monospace" font-size="9">GP0..GP7</text>
+              </svg>
+            </div>
+          </div>
+
+          <div class="wiring-card">
+            <span class="wiring-tag" data-i18n="wire_2_tag">02 / DIGITAL OUTPUT WIRING</span>
+            <h3 data-i18n="wire_2_title">การต่อรีเลย์ & โซลินอยด์เอาต์พุต (%QX0.0..%QX0.7)</h3>
+            <p data-i18n="wire_2_desc">
+              พิน GP25 (LED Y0) และ GP8..GP14 (Y1..Y7) จ่ายลอจิก 3.3V แนะนำให้ต่อเข้าโมดูล Relay Opto-Isolated หรือไอซี ULN2803 เพื่อขับโหลดกำลังสูง
+            </p>
+            <div class="wiring-svg-box">
+              <svg viewBox="0 0 320 110" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="8" y="20" width="76" height="70" rx="8" fill="#064E3B" stroke="#10B981" stroke-width="1.5"/>
+                <text x="46" y="48" text-anchor="middle" fill="#A7F3D0" font-family="monospace" font-size="10" font-weight="700">RP2040</text>
+                <text x="46" y="66" text-anchor="middle" fill="#FFFFFF" font-family="monospace" font-size="9">GP8..GP14</text>
+                <line x1="84" y1="55" x2="122" y2="55" stroke="#38BDF8" stroke-width="2.5"/>
+                <rect x="122" y="24" width="82" height="62" rx="8" fill="#0F172A" stroke="#38BDF8" stroke-width="1.5"/>
+                <text x="163" y="50" text-anchor="middle" fill="#F8FAFC" font-family="monospace" font-size="10" font-weight="700">ULN2803 /</text>
+                <text x="163" y="66" text-anchor="middle" fill="#38BDF8" font-family="monospace" font-size="9">Relay Driver</text>
+                <line x1="204" y1="55" x2="236" y2="55" stroke="#F59E0B" stroke-width="2.5"/>
+                <rect x="236" y="20" width="76" height="70" rx="8" fill="#1E293B" stroke="#F59E0B" stroke-width="1.5"/>
+                <text x="274" y="48" text-anchor="middle" fill="#FCD34D" font-family="monospace" font-size="10" font-weight="700">24V / 220V</text>
+                <text x="274" y="66" text-anchor="middle" fill="#FFFFFF" font-family="monospace" font-size="9">Motor / Valve</text>
+              </svg>
+            </div>
+          </div>
+
+          <div class="wiring-card">
+            <span class="wiring-tag" data-i18n="wire_3_tag">03 / RS-485 MODBUS RTU</span>
+            <h3 data-i18n="wire_3_title">การต่อโมดูล RS-485 (MB_MASTER)</h3>
+            <p data-i18n="wire_3_desc">
+              เชื่อมต่อโมดูล MAX485 / SP3485 (3.3V) เข้ากับพิน UART พร้อมพินควบคุมทิศทาง DE/RE อัตโนมัติ สำหรับอ่านค่าเซนเซอร์และสั่งงานอินเวอร์เตอร์
+            </p>
+            <div class="wiring-svg-box">
+              <svg viewBox="0 0 320 110" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="8" y="18" width="84" height="74" rx="8" fill="#064E3B" stroke="#10B981" stroke-width="1.5"/>
+                <text x="50" y="42" text-anchor="middle" fill="#A7F3D0" font-family="monospace" font-size="9.5" font-weight="700">RP2040 UART</text>
+                <text x="50" y="58" text-anchor="middle" fill="#FFFFFF" font-family="monospace" font-size="8.5">TX / RX</text>
+                <text x="50" y="74" text-anchor="middle" fill="#38BDF8" font-family="monospace" font-size="8.5">DE/RE Control</text>
+                <line x1="92" y1="42" x2="128" y2="42" stroke="#10E182" stroke-width="2"/>
+                <line x1="92" y1="68" x2="128" y2="68" stroke="#38BDF8" stroke-width="2"/>
+                <rect x="128" y="22" width="76" height="66" rx="8" fill="#0F172A" stroke="#A855F7" stroke-width="1.5"/>
+                <text x="166" y="50" text-anchor="middle" fill="#E9D5FF" font-family="monospace" font-size="10" font-weight="700">MAX3485</text>
+                <text x="166" y="66" text-anchor="middle" fill="#94A3B8" font-family="monospace" font-size="9">Transceiver</text>
+                <line x1="204" y1="46" x2="236" y2="46" stroke="#F59E0B" stroke-width="2"/>
+                <line x1="204" y1="64" x2="236" y2="64" stroke="#38BDF8" stroke-width="2"/>
+                <rect x="236" y="20" width="76" height="70" rx="8" fill="#1E293B" stroke="#64748B" stroke-width="1.5"/>
+                <text x="274" y="48" text-anchor="middle" fill="#F8FAFC" font-family="monospace" font-size="10" font-weight="700">RS-485 Bus</text>
+                <text x="274" y="66" text-anchor="middle" fill="#FCD34D" font-family="monospace" font-size="9">A+ / B- Slave</text>
+              </svg>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Interactive Example Circuits Explorer -->
+    <section id="examples">
+      <div class="container">
+        <div class="section-header">
+          <span class="section-tag" data-i18n="ex_tag">BUNDLED IEC 61131-3 EXAMPLES</span>
+          <h2 data-i18n="ex_title">ตัวอย่างวงจรมาตรฐานพร้อมใช้งานกว่า 14 โปรเจกต์</h2>
+          <p data-i18n="ex_subtitle">
+            คลิกเลือกดูโค้ด Instruction List (.il) ตัวอย่างที่มาพร้อมกับโปรแกรม สามารถคัดลอกหรือเปิดจากโฟลเดอร์ example/ ในโปรแกรมเพื่อจำลองการทำงานได้ทันที
+          </p>
+        </div>
+
+        <div class="example-explorer">
+          <div class="example-tabs" role="tablist">
+            <button type="button" class="example-tab active" data-example="0" data-i18n="ex_tab_0">01 • Motor Start/Stop</button>
+            <button type="button" class="example-tab" data-example="1" data-i18n="ex_tab_1">02 • Star-Delta Timer</button>
+            <button type="button" class="example-tab" data-example="2" data-i18n="ex_tab_2">09 • Modbus RTU Master</button>
+            <button type="button" class="example-tab" data-example="3" data-i18n="ex_tab_3">12 • PID & Analog Scale</button>
+          </div>
+
+          <div class="example-panel">
+            <div class="example-panel-header">
+              <div>
+                <h3 id="example-title">01_motor_start_stop.il — วงจรควบคุมมอเตอร์ Start / Stop ค้างสถานะ</h3>
+                <p id="example-desc">พื้นฐานการเขียนวงจร Self-Holding (Latching) ร่วมกับปุ่มหยุดฉุกเฉิน NC และไฟแสดงสถานะการทำงาน</p>
+              </div>
+              <button type="button" id="copy-example-btn" class="btn btn-sm btn-outline" data-i18n="btn_copy_il">📋 คัดลอกโค้ด .il</button>
+            </div>
+            <pre class="example-code-box"><code id="example-code-content"></code></pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Development Roadmap Section -->
+    <section id="roadmap">
+      <div class="container">
+        <div class="section-header">
+          <span class="section-tag" data-i18n="rm_tag">DEVELOPMENT ROADMAP</span>
+          <h2 data-i18n="rm_title">แผนการพัฒนาสู่การปล่อยเวอร์ชันทางการ</h2>
+          <p data-i18n="rm_subtitle">
+            ติดตามความคืบหน้าของการพัฒนา LaduinoPLC ตั้งแต่รุ่นทดสอบ (Pre-Release) ไปจนถึงการเปิดตัวเวอร์ชันสมบูรณ์
+          </p>
+        </div>
+
+        <div class="roadmap-grid">
+          <div class="roadmap-card completed">
+            <div class="roadmap-status-row">
+              <span class="roadmap-badge done" data-i18n="rm_p1_badge">✔ เสร็จสมบูรณ์ (Completed)</span>
+              <span class="roadmap-ver">Phase 01</span>
+            </div>
+            <h3 data-i18n="rm_p1_title">Core IEC 61131-3 IDE & 32-bit Micro-VM</h3>
+            <ul>
+              <li data-i18n="rm_p1_l1">ตัววาดวงจร Ladder Diagram พร้อมแปลงโค้ด .il แบบสองทิศทาง</li>
+              <li data-i18n="rm_p1_l2">ระบบจำลองการทำงานแบบเรียลไทม์ (Offline Simulator) & Force I/O</li>
+              <li data-i18n="rm_p1_l3">เฟิร์มแวร์ RP2040 Embassy พร้อม RETAIN Flash & CRC16</li>
+            </ul>
+          </div>
+
+          <div class="roadmap-card current">
+            <div class="roadmap-status-row">
+              <span class="roadmap-badge active" data-i18n="rm_p2_badge">🚧 กำลังดำเนินการ (Pre-Release)</span>
+              <span class="roadmap-ver">Phase 02 • v0.1.0</span>
+            </div>
+            <h3 data-i18n="rm_p2_title">ปรับปรุงและทดสอบก่อนปล่อยอย่างเป็นทางการ</h3>
+            <ul>
+              <li data-i18n="rm_p2_l1">ทดสอบความเสถียรของบล็อก PID, SCALE, Drum Sequencer และ Modbus RTU</li>
+              <li data-i18n="rm_p2_l2">ระบบแฟลชเฟิร์มแวร์ .uf2 ผ่าน USB BOOTSEL ในคลิกเดียว</li>
+              <li data-i18n="rm_p2_l3">ตรวจสอบความเข้ากันได้บน Windows 10/11 และ Linux หลากหลายดิสโทร</li>
+            </ul>
+          </div>
+
+          <div class="roadmap-card upcoming">
+            <div class="roadmap-status-row">
+              <span class="roadmap-badge next" data-i18n="rm_p3_badge">🎯 เป้าหมายถัดไป (Official Release)</span>
+              <span class="roadmap-ver">Phase 03 • v0.2.0+</span>
+            </div>
+            <h3 data-i18n="rm_p3_title">Official Public Release & Next-Gen MCU</h3>
+            <ul>
+              <li data-i18n="rm_p3_l1">เปิดตัวเวอร์ชันทางการพร้อมระบบอัปเดตออนไลน์อัตโนมัติเต็มรูปแบบ</li>
+              <li data-i18n="rm_p3_l2">รองรับชิปใหม่ Raspberry Pi Pico 2 (RP2350 Cortex-M33)</li>
+              <li data-i18n="rm_p3_l3">ขยายการรองรับไมโครคอนโทรลเลอร์ตระกูลอื่น เช่น ESP32 (ESP32 / ESP32-S3 / ESP32-C3) และ STM32</li>
+            </ul>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -503,6 +678,41 @@
             <a id="dl-fw-link" href="../releases/uplc-rp2040-embassy.uf2" download class="btn btn-emerald" data-i18n="dl_fw_btn">
               ⚡ ดาวน์โหลดเฟิร์มแวร์ (.uf2)
             </a>
+          </div>
+        </div>
+
+        <!-- SHA-256 Checksum & First-Run Troubleshooting -->
+        <div class="dl-extra-grid">
+          <div class="dl-info-box">
+            <h4 data-i18n="sha_title">🔐 SHA-256 Checksums (ตรวจสอบความถูกต้องของไฟล์)</h4>
+            <p data-i18n="sha_desc">คุณสามารถตรวจสอบค่า SHA-256 ของไฟล์ที่ดาวน์โหลดจากโฟลเดอร์ releases/ ได้ดังนี้:</p>
+            <div class="checksum-list">
+              <div class="checksum-item">
+                <span class="checksum-label">Windows (.zip)</span>
+                <code>458071e07dc8f62f59e5468fab5a53a43cce3bd44b4698283c99d91bbb60863a</code>
+              </div>
+              <div class="checksum-item">
+                <span class="checksum-label">Linux (.tar.gz)</span>
+                <code>3383408e4c7effeac55274ecd7cfda0c2485d817f8701231208a2dd262f3e6ba</code>
+              </div>
+              <div class="checksum-item">
+                <span class="checksum-label">RP2040 (.uf2)</span>
+                <code>e175c4a4ac7ab916c562a18257627ba1f9e956ef45c837ff1baed5526a5228ab</code>
+              </div>
+            </div>
+          </div>
+
+          <div class="dl-info-box">
+            <h4 data-i18n="faq_title">💡 คำแนะนำการเปิดใช้งานครั้งแรก (First-Run Tips)</h4>
+            <div class="faq-item">
+              <strong data-i18n="faq_win_q">🪟 สำหรับ Windows (SmartScreen):</strong>
+              <p data-i18n="faq_win_a">หาก Windows แจ้งเตือนไฟล์ใหม่ ให้คลิกปุ่ม <code>More info</code> แล้วกด <code>Run anyway</code> เพื่อเปิดโปรแกรมได้ทันที</p>
+            </div>
+            <div class="faq-item">
+              <strong data-i18n="faq_lin_q">🐧 สำหรับ Linux (สิทธิ์การรัน & พอร์ต USB Serial):</strong>
+              <p data-i18n="faq_lin_a">เปิดสิทธิ์รันไฟล์และสิทธิ์เข้าถึงพอร์ต <code>/dev/ttyACM0</code> ด้วยคำสั่ง:</p>
+              <code class="cmd-block">chmod +x laduino-plc && sudo usermod -aG dialout $USER</code>
+            </div>
           </div>
         </div>
       </div>

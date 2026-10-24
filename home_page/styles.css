@@ -1194,6 +1194,362 @@ footer {
 }
 
 /* ============================================================================
+ * Mobile Menu Capsule Button (NeuralKinetics + Menu Pill)
+ * ============================================================================ */
+.mobile-menu-pill {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 14px 4px 4px;
+  border-radius: var(--radius-pill);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: #000000;
+  color: #ffffff;
+  font-family: var(--font-sans);
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.mobile-menu-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #ffffff;
+  color: #000000;
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
+/* ============================================================================
+ * Hardware Wiring Diagrams Grid
+ * ============================================================================ */
+.wiring-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 22px;
+  margin-top: 28px;
+}
+
+.wiring-card {
+  background: var(--bg-card);
+  backdrop-filter: blur(18px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 26px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  transition: all 0.35s var(--ease-out-expo);
+}
+
+.wiring-card:hover {
+  transform: translateY(-4px);
+  border-color: var(--border-accent);
+  background: var(--bg-card-hover);
+  box-shadow: var(--shadow-lg);
+}
+
+.wiring-tag {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.06em;
+  margin-bottom: 8px;
+}
+
+.wiring-card h3 {
+  font-family: var(--font-display);
+  font-size: 1.12rem;
+  font-weight: 500;
+  color: #000000;
+  margin-bottom: 8px;
+}
+
+.wiring-card p {
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+  margin-bottom: 16px;
+}
+
+.wiring-svg-box {
+  background: #0b0f19;
+  border-radius: 14px;
+  padding: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+.wiring-svg-box svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* ============================================================================
+ * Interactive Example Explorer (#examples)
+ * ============================================================================ */
+.example-explorer {
+  background: var(--bg-card);
+  backdrop-filter: blur(20px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 28px;
+  box-shadow: var(--shadow-lg);
+}
+
+.example-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 22px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.example-tab {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  font-weight: 500;
+  padding: 9px 18px;
+  border-radius: var(--radius-pill);
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: #ffffff;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.25s var(--ease-out-expo);
+}
+
+.example-tab:hover {
+  border-color: #000000;
+  color: #000000;
+}
+
+.example-tab.active {
+  background: #000000;
+  border-color: #000000;
+  color: #ffffff;
+  box-shadow: 0 6px 18px -4px rgba(0, 0, 0, 0.25);
+}
+
+.example-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.example-panel-header h3 {
+  font-family: var(--font-display);
+  font-size: 1.2rem;
+  font-weight: 600;
+  color: #000000;
+  margin-bottom: 4px;
+}
+
+.example-panel-header p {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.example-code-box {
+  background: #090d16;
+  color: #e2e8f0;
+  border: 1px solid rgba(0, 0, 0, 0.16);
+  border-radius: 16px;
+  padding: 20px 22px;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  line-height: 1.65;
+  overflow-x: auto;
+}
+
+/* ============================================================================
+ * Development Roadmap (#roadmap)
+ * ============================================================================ */
+.roadmap-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 24px;
+}
+
+.roadmap-card {
+  background: var(--bg-card);
+  backdrop-filter: blur(18px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 28px;
+  box-shadow: var(--shadow-sm);
+  transition: all 0.35s var(--ease-out-expo);
+}
+
+.roadmap-card.current {
+  background: #ffffff;
+  border: 1.5px solid #000000;
+  box-shadow: var(--shadow-lg);
+}
+
+.roadmap-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.roadmap-badge {
+  font-family: var(--font-sans);
+  font-size: 0.74rem;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: var(--radius-pill);
+}
+
+.roadmap-badge.done {
+  background: rgba(16, 185, 129, 0.14);
+  color: #047857;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.roadmap-badge.active {
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid rgba(217, 119, 6, 0.35);
+}
+
+.roadmap-badge.next {
+  background: #f4f4f6;
+  color: #18181b;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+.roadmap-ver {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.roadmap-card h3 {
+  font-family: var(--font-display);
+  font-size: 1.18rem;
+  font-weight: 600;
+  color: #000000;
+  margin-bottom: 14px;
+}
+
+.roadmap-card ul {
+  list-style: none;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.roadmap-card ul li {
+  margin-bottom: 10px;
+  padding-left: 18px;
+  position: relative;
+}
+
+.roadmap-card ul li::before {
+  content: "•";
+  position: absolute;
+  left: 4px;
+  color: #000000;
+  font-weight: 800;
+}
+
+/* ============================================================================
+ * SHA-256 Checksum & First-Run Troubleshooting (#download)
+ * ============================================================================ */
+.dl-extra-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 24px;
+  margin-top: 28px;
+}
+
+.dl-info-box {
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(18px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 26px;
+  box-shadow: var(--shadow-sm);
+}
+
+.dl-info-box h4 {
+  font-family: var(--font-display);
+  font-size: 1.08rem;
+  font-weight: 600;
+  color: #000000;
+  margin-bottom: 8px;
+}
+
+.dl-info-box p {
+  font-size: 0.86rem;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+}
+
+.checksum-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.checksum-item {
+  background: #f4f4f6;
+  border: 1px solid rgba(0, 0, 0, 0.07);
+  border-radius: 10px;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.checksum-label {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #000000;
+}
+
+.checksum-item code {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
+.faq-item {
+  margin-top: 10px;
+}
+
+.faq-item strong {
+  display: block;
+  font-size: 0.86rem;
+  color: #000000;
+  margin-bottom: 3px;
+}
+
+.cmd-block {
+  display: block;
+  background: #090d16;
+  color: #10e182;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  padding: 9px 12px;
+  border-radius: 10px;
+  overflow-x: auto;
+}
+
+/* ============================================================================
  * Responsive Breakpoints
  * ============================================================================ */
 @media (max-width: 960px) {
@@ -1201,8 +1557,28 @@ footer {
   .donate-container {
     grid-template-columns: 1fr;
   }
+  .mobile-menu-pill {
+    display: inline-flex;
+  }
   .nav-links {
     display: none;
+    position: absolute;
+    top: 72px;
+    left: 20px;
+    right: 20px;
+    flex-direction: column;
+    align-items: stretch;
+    border-radius: 22px;
+    padding: 12px;
+    background: rgba(255, 255, 255, 0.96);
+    backdrop-filter: blur(20px);
+    box-shadow: var(--shadow-lg);
+  }
+  .nav-links.mobile-open {
+    display: flex;
+  }
+  .nav-links a {
+    padding: 10px 16px;
   }
   .donate-container {
     padding: 26px;

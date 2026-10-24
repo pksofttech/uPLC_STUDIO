@@ -29,6 +29,8 @@ const I18N = {
     nav_features: "ฟีเจอร์เด่น",
     nav_getting_started: "เริ่มต้นใช้งาน",
     nav_hardware: "ฮาร์ดแวร์ & พิน",
+    nav_examples: "ตัวอย่างวงจร",
+    nav_roadmap: "แผนพัฒนา",
     nav_download: "ดาวน์โหลด",
     nav_donate: "☕ สนับสนุนผู้พัฒนา",
 
@@ -110,6 +112,52 @@ const I18N = {
     hw_r8_desc: "พอร์ตสื่อสาร RS-485 Half-Duplex สำหรับบล็อกคำสั่ง MB_MASTER",
     hw_r9_desc: "สัญญาณนาฬิกาพัลส์ 10ms..60s, First Scan (%SM1) และค่า Scan Time / อุณหภูมิ CPU (%SD6)",
 
+    wire_1_tag: "01 / DIGITAL INPUT WIRING",
+    wire_1_title: "การต่อสวิตช์ & เซนเซอร์อินพุต (%IX0.0..%IX0.7)",
+    wire_1_desc: "พิน GP0..GP7 ตั้งค่าเป็น Internal Pull-Down (Active-High 3.3V) สำหรับงานอุตสาหกรรม 24VDC แนะนำให้ต่อผ่านโมดูล Optocoupler (เช่น PC817)",
+    wire_2_tag: "02 / DIGITAL OUTPUT WIRING",
+    wire_2_title: "การต่อรีเลย์ & โซลินอยด์เอาต์พุต (%QX0.0..%QX0.7)",
+    wire_2_desc: "พิน GP25 (LED Y0) และ GP8..GP14 (Y1..Y7) จ่ายลอจิก 3.3V แนะนำให้ต่อเข้าโมดูล Relay Opto-Isolated หรือไอซี ULN2803 เพื่อขับโหลดกำลังสูง",
+    wire_3_tag: "03 / RS-485 MODBUS RTU",
+    wire_3_title: "การต่อโมดูล RS-485 (MB_MASTER)",
+    wire_3_desc: "เชื่อมต่อโมดูล MAX485 / SP3485 (3.3V) เข้ากับพิน UART พร้อมพินควบคุมทิศทาง DE/RE อัตโนมัติ สำหรับอ่านค่าเซนเซอร์และสั่งงานอินเวอร์เตอร์",
+
+    ex_tag: "BUNDLED IEC 61131-3 EXAMPLES",
+    ex_title: "ตัวอย่างวงจรมาตรฐานพร้อมใช้งานกว่า 14 โปรเจกต์",
+    ex_subtitle: "คลิกเลือกดูโค้ด Instruction List (.il) ตัวอย่างที่มาพร้อมกับโปรแกรม สามารถคัดลอกหรือเปิดจากโฟลเดอร์ example/ ในโปรแกรมเพื่อจำลองการทำงานได้ทันที",
+    ex_tab_0: "01 • Motor Start/Stop",
+    ex_tab_1: "02 • Star-Delta Timer",
+    ex_tab_2: "09 • Modbus RTU Master",
+    ex_tab_3: "12 • PID & Analog Scale",
+    btn_copy_il: "📋 คัดลอกโค้ด .il",
+
+    rm_tag: "DEVELOPMENT ROADMAP",
+    rm_title: "แผนการพัฒนาสู่การปล่อยเวอร์ชันทางการ",
+    rm_subtitle: "ติดตามความคืบหน้าของการพัฒนา LaduinoPLC ตั้งแต่รุ่นทดสอบ (Pre-Release) ไปจนถึงการเปิดตัวเวอร์ชันสมบูรณ์",
+    rm_p1_badge: "✔ เสร็จสมบูรณ์ (Completed)",
+    rm_p1_title: "Core IEC 61131-3 IDE & 32-bit Micro-VM",
+    rm_p1_l1: "ตัววาดวงจร Ladder Diagram พร้อมแปลงโค้ด .il แบบสองทิศทาง",
+    rm_p1_l2: "ระบบจำลองการทำงานแบบเรียลไทม์ (Offline Simulator) & Force I/O",
+    rm_p1_l3: "เฟิร์มแวร์ RP2040 Embassy พร้อม RETAIN Flash & CRC16",
+    rm_p2_badge: "🚧 กำลังดำเนินการ (Pre-Release)",
+    rm_p2_title: "ปรับปรุงและทดสอบก่อนปล่อยอย่างเป็นทางการ",
+    rm_p2_l1: "ทดสอบความเสถียรของบล็อก PID, SCALE, Drum Sequencer และ Modbus RTU",
+    rm_p2_l2: "ระบบแฟลชเฟิร์มแวร์ .uf2 ผ่าน USB BOOTSEL ในคลิกเดียว",
+    rm_p2_l3: "ตรวจสอบความเข้ากันได้บน Windows 10/11 และ Linux หลากหลายดิสโทร",
+    rm_p3_badge: "🎯 เป้าหมายถัดไป (Official Release)",
+    rm_p3_title: "Official Public Release & Next-Gen MCU",
+    rm_p3_l1: "เปิดตัวเวอร์ชันทางการพร้อมระบบอัปเดตออนไลน์อัตโนมัติเต็มรูปแบบ",
+    rm_p3_l2: "รองรับชิปใหม่ Raspberry Pi Pico 2 (RP2350 Cortex-M33)",
+    rm_p3_l3: "ขยายการรองรับไมโครคอนโทรลเลอร์ตระกูลอื่น เช่น ESP32 (ESP32 / ESP32-S3 / ESP32-C3) และ STM32",
+
+    sha_title: "🔐 SHA-256 Checksums (ตรวจสอบความถูกต้องของไฟล์)",
+    sha_desc: "คุณสามารถตรวจสอบค่า SHA-256 ของไฟล์ที่ดาวน์โหลดจากโฟลเดอร์ releases/ ได้ดังนี้:",
+    faq_title: "💡 คำแนะนำการเปิดใช้งานครั้งแรก (First-Run Tips)",
+    faq_win_q: "🪟 สำหรับ Windows (SmartScreen):",
+    faq_win_a: "หาก Windows แจ้งเตือนไฟล์ใหม่ ให้คลิกปุ่ม More info แล้วกด Run anyway เพื่อเปิดโปรแกรมได้ทันที",
+    faq_lin_q: "🐧 สำหรับ Linux (สิทธิ์การรัน & พอร์ต USB Serial):",
+    faq_lin_a: "เปิดสิทธิ์รันไฟล์และสิทธิ์เข้าถึงพอร์ต /dev/ttyACM0 ด้วยคำสั่ง:",
+
     dl_tag: "DOWNLOAD RELEASES",
     dl_title: "ดาวน์โหลด LaduinoPLC & เฟิร์มแวร์",
     dl_subtitle: "ฟรีและโอเพนซอร์ส — ดาวน์โหลดเวอร์ชันล่าสุดได้โดยตรงจาก GitHub Releases",
@@ -156,6 +204,8 @@ const I18N = {
     nav_features: "Features",
     nav_getting_started: "Getting Started",
     nav_hardware: "Hardware & Pinout",
+    nav_examples: "Examples",
+    nav_roadmap: "Roadmap",
     nav_download: "Download",
     nav_donate: "☕ Donate / Support",
 
@@ -236,6 +286,52 @@ const I18N = {
     hw_r7_desc: "12-bit Analog Inputs (0..4095) & onboard die temperature sensor (%IW3)",
     hw_r8_desc: "RS-485 Half-Duplex UART1 transceiver pins for MB_MASTER Modbus RTU",
     hw_r9_desc: "System clock pulses (10ms..60s), First Scan (%SM1), Scan Time & CPU Temp (%SD6)",
+
+    wire_1_tag: "01 / DIGITAL INPUT WIRING",
+    wire_1_title: "Digital Input Wiring (%IX0.0..%IX0.7)",
+    wire_1_desc: "Pins GP0..GP7 use internal pull-downs (Active-High 3.3V). For industrial 24VDC sensors, wire through an optocoupler module (e.g. PC817).",
+    wire_2_tag: "02 / DIGITAL OUTPUT WIRING",
+    wire_2_title: "Relay & Solenoid Outputs (%QX0.0..%QX0.7)",
+    wire_2_desc: "Pins GP25 (onboard LED Y0) and GP8..GP14 (Y1..Y7) output 3.3V logic. Connect to opto-isolated relay modules or a ULN2803 driver for high-voltage loads.",
+    wire_3_tag: "03 / RS-485 MODBUS RTU",
+    wire_3_title: "RS-485 Transceiver Wiring (MB_MASTER)",
+    wire_3_desc: "Connect a 3.3V MAX3485 / MAX485 transceiver to the UART pins with automatic DE/RE direction control to poll Modbus RTU slaves.",
+
+    ex_tag: "BUNDLED IEC 61131-3 EXAMPLES",
+    ex_title: "14+ Ready-to-Run Industrial Ladder Examples",
+    ex_subtitle: "Click any tab below to inspect the IEC 61131-3 Instruction List (.il) code bundled in the example/ directory.",
+    ex_tab_0: "01 • Motor Start/Stop",
+    ex_tab_1: "02 • Star-Delta Timer",
+    ex_tab_2: "09 • Modbus RTU Master",
+    ex_tab_3: "12 • PID & Analog Scale",
+    btn_copy_il: "📋 Copy .il Code",
+
+    rm_tag: "DEVELOPMENT ROADMAP",
+    rm_title: "Roadmap to Official Release",
+    rm_subtitle: "Track LaduinoPLC's progress from the current pre-release refinement phase to the official public launch.",
+    rm_p1_badge: "✔ Completed",
+    rm_p1_title: "Core IEC 61131-3 IDE & 32-bit Micro-VM",
+    rm_p1_l1: "Bidirectional Ladder Diagram & IEC 61131-3 .il code editor",
+    rm_p1_l2: "Real-Time Offline Simulator with live conduction & Force I/O",
+    rm_p1_l3: "RP2040 Embassy async runtime with RETAIN Flash & CRC16 check",
+    rm_p2_badge: "🚧 In Progress (Pre-Release)",
+    rm_p2_title: "Refinement & Pre-Release Verification",
+    rm_p2_l1: "Hardware-in-the-loop stress testing for PID, SCALE, Drum & Modbus RTU",
+    rm_p2_l2: "1-Click USB BOOTSEL (.uf2) firmware flasher integration",
+    rm_p2_l3: "Cross-platform verification across Windows 10/11 & Linux distros",
+    rm_p3_badge: "🎯 Upcoming (Official Release)",
+    rm_p3_title: "Official Public Release & Next-Gen MCU",
+    rm_p3_l1: "Official stable release with full online auto-updater support",
+    rm_p3_l2: "Expanded support for Raspberry Pi Pico 2 (RP2350 Cortex-M33)",
+    rm_p3_l3: "Multi-architecture MCU runtime support for ESP32 (ESP32 / ESP32-S3 / ESP32-C3) & STM32",
+
+    sha_title: "🔐 SHA-256 Checksums (Verify Integrity)",
+    sha_desc: "Verify your downloaded release packages using these SHA-256 hashes:",
+    faq_title: "💡 First-Run Quick Tips",
+    faq_win_q: "🪟 Windows SmartScreen Notice:",
+    faq_win_a: "If Windows SmartScreen prompts on first launch, click More info → Run anyway to start LaduinoPLC.",
+    faq_lin_q: "🐧 Linux Executable & USB Serial Permissions:",
+    faq_lin_a: "Grant executable permission and /dev/ttyACM0 serial access with:",
 
     dl_tag: "DOWNLOAD RELEASES",
     dl_title: "Download LaduinoPLC & Firmware",
@@ -360,6 +456,109 @@ function renderSimSvg() {
   }
 }
 
+// Bundled IEC 61131-3 Example Programs Preview
+const EXAMPLES_DATA = [
+  {
+    titleTh: "01_motor_start_stop.il — วงจรควบคุมมอเตอร์ Start / Stop ค้างสถานะ",
+    titleEn: "01_motor_start_stop.il — Motor Start / Stop with Self-Holding Seal-in",
+    descTh: "พื้นฐานการเขียนวงจร Self-Holding (Latching) ร่วมกับปุ่มหยุดฉุกเฉิน NC และไฟแสดงสถานะการทำงาน",
+    descEn: "Standard industrial 3-wire motor control with parallel seal-in contact and NC overload/stop interlock.",
+    code: `(* ======================================================== *)
+(* Example 01: Motor Start / Stop with Self-Holding         *)
+(* ======================================================== *)
+(* Network 01: Main Contactor Latch                         *)
+    LD   %IX0.0        (* START_PB (NO) *)
+    OR   %QX0.0        (* MOTOR_RUN Seal-in *)
+    ANDN %IX0.1        (* STOP_PB (NC) *)
+    ANDN %IX0.2        (* OVERLOAD_TRIP (NC) *)
+    ST   %QX0.0        (* MOTOR_RUN Output *)
+
+(* Network 02: Run & Fault Pilot Lamps                      *)
+    LD   %QX0.0
+    ST   %QX0.1        (* GREEN_RUN_LAMP *)
+    LD   %IX0.2
+    ST   %QX0.2        (* RED_FAULT_LAMP *)`
+  },
+  {
+    titleTh: "02_star_delta_timer.il — วงจรกลับเฟสสตาร์ทมอเตอร์ Star-Delta อัตโนมัติ",
+    titleEn: "02_star_delta_timer.il — Automatic Star-Delta Motor Starter with TON Timer",
+    descTh: "ใช้บล็อกตั้งเวลา TON (T0) สลับคอนแทคเตอร์จาก Star (%QX0.1) ไปเป็น Delta (%QX0.2) พร้อม Interlock ป้องกันการชนกัน",
+    descEn: "Uses an on-delay timer TON (T0 = 5.0s) to transition from Star (%QX0.1) to Delta (%QX0.2) with electrical interlock.",
+    code: `(* ======================================================== *)
+(* Example 02: Automatic Star-Delta Starter                 *)
+(* ======================================================== *)
+(* Network 01: Main Contactor KM1 + Transition Timer T0     *)
+    LD   %IX0.0        (* START_PB *)
+    OR   %QX0.0        (* KM1_MAIN *)
+    ANDN %IX0.1        (* STOP_PB *)
+    ST   %QX0.0        (* KM1_MAIN *)
+    TON  T0, 50        (* 5.0s Star-to-Delta Delay *)
+
+(* Network 02: Star Contactor KM2 (Active before T0 done)   *)
+    LD   %QX0.0
+    ANDN T0
+    ANDN %QX0.2        (* Interlock KM3_DELTA *)
+    ST   %QX0.1        (* KM2_STAR *)
+
+(* Network 03: Delta Contactor KM3 (Active after T0 done)   *)
+    LD   %QX0.0
+    AND  T0
+    ANDN %QX0.1        (* Interlock KM2_STAR *)
+    ST   %QX0.2        (* KM3_DELTA *)`
+  },
+  {
+    titleTh: "09_modbus_rtu_master.il — อ่านค่าเซนเซอร์และสั่งงานอินเวอร์เตอร์ผ่าน RS-485",
+    titleEn: "09_modbus_rtu_master.il — RS-485 Modbus RTU Master Polling & VFD Control",
+    descTh: "ใช้สัญญาณพัลส์ 100ms (%SM4) สั่งบล็อก MB_MASTER อ่านค่า Holding Register (FC03) จาก Slave ID 1 มาเก็บใน %MW10",
+    descEn: "Uses 100ms system clock (%SM4) to trigger MB_MASTER (FC03 Read Holding Registers) from Slave ID 1 into %MW10.",
+    code: `(* ======================================================== *)
+(* Example 09: Modbus RTU Master (RS-485 UART1)             *)
+(* ======================================================== *)
+(* Network 01: Poll Temperature Sensor (Slave=1, FC=03)     *)
+    LD   %SM4          (* 100ms System Clock Pulse *)
+    MB_MASTER MB0, 1, 3, 0, 2, %MW10
+
+(* Network 02: High Temperature Alarm (> 85.0 C -> 850)     *)
+    LD   %SM0          (* Always ON *)
+    GT   %MW10, 850
+    ST   %QX0.3        (* HIGH_TEMP_ALARM_RELAY *)`
+  },
+  {
+    titleTh: "12_pid_scale_process.il — สเกลค่าอนาล็อก ADC 12-bit และควบคุมด้วย PID",
+    titleEn: "12_pid_scale_process.il — 12-bit ADC Linear Scaling & Closed-Loop PID Control",
+    descTh: "แปลงค่าอนาล็อก %IW0 (0..4095) เป็นหน่วยวิศวกรรม (0..1000) ด้วยบล็อก SCALE แล้วส่งเข้าบล็อก PID เพื่อคุมเอาต์พุต",
+    descEn: "Scales 12-bit ADC input %IW0 (0..4095) to engineering units (0..1000) and computes closed-loop PID control output.",
+    code: `(* ======================================================== *)
+(* Example 12: Analog Scaling & PID Process Control         *)
+(* ======================================================== *)
+(* Network 01: Scale ADC0 (%IW0: 0..4095 -> %MW0: 0..1000)  *)
+    LD   %SM0
+    SCALE %IW0, 0, 4095, 0, 1000, %MW0
+
+(* Network 02: Closed-Loop PID (SP=%MW2, PV=%MW0 -> %MW4)   *)
+    LD   %IX0.0        (* AUTO_MODE_ENABLE *)
+    PID  PID0, %MW2, %MW0, 120, 15, 5, %MW4`
+  }
+];
+
+let currentExampleIdx = 0;
+
+function renderExample(idx) {
+  currentExampleIdx = idx;
+  const item = EXAMPLES_DATA[idx] || EXAMPLES_DATA[0];
+  const titleEl = document.getElementById("example-title");
+  const descEl = document.getElementById("example-desc");
+  const codeEl = document.getElementById("example-code-content");
+
+  if (titleEl) titleEl.textContent = currentLang === "th" ? item.titleTh : item.titleEn;
+  if (descEl) descEl.textContent = currentLang === "th" ? item.descTh : item.descEn;
+  if (codeEl) codeEl.textContent = item.code;
+
+  document.querySelectorAll(".example-tab").forEach((btn, i) => {
+    btn.classList.toggle("active", i === idx);
+  });
+}
+
 function setLanguage(lang) {
   currentLang = lang === "en" ? "en" : "th";
   localStorage.setItem("laduino_lang", currentLang);
@@ -381,6 +580,8 @@ function setLanguage(lang) {
     acctNameEl.textContent =
       currentLang === "th" ? SITE_CONFIG.promptPayNameTh : SITE_CONFIG.promptPayNameEn;
   }
+
+  renderExample(currentExampleIdx);
 }
 
 function applySiteConfig() {
@@ -452,4 +653,37 @@ document.addEventListener("DOMContentLoaded", () => {
   qrModal?.addEventListener("click", (e) => {
     if (e.target === qrModal) qrModal.classList.remove("open");
   });
+
+  // Example Tabs & Copy IL Code
+  renderExample(0);
+  document.querySelectorAll(".example-tab").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const idx = parseInt(btn.getAttribute("data-example") || "0", 10);
+      renderExample(idx);
+    });
+  });
+
+  const copyExBtn = document.getElementById("copy-example-btn");
+  if (copyExBtn) {
+    copyExBtn.addEventListener("click", () => {
+      const item = EXAMPLES_DATA[currentExampleIdx] || EXAMPLES_DATA[0];
+      navigator.clipboard?.writeText(item.code);
+      copyExBtn.textContent = I18N[currentLang].btn_copied;
+      setTimeout(() => {
+        copyExBtn.textContent = I18N[currentLang].btn_copy_il;
+      }, 1800);
+    });
+  }
+
+  // Mobile Menu Drawer Toggle
+  const mobileMenuBtn = document.getElementById("mobile-menu-btn");
+  const navMenu = document.getElementById("nav-links-menu");
+  if (mobileMenuBtn && navMenu) {
+    mobileMenuBtn.addEventListener("click", () => {
+      navMenu.classList.toggle("mobile-open");
+    });
+    navMenu.querySelectorAll("a").forEach((link) => {
+      link.addEventListener("click", () => navMenu.classList.remove("mobile-open"));
+    });
+  }
 });
