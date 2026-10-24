@@ -41,6 +41,25 @@ impl IlParser {
     // IEC 61131-3 INSTRUCTION LIST (IL) EXPORTER & PARSER
     // ========================================================================
 
+    fn push_network_comment(out: &mut String, idx: usize, comment: &str, suffix: Option<&str>) {
+        let lines: Vec<&str> = if comment.is_empty() {
+            vec![""]
+        } else {
+            comment.split('\n').map(|l| l.trim_end_matches('\r')).collect()
+        };
+        for (line_i, line_str) in lines.iter().enumerate() {
+            if line_i == 0 {
+                if let Some(suf) = suffix {
+                    out.push_str(&format!("(* Network {:02}: {} {} *)\n", idx + 1, line_str, suf));
+                } else {
+                    out.push_str(&format!("(* Network {:02}: {} *)\n", idx + 1, line_str));
+                }
+            } else {
+                out.push_str(&format!("(*   {} *)\n", line_str));
+            }
+        }
+    }
+
     /// Export a LadderProgram to IEC 61131-3 Instruction List (IL) standard
     pub fn export_il(prog: &LadderProgram) -> String {
         let mut out = String::new();
@@ -57,7 +76,7 @@ impl IlParser {
 
         // Networks / Rungs
         for (idx, rung) in prog.rungs.iter().enumerate() {
-            out.push_str(&format!("(* Network {:02}: {} *)\n", idx + 1, rung.comment));
+            Self::push_network_comment(&mut out, idx, &rung.comment, None);
             Self::export_il_rung(&mut out, rung);
             out.push_str("\n");
         }
@@ -682,6 +701,7 @@ impl IlParser {
         let lines: Vec<&str> = content.lines().collect();
         let mut i = 0;
         let mut in_var_section = false;
+        let mut in_network_header = false;
         let mut current_rung_comment = String::new();
         let mut current_rung_elements: Vec<LadderElement> = Vec::new();
 
@@ -785,11 +805,22 @@ impl IlParser {
                     String::new()
                 };
                 current_rung_comment = comment_text;
+                in_network_header = true;
                 i += 1;
                 continue;
             }
 
             if line.starts_with("(*") && line.ends_with("*)") && !line.contains("WIRE") && !line.contains("OPEN") {
+                if in_network_header && current_rung_elements.is_empty() && !line.contains("====") {
+                    let inner = line
+                        .trim_start_matches("(*")
+                        .trim_end_matches("*)")
+                        .trim();
+                    if !current_rung_comment.is_empty() {
+                        current_rung_comment.push('\n');
+                    }
+                    current_rung_comment.push_str(inner);
+                }
                 i += 1;
                 continue;
             }
@@ -2020,14 +2051,14 @@ impl IlParser {
         let mut out = String::new();
         if let Some(sel) = selected_rung {
             if let Some(rung) = prog.rungs.get(sel) {
-                out.push_str(&format!("(* Network {:02}: {} *)\n", sel + 1, rung.comment));
+                Self::push_network_comment(&mut out, sel, &rung.comment, None);
                 Self::export_il_rung(&mut out, rung);
             } else {
                 out.push_str("(* No active network selected *)\n");
             }
         } else {
             for (idx, rung) in prog.rungs.iter().enumerate() {
-                out.push_str(&format!("(* Network {:02}: {} *)\n", idx + 1, rung.comment));
+                Self::push_network_comment(&mut out, idx, &rung.comment, None);
                 Self::export_il_rung(&mut out, rung);
                 out.push_str("\n");
             }
@@ -2040,24 +2071,16 @@ impl IlParser {
         let mut out = String::new();
         if let Some(sel) = selected_rung {
             if let Some(rung) = prog.rungs.get(sel) {
-                out.push_str(&format!(
-                    "(* Network {:02}: {} [Rung Energized={}] *)\n",
-                    sel + 1,
-                    rung.comment,
-                    u8::from(rung.is_energized)
-                ));
+                let suf = format!("[Rung Energized={}]", u8::from(rung.is_energized));
+                Self::push_network_comment(&mut out, sel, &rung.comment, Some(&suf));
                 Self::export_il_rung_online(&mut out, rung);
             } else {
                 out.push_str("(* No active network selected *)\n");
             }
         } else {
             for (idx, rung) in prog.rungs.iter().enumerate() {
-                out.push_str(&format!(
-                    "(* Network {:02}: {} [Rung Energized={}] *)\n",
-                    idx + 1,
-                    rung.comment,
-                    u8::from(rung.is_energized)
-                ));
+                let suf = format!("[Rung Energized={}]", u8::from(rung.is_energized));
+                Self::push_network_comment(&mut out, idx, &rung.comment, Some(&suf));
                 Self::export_il_rung_online(&mut out, rung);
                 out.push_str("\n");
             }

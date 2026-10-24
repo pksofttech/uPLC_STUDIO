@@ -339,7 +339,7 @@ pub struct CanvasApp {
 impl Default for CanvasApp {
     fn default() -> Self {
         let settings = AppSettings::load();
-        let mut doc = Document::default();
+        let mut doc = Document::new_empty();
         doc.set_schematic_style(settings.schematic_style);
         doc.is_dirty = false;
         doc.simulator.cycle_time_ms = settings.cycle_time_ms.clamp(1, 1000);
@@ -1831,10 +1831,6 @@ impl CanvasApp {
                 .map(|r| r.comment.as_str())
                 .unwrap_or("");
             self.elem_modal.open_for(&el, self.doc.selected_rung_idx, r_comment);
-        } else if let Some(r_idx) = self.doc.selected_rung_idx {
-            if let Some(rung) = self.doc.program.rungs.get(r_idx) {
-                self.elem_modal.open_for_rung(r_idx, rung);
-            }
         }
     }
 }
@@ -4176,6 +4172,15 @@ mod tests {
         let json = serde_json::to_string(&s).unwrap();
         let back: AppSettings = serde_json::from_str(&json).unwrap();
         assert_eq!(back.recent_files, s.recent_files);
+    }
+
+    #[test]
+    fn test_default_starts_with_new_empty_ladder() {
+        let app = CanvasApp::default();
+        assert_eq!(app.doc.program.rungs.len(), 1);
+        assert!(app.doc.program.rungs[0].elements.is_empty());
+        assert!(app.doc.file_path.is_none());
+        assert!(!app.doc.is_dirty);
     }
 
     #[test]

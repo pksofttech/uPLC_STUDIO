@@ -2645,3 +2645,34 @@ fn test_global_symbol_table_single_source_of_truth() {
     assert_eq!(inserted.symbol, "PUMP_MAIN");
 }
 
+#[test]
+fn test_multiline_network_comment_il_roundtrip() {
+    let mut doc = Document::new_empty();
+    let multi_comment = "Main Conveyor Drive\nLine 2: Interlocked with E-Stop\nLine 3: Auto/Manual Ready";
+    doc.program.rungs[0].comment = multi_comment.to_string();
+    let id1 = doc.program.alloc_id();
+    let id2 = doc.program.alloc_id();
+    doc.program.rungs[0].elements.push(LadderElement::new_contact(
+        id1,
+        "%IX0.0",
+        "START",
+        ContactMode::NormallyOpen,
+    ));
+    doc.program.rungs[0].elements.push(LadderElement::new_coil(
+        id2,
+        "%QX0.0",
+        "MOTOR",
+        CoilMode::Normal,
+    ));
+
+    let il_str = doc.export_to_il_str();
+    assert!(il_str.contains("(* Network 01: Main Conveyor Drive *)"));
+    assert!(il_str.contains("(*   Line 2: Interlocked with E-Stop *)"));
+    assert!(il_str.contains("(*   Line 3: Auto/Manual Ready *)"));
+
+    let mut reloaded = Document::new_empty();
+    reloaded.load_from_il_str(&il_str).expect("Should parse multiline network comment IL");
+    assert_eq!(reloaded.program.rungs[0].comment, multi_comment);
+}
+
+

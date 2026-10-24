@@ -238,6 +238,25 @@ impl CanvasViewport {
         }
     }
 
+    fn rung_comment_lines(comment: &str) -> Vec<&str> {
+        if comment.is_empty() {
+            Vec::new()
+        } else {
+            comment.split('\n').map(|l| l.trim_end_matches('\r')).collect()
+        }
+    }
+
+    fn rung_header_offset(rung: &my_canvas_core::Rung) -> f32 {
+        let has_label = rung.elements.iter().any(|e| e.element_type == TypeTag::Label);
+        let line_count = Self::rung_comment_lines(&rung.comment).len();
+        if line_count == 0 && !has_label {
+            0.0
+        } else {
+            let extra_lines = line_count.saturating_sub(1) as f32;
+            26.0 + extra_lines * 15.0
+        }
+    }
+
     pub fn compute_content_size(&self, doc: &Document, viewport_width: f32) -> Vec2 {
         let cell_h = 88.0;
         let rung_header_w = 76.0;
@@ -259,9 +278,7 @@ impl CanvasViewport {
 
         let mut cur_y = margin_top;
         for rung in &doc.program.rungs {
-            let has_header_bar = !rung.comment.is_empty()
-                || rung.elements.iter().any(|e| e.element_type == TypeTag::Label);
-            let comment_offset = if has_header_bar { 26.0 } else { 0.0 };
+            let comment_offset = Self::rung_header_offset(rung);
             let rung_start_y = cur_y + comment_offset;
             let mut max_y = rung_start_y + cell_h;
             for elem in &rung.elements {
@@ -291,9 +308,7 @@ impl CanvasViewport {
             if i == rung_idx {
                 return cur_y;
             }
-            let has_header_bar = !rung.comment.is_empty()
-                || rung.elements.iter().any(|e| e.element_type == TypeTag::Label);
-            let rung_start_y = cur_y + if has_header_bar { 26.0 } else { 0.0 };
+            let rung_start_y = cur_y + Self::rung_header_offset(rung);
             let mut max_y = rung_start_y + cell_h;
             for elem in &rung.elements {
                 max_y = max_y.max(rung_start_y + Self::element_height(elem, cell_h));
@@ -661,17 +676,19 @@ impl CanvasViewport {
         for (r_idx, rung) in doc.program.rungs.iter().enumerate() {
             let is_rung_selected = doc.selected_rung_idx == Some(r_idx);
             let label_elem = rung.elements.iter().find(|e| e.element_type == TypeTag::Label);
-            let has_header_bar = !rung.comment.is_empty() || label_elem.is_some();
-            let comment_offset = if has_header_bar { 26.0 } else { 0.0 };
+            let comment_lines = Self::rung_comment_lines(&rung.comment);
+            let comment_offset = Self::rung_header_offset(rung);
+            let has_header_bar = comment_offset > 0.0;
 
             // Network Header Bar (Shows Flag Badge for Target Label + Network Comment)
             if has_header_bar {
                 let c_min = self.to_screen(pos2(margin_left + 8.0, cur_y + 2.0), origin);
-                let c_max = self.to_screen(pos2(margin_right - 8.0, cur_y + 23.0), origin);
+                let c_max = self.to_screen(pos2(margin_right - 8.0, cur_y + comment_offset - 3.0), origin);
                 let c_rect = Rect::from_two_pos(c_min, c_max);
                 let comment_hovered = hover_pos.map_or(false, |hp| c_rect.contains(hp));
                 painter.rect_filled(c_rect, 4.0 * self.zoom, palette.comment_bg);
 
+                let first_line_y = self.to_screen(pos2(0.0, cur_y + 12.5), origin).y;
                 let mut text_x = c_rect.min.x + 8.0 * self.zoom;
 
                 // Prominent Flag Badge for Target Label
@@ -680,7 +697,7 @@ impl CanvasViewport {
                     let badge_w = (badge_text.len() as f32 * 7.5 + 16.0) * self.zoom;
                     let badge_h = 16.5 * self.zoom;
                     let badge_rect = Rect::from_min_size(
-                        pos2(text_x, c_rect.center().y - badge_h * 0.5),
+                        pos2(text_x, first_line_y - badge_h * 0.5),
                         vec2(badge_w, badge_h),
                     );
 
@@ -702,17 +719,22 @@ impl CanvasViewport {
                     text_x += badge_w + 10.0 * self.zoom;
                 }
 
-                if !rung.comment.is_empty() {
-                    painter.text(
-                        pos2(text_x, c_rect.center().y),
-                        Align2::LEFT_CENTER,
-                        format!("// {}", rung.comment),
-                        self.font_prop(11.0),
-                        palette.comment_fg,
-                    );
+                if !comment_lines.is_empty() {
+                    for (line_idx, line_str) in comment_lines.iter().enumerate() {
+                        let line_y = self
+                            .to_screen(pos2(0.0, cur_y + 12.5 + line_idx as f32 * 15.0), origin)
+                            .y;
+                        painter.text(
+                            pos2(text_x, line_y),
+                            Align2::LEFT_CENTER,
+                            format!("// {}", line_str),
+                            self.font_prop(11.0),
+                            palette.comment_fg,
+                        );
+                    }
                 } else if label_elem.is_some() {
                     painter.text(
-                        pos2(text_x, c_rect.center().y),
+                        pos2(text_x, first_line_y),
                         Align2::LEFT_CENTER,
                         "// Jump Destination Network",
                         self.font_prop(10.5),
@@ -1969,8 +1991,7 @@ impl CanvasViewport {
     ) -> Option<Rect> {
         let mut cur_y = margin_top;
         for rung in &doc.program.rungs {
-            let has_header_bar = !rung.comment.is_empty() || rung.elements.iter().any(|e| e.element_type == TypeTag::Label);
-            let comment_offset = if has_header_bar { 26.0 } else { 0.0 };
+            let comment_offset = Self::rung_header_offset(rung);
             let rung_start_y = cur_y + comment_offset;
             let mut cur_x = margin_left + 24.0;
             let mut max_y = rung_start_y + cell_h;

@@ -1061,28 +1061,19 @@ fn render_element_inspector(
 
                         ui.label(RichText::new("Network Title / Comment:").color(palette.text_primary));
                         ui.add(
-                            egui::TextEdit::singleline(&mut rung.comment)
-                                .hint_text("Enter description for this network...")
+                            egui::TextEdit::multiline(&mut rung.comment)
+                                .desired_rows(3)
+                                .hint_text("Enter description for this network...\n(Press Enter for new line)")
                                 .desired_width(f32::INFINITY),
                         );
 
                         ui.add_space(4.0);
                         ui.label(RichText::new(format!("Elements: {} in series / parallel", rung.elements.len())).small().color(palette.rung_text_dim));
-
-                        ui.add_space(8.0);
-                        ui.horizontal(|ui| {
-                            if ui
-                                .button(RichText::new("⚙ Network Dialog (Enter)").color(palette.accent_heading))
-                                .clicked()
-                            {
-                                open_full_dialog = true;
-                            }
-                        });
                     });
 
                     ui.add_space(6.0);
                     ui.label(
-                        RichText::new("💡 Tip: Click any contact or coil inside this network to view its element properties, or press Enter to edit.")
+                        RichText::new("💡 Tip: Click any contact or coil inside this network to view its element properties.")
                             .small()
                             .color(palette.rung_text_dim),
                     );

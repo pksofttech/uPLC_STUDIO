@@ -66,14 +66,16 @@ impl ElementConfigModal {
         let mut apply_clicked = false;
         let mut cancel_clicked = false;
         let mut delete_clicked = false;
+        let mut multiline_focused = false;
 
-        // Keyboard shortcuts inside modal: Enter to Apply, Escape to Cancel
+        // Keyboard shortcuts inside modal: Escape to Cancel, Ctrl+Enter to Apply anytime
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             cancel_clicked = true;
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift) {
-            apply_clicked = true;
-        }
+        let enter_pressed = ctx.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift);
+        let ctrl_enter_pressed = ctx.input(|i| {
+            i.key_pressed(egui::Key::Enter) && (i.modifiers.command || i.modifiers.ctrl)
+        });
 
         let title = format!(
             "Element Configuration — {} (#{})",
@@ -224,11 +226,15 @@ impl ElementConfigModal {
                             };
                             ui.label(rung_lbl);
                             let full_field_w = (ui.available_width() - 4.0).max(430.0);
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.rung_comment)
-                                    .hint_text("Enter comment for this network...")
+                            let rc_resp = ui.add(
+                                egui::TextEdit::multiline(&mut self.rung_comment)
+                                    .desired_rows(2)
+                                    .hint_text("Enter comment for this network (supports multiple lines)...")
                                     .desired_width(full_field_w),
                             );
+                            if rc_resp.has_focus() {
+                                multiline_focused = true;
+                            }
                             ui.end_row();
                         });
 
@@ -1656,6 +1662,10 @@ impl ElementConfigModal {
                 });
             });
 
+        if ctrl_enter_pressed || (enter_pressed && !multiline_focused) {
+            apply_clicked = true;
+        }
+
         if !open_flag || cancel_clicked {
             self.is_open = false;
         } else if delete_clicked {
@@ -1683,7 +1693,10 @@ impl ElementConfigModal {
 
             if let Some(r_idx) = self.rung_idx {
                 if let Some(rung) = doc.program.rungs.get_mut(r_idx) {
-                    rung.comment = self.rung_comment.trim().to_string();
+                    rung.comment = self
+                        .rung_comment
+                        .trim_matches(|c| c == '\r' || c == '\n' || c == ' ')
+                        .to_string();
                 }
             }
             doc.is_dirty = true;
