@@ -18,7 +18,7 @@ const SITE_CONFIG = {
   promptPayNameEn: "PksofttecH (LaduinoPLC Development)",
   promptPayId: "08X-XXX-XXXX", // ใส่เบอร์พร้อมเพย์ หรือ เลขบัญชีธนาคารของคุณที่นี่
   githubSponsorsUrl: "https://github.com/sponsors/pksofttech",
-  paypalUrl: "https://paypal.me/pksofttech"
+  buyMeACoffeeUrl: "https://buymeacoffee.com/pksofttech"
 };
 
 /**
@@ -141,9 +141,9 @@ const I18N = {
     don_gh_desc: "ร่วมเป็นผู้สนับสนุนรายเดือนหรือรายครั้งผ่าน GitHub Sponsors หรือช่วยกด ⭐ Star ให้โปรเจกต์บน GitHub",
     don_gh_btn: "💜 GitHub Sponsors",
     don_star_btn: "⭐ Star on GitHub",
-    don_py_title: "🌏 PayPal (สำหรับผู้สนับสนุนทั่วโลก / International)",
-    don_py_desc: "สนับสนุนค่ากาแฟและค่าเซิร์ฟเวอร์ผ่านทาง PayPal ได้อย่างสะดวกและปลอดภัย",
-    don_py_btn: "💳 สนับสนุนผ่าน PayPal",
+    don_bmc_title: "☕ Buy Me a Coffee",
+    don_bmc_desc: "เลี้ยงกาแฟทีมผู้พัฒนาเพื่อเป็นกำลังใจในการพัฒนาฟีเจอร์ใหม่ๆ ผ่านทาง Buy Me a Coffee ได้อย่างสะดวกและปลอดภัย",
+    don_bmc_btn: "☕ Buy Me a Coffee",
 
     footer_copy: "พัฒนาโดย PksofttecH • ซอฟต์แวร์ออกแบบและจำลองวงจร PLC มาตรฐาน IEC 61131-3",
     modal_close: "ปิดหน้าต่าง (Close)"
@@ -265,9 +265,9 @@ const I18N = {
     don_gh_desc: "Sponsor ongoing open-source work via GitHub Sponsors or give the repository a ⭐ Star on GitHub.",
     don_gh_btn: "💜 GitHub Sponsors",
     don_star_btn: "⭐ Star on GitHub",
-    don_py_title: "🌏 PayPal (International Support)",
-    don_py_desc: "Buy the developer a coffee or contribute via PayPal from anywhere in the world.",
-    don_py_btn: "💳 Donate via PayPal",
+    don_bmc_title: "☕ Buy Me a Coffee",
+    don_bmc_desc: "Buy the developer a coffee to support ongoing development via Buy Me a Coffee.",
+    don_bmc_btn: "☕ Buy Me a Coffee",
 
     footer_copy: "Developed by PksofttecH • IEC 61131-3 PLC Ladder Diagram IDE & Micro-VM Runtime",
     modal_close: "Close Window"
@@ -389,7 +389,7 @@ function applySiteConfig() {
   bindHref("dl-fw-link", SITE_CONFIG.firmwareUf2Url);
   bindHref("don-gh-link", SITE_CONFIG.githubSponsorsUrl);
   bindHref("don-star-link", SITE_CONFIG.githubRepoUrl);
-  bindHref("don-paypal-link", SITE_CONFIG.paypalUrl);
+  bindHref("don-bmc-link", SITE_CONFIG.buyMeACoffeeUrl);
   bindHref("footer-gh-link", SITE_CONFIG.githubRepoUrl);
 
   const verBadge = document.getElementById("site-version-badge");

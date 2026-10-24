@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../" && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../../" && pwd)"
 FW_DIR="${REPO_ROOT}/firmware/rp2040-embassy"
 ELF_OUT="${FW_DIR}/target/thumbv6m-none-eabi/release/uplc-rp2040-embassy"
 UF2_OUT="${REPO_ROOT}/firmware/uplc-rp2040-embassy.uf2"

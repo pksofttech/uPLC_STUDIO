@@ -12,4 +12,14 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png"] }
 serialport = "4"
+
+[target.'cfg(not(target_os = "windows"))'.dependencies]
 self_update = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+self_update = { version = "0.41", default-features = true, features = [
+    "archive-tar",
+    "archive-zip",
+    "compression-flate2",
+    "compression-zip-deflate",
+] }
