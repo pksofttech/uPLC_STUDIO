@@ -913,6 +913,224 @@ td code {
 }
 
 /* ============================================================================
+ * Interactive Configure RP2040 Hardware I/O Pins Showcase Card
+ * ============================================================================ */
+.io-config-showcase {
+  margin-top: 26px;
+  background: #0b0f19;
+  color: #f8fafc;
+  border: 1px solid rgba(15, 23, 42, 0.25);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sim);
+  overflow: hidden;
+}
+
+.io-config-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 13px 18px;
+  background: #070a12;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.io-config-window-title {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: #e2e8f0;
+  font-weight: 600;
+}
+
+.io-config-flash-badge {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  padding: 4px 11px;
+  border-radius: var(--radius-pill);
+  background: rgba(56, 189, 248, 0.14);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+}
+
+.io-config-body {
+  padding: 18px 20px;
+}
+
+.io-config-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.io-config-heading {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #38bdf8;
+}
+
+.io-config-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.iocfg-btn {
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  font-weight: 600;
+  padding: 7px 13px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: #1e293b;
+  color: #f8fafc;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.iocfg-btn:hover {
+  background: #334155;
+  border-color: #38bdf8;
+}
+
+.iocfg-btn-green {
+  background: #27ae60;
+  border-color: #2ecc71;
+  color: #ffffff;
+}
+
+.iocfg-btn-green:hover {
+  background: #219653;
+  border-color: #a7f3d0;
+}
+
+.io-config-subtext {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: #94a3b8;
+  margin-bottom: 12px;
+}
+
+.io-config-grid-wrap {
+  overflow-x: auto;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: #070b13;
+  margin-bottom: 12px;
+}
+
+.io-config-pin-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.io-config-pin-table th,
+.io-config-pin-table td {
+  padding: 7px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 0.8rem;
+}
+
+.io-config-pin-table th {
+  background: #0f172a;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.io-config-pin-table th.col-in {
+  color: #10e182;
+}
+
+.io-config-pin-table th.col-out {
+  color: #38bdf8;
+}
+
+.io-config-pin-table .col-sep {
+  color: #475569;
+  text-align: center;
+  width: 24px;
+}
+
+.io-config-pin-table .mono-cell {
+  font-family: var(--font-mono);
+  color: #e2e8f0;
+  font-weight: 600;
+}
+
+.io-config-pin-table tr:nth-child(even) td {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.iocfg-select {
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: #131c2e;
+  color: #f8fafc;
+  outline: none;
+  cursor: pointer;
+}
+
+.iocfg-select:focus {
+  border-color: #38bdf8;
+}
+
+.io-config-rs485-bar,
+.io-config-options-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  margin-bottom: 10px;
+}
+
+.io-config-options-bar {
+  margin-bottom: 0;
+}
+
+.rs485-label {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #38bdf8;
+}
+
+.iocfg-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #cbd5e1;
+}
+
+.iocfg-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: #e2e8f0;
+  cursor: pointer;
+}
+
+.iocfg-toast {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: #10e182;
+}
+
+/* ============================================================================
  * Download Cards
  * ============================================================================ */
 .download-grid {

@@ -392,7 +392,7 @@
                 <th data-i18n="th_region">หมวดหมู่ (Region)</th>
                 <th data-i18n="th_iec">IEC 61131-3 Address</th>
                 <th data-i18n="th_alias">PLC Alias</th>
-                <th data-i18n="th_pin">พินฮาร์ดแวร์ RP2040</th>
+                <th data-i18n="th_pin">พินฮาร์ดแวร์ RP2040 (ปรับเปลี่ยนผ่าน UI ได้)</th>
                 <th data-i18n="th_desc">รายละเอียดการใช้งาน</th>
               </tr>
             </thead>
@@ -401,15 +401,22 @@
                 <td><strong>Digital Inputs</strong></td>
                 <td><code>%IX0.0</code> – <code>%IX0.7</code></td>
                 <td><code>X0</code> – <code>X7</code></td>
-                <td><code>GP2</code> – <code>GP7</code>, <code>GP15</code>, <code>GP16</code></td>
-                <td data-i18n="hw_r1_desc">อินพุตดิจิทัล 8 ช่อง (Active-High / Pull-down) พร้อมระบบ Force I/O</td>
+                <td><code>GP10</code> – <code>GP13</code> (X0..X3) / <code>GP2..GP29</code></td>
+                <td data-i18n="hw_r1_desc">อินพุตดิจิทัล 8 ช่อง (ปรับพิน, Pull-Up/Down และ Active-Low/High ผ่านโปรแกรมได้ทันที)</td>
               </tr>
               <tr>
                 <td><strong>Digital Outputs</strong></td>
                 <td><code>%QX0.0</code> – <code>%QX0.7</code></td>
                 <td><code>Y0</code> – <code>Y7</code></td>
-                <td><code>GP25 (LED)</code>, <code>GP8</code> – <code>GP14</code></td>
-                <td data-i18n="hw_r2_desc">เอาต์พุตดิจิทัล 8 ช่อง (Y0 = GP25 LED บนบอร์ด Pico, Y1..Y7 = GP8..GP14)</td>
+                <td><code>GP15, GP14, GP7, GP6, GP2, GP3</code> / <code>GP2..GP29</code></td>
+                <td data-i18n="hw_r2_desc">เอาต์พุตดิจิทัล 8 ช่อง (Y0..Y5 ค่าเริ่มต้น GP15,14,7,6,2,3 ปรับพินผ่าน UI บันทึกลง Flash 0x1FD000 ได้)</td>
+              </tr>
+              <tr>
+                <td><strong>PLC Status LED</strong></td>
+                <td><code>STATUS_LED</code></td>
+                <td><code>RUN / ERR LED</code></td>
+                <td><code>GP25 (Onboard LED)</code> / <code>GP2..GP29</code></td>
+                <td data-i18n="hw_r_led_desc">ไฟสถานะ PLC บนบอร์ด (เลือกโหมด 1Hz Heartbeat หรือติดค้าง และเปลี่ยนพินได้แบบ Runtime)</td>
               </tr>
               <tr>
                 <td><strong>Internal Relays</strong></td>
@@ -422,7 +429,7 @@
                 <td><strong>Retentive Relays (RETAIN)</strong></td>
                 <td><code>%MX8.0</code> – <code>%MX11.7</code></td>
                 <td><code>M64</code> – <code>M95</code></td>
-                <td>RP2040 Flash</td>
+                <td>RP2040 Flash (<code>0x1FF000</code>)</td>
                 <td data-i18n="hw_r4_desc">รีเลย์ช่วยชนิดจำค่าเมื่อไฟดับ บันทึกลง RP2040 Flash อัตโนมัติ</td>
               </tr>
               <tr>
@@ -436,7 +443,7 @@
                 <td><strong>Retentive Registers (RETAIN)</strong></td>
                 <td><code>%MW96</code> – <code>%MW127</code></td>
                 <td><code>D96</code> – <code>D127</code></td>
-                <td>RP2040 Flash</td>
+                <td>RP2040 Flash (<code>0x1FF000</code>)</td>
                 <td data-i18n="hw_r6_desc">รีจิสเตอร์ข้อมูลชนิดจำค่าเมื่อไฟดับ (Retentive Flash Memory)</td>
               </tr>
               <tr>
@@ -449,19 +456,146 @@
               <tr>
                 <td><strong>Modbus RTU (RS-485)</strong></td>
                 <td><code>MB_MASTER</code></td>
-                <td><code>MB0</code> – <code>MB7</code></td>
-                <td><code>GP20 (TX)</code>, <code>GP21 (RX)</code>, <code>GP22 (DE)</code></td>
-                <td data-i18n="hw_r8_desc">พอร์ตสื่อสาร RS-485 Half-Duplex สำหรับบล็อกคำสั่ง MB_MASTER</td>
+                <td><code>UART1 (RS-485)</code></td>
+                <td><code>GP8/GP9</code> หรือ <code>GP4/GP5</code> + <code>DE/RE</code></td>
+                <td data-i18n="hw_r8_desc">พอร์ต RS-485 (เลือกคู่พิน GP8/GP9 หรือ GP4/GP5, ขา DE/RE และ Baud 9600..115200 ผ่าน UI ได้ทันที)</td>
+              </tr>
+              <tr>
+                <td><strong>User Serial (UART0)</strong></td>
+                <td><code>UART_SEND / RECV</code></td>
+                <td><code>UART0</code></td>
+                <td><code>GP0 (TX)</code>, <code>GP1 (RX)</code></td>
+                <td data-i18n="hw_r_uart0_desc">พอร์ต Serial อเนกประสงค์ (115200 8N1) สำหรับบล็อกคำสั่งรับ-ส่งข้อมูล UART_SEND / UART_RECV</td>
               </tr>
               <tr>
                 <td><strong>Special System (%SM / %SD)</strong></td>
-                <td><code>%SM0</code>..<code>%SM11</code> / <code>%SD0</code>..<code>%SD9</code></td>
+                <td><code>%SM0</code>..<code>%SM21</code> / <code>%SD0</code>..<code>%SD7</code></td>
                 <td><code>M8000+</code> / <code>D8000+</code></td>
                 <td>System Runtime</td>
-                <td data-i18n="hw_r9_desc">สัญญาณนาฬิกาพัลส์ 10ms..60s, First Scan (%SM1) และค่า Scan Time / อุณหภูมิ CPU (%SD6)</td>
+                <td data-i18n="hw_r9_desc">สัญญาณนาฬิกาพัลส์ 10ms..60s, First Scan (%SM2) และค่า Scan Time / อุณหภูมิ CPU (%SD6)</td>
               </tr>
             </tbody>
           </table>
+        </div>
+
+        <!-- Interactive Configure RP2040 Hardware I/O Pins Showcase -->
+        <div class="io-config-showcase">
+          <div class="io-config-topbar">
+            <div class="window-dots">
+              <span></span><span></span><span></span>
+            </div>
+            <div class="io-config-window-title" data-i18n="iocfg_win_title">
+              🔧 Configure RP2040 Hardware I/O Pins — ตั้งค่าพิน GPIO & RS-485 ผ่านโปรแกรมโดยไม่ต้อง Build Firmware ใหม่!
+            </div>
+            <div class="io-config-flash-badge">Flash Sector 509 (0x1FD000)</div>
+          </div>
+
+          <div class="io-config-body">
+            <div class="io-config-toolbar">
+              <div class="io-config-heading" data-i18n="iocfg_heading">
+                🔧 RP2040 Runtime GPIO & RS-485 Pin Mapping
+              </div>
+              <div class="io-config-actions">
+                <button type="button" id="btn-iocfg-read" class="iocfg-btn" data-i18n="iocfg_btn_read">
+                  📥 Read from PLC (0x0B)
+                </button>
+                <button type="button" id="btn-iocfg-apply" class="iocfg-btn iocfg-btn-green" data-i18n="iocfg_btn_apply">
+                  ⚡ Apply & Save to PLC Flash (0x0C)
+                </button>
+                <button type="button" id="btn-iocfg-reset" class="iocfg-btn" data-i18n="iocfg_btn_reset">
+                  ↺ Reset Default
+                </button>
+              </div>
+            </div>
+
+            <div id="iocfg-reserved-summary" class="io-config-subtext">
+              Reserved peripherals: UART0 (GP0=TX, GP1=RX) • Modbus RS-485 UART1 (GP8=TX, GP9=RX, DE/RE=Auto-Direction (None), 9600 bps) • Analog ADC (GP26..GP28)
+            </div>
+
+            <div class="io-config-grid-wrap">
+              <table class="io-config-pin-table">
+                <thead>
+                  <tr>
+                    <th class="col-in">Input</th>
+                    <th class="col-in">IEC Addr</th>
+                    <th class="col-in">RP2040 GPIO Pin</th>
+                    <th class="col-sep">│</th>
+                    <th class="col-out">Output</th>
+                    <th class="col-out">IEC Addr</th>
+                    <th class="col-out">RP2040 GPIO Pin</th>
+                  </tr>
+                </thead>
+                <tbody id="iocfg-pin-rows">
+                  <!-- Populated dynamically by app.js -->
+                </tbody>
+              </table>
+            </div>
+
+            <!-- RS-485 (Modbus RTU — UART1) Configuration Bar -->
+            <div class="io-config-rs485-bar">
+              <span class="rs485-label" data-i18n="iocfg_rs485_title">📡 RS-485 (Modbus RTU):</span>
+              <label class="iocfg-field">
+                <span data-i18n="iocfg_uart1_lbl">UART1 TX/RX:</span>
+                <select id="iocfg-rs485-pair" class="iocfg-select">
+                  <option value="gp8_9">GP8 (TX) / GP9 (RX) [Default]</option>
+                  <option value="gp4_5">GP4 (TX) / GP5 (RX) [Alt]</option>
+                </select>
+              </label>
+              <label class="iocfg-field">
+                <span data-i18n="iocfg_dere_lbl">DE/RE Pin:</span>
+                <select id="iocfg-rs485-dere" class="iocfg-select">
+                  <option value="255">Auto-Direction (None)</option>
+                  <option value="6">GP6 (Recommended)</option>
+                  <option value="7">GP7 (Recommended)</option>
+                  <option value="16">GP16 (Recommended)</option>
+                  <option value="17">GP17</option>
+                  <option value="18">GP18</option>
+                  <option value="19">GP19</option>
+                  <option value="20">GP20</option>
+                  <option value="21">GP21</option>
+                  <option value="22">GP22</option>
+                </select>
+              </label>
+              <label class="iocfg-field">
+                <span data-i18n="iocfg_baud_lbl">Baud Rate:</span>
+                <select id="iocfg-rs485-baud" class="iocfg-select">
+                  <option value="9600">9600 bps (Default)</option>
+                  <option value="19200">19200 bps</option>
+                  <option value="38400">38400 bps</option>
+                  <option value="57600">57600 bps</option>
+                  <option value="115200">115200 bps</option>
+                </select>
+              </label>
+            </div>
+
+            <!-- Electrical & Status LED Options Row -->
+            <div class="io-config-options-bar">
+              <label class="iocfg-field">
+                <span data-i18n="iocfg_led_lbl">Status LED Pin:</span>
+                <select id="iocfg-led-pin" class="iocfg-select">
+                  <option value="25">GP25 (Onboard LED)</option>
+                  <option value="255">Disabled (-)</option>
+                  <option value="16">GP16</option>
+                  <option value="22">GP22</option>
+                </select>
+              </label>
+              <label class="iocfg-check">
+                <input type="checkbox" id="iocfg-pullup" checked />
+                <span data-i18n="iocfg_pullup_lbl">Input Pull-Up</span>
+              </label>
+              <label class="iocfg-check">
+                <input type="checkbox" id="iocfg-activelow" checked />
+                <span data-i18n="iocfg_activelow_lbl">Input Active-Low (GND=ON)</span>
+              </label>
+              <label class="iocfg-check">
+                <input type="checkbox" id="iocfg-heartbeat" checked />
+                <span data-i18n="iocfg_hb_lbl">RUN LED 1Hz Heartbeat</span>
+              </label>
+              <span id="iocfg-status-toast" class="iocfg-toast" data-i18n="iocfg_toast_ready">
+                ✔ พร้อมปรับตั้งค่าพินแบบ Runtime ผ่าน USB-CDC (CMD 0x0B / 0x0C)
+              </span>
+            </div>
+          </div>
         </div>
 
         <!-- Hardware Wiring Schematics (3 Cards) -->
@@ -470,21 +604,21 @@
             <span class="wiring-tag" data-i18n="wire_1_tag">01 / DIGITAL INPUT WIRING</span>
             <h3 data-i18n="wire_1_title">การต่อสวิตช์ & เซนเซอร์อินพุต (%IX0.0..%IX0.7)</h3>
             <p data-i18n="wire_1_desc">
-              พิน GP0..GP7 ตั้งค่าเป็น Internal Pull-Down (Active-High 3.3V) สำหรับงานอุตสาหกรรม 24VDC แนะนำให้ต่อผ่านโมดูล Optocoupler (เช่น PC817)
+              ค่าเริ่มต้น X0..X3 = GP10..GP13 (Internal Pull-Up, Active-Low ทริกเกอร์ด้วย GND หรือสลับเป็น Active-High 3.3V ได้ในหน้า Configure I/O Pins) สำหรับงาน 24VDC แนะนำให้ต่อผ่าน Optocoupler (PC817)
             </p>
             <div class="wiring-svg-box">
               <svg viewBox="0 0 320 110" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <rect x="8" y="20" width="82" height="70" rx="8" fill="#1E293B" stroke="#475569" stroke-width="1.5"/>
-                <text x="49" y="48" text-anchor="middle" fill="#38BDF8" font-family="monospace" font-size="10" font-weight="700">24V / 3.3V</text>
+                <text x="49" y="48" text-anchor="middle" fill="#38BDF8" font-family="monospace" font-size="10" font-weight="700">24V / GND</text>
                 <text x="49" y="66" text-anchor="middle" fill="#94A3B8" font-family="monospace" font-size="9">Pushbutton</text>
                 <line x1="90" y1="55" x2="128" y2="55" stroke="#10E182" stroke-width="2" stroke-dasharray="4 3"/>
                 <rect x="128" y="24" width="76" height="62" rx="8" fill="#0F172A" stroke="#0EA5E9" stroke-width="1.5"/>
                 <text x="166" y="50" text-anchor="middle" fill="#F8FAFC" font-family="monospace" font-size="10" font-weight="700">PC817 Opto</text>
-                <text x="166" y="66" text-anchor="middle" fill="#10E182" font-family="monospace" font-size="9">3.3V Logic</text>
+                <text x="166" y="66" text-anchor="middle" fill="#10E182" font-family="monospace" font-size="9">Pull-Up / Down</text>
                 <line x1="204" y1="55" x2="236" y2="55" stroke="#10E182" stroke-width="2.5"/>
                 <rect x="236" y="20" width="76" height="70" rx="8" fill="#064E3B" stroke="#10B981" stroke-width="1.5"/>
                 <text x="274" y="48" text-anchor="middle" fill="#A7F3D0" font-family="monospace" font-size="10" font-weight="700">RP2040</text>
-                <text x="274" y="66" text-anchor="middle" fill="#FFFFFF" font-family="monospace" font-size="9">GP0..GP7</text>
+                <text x="274" y="66" text-anchor="middle" fill="#FFFFFF" font-family="monospace" font-size="9">GP10..GP13</text>
               </svg>
             </div>
           </div>
@@ -493,13 +627,13 @@
             <span class="wiring-tag" data-i18n="wire_2_tag">02 / DIGITAL OUTPUT WIRING</span>
             <h3 data-i18n="wire_2_title">การต่อรีเลย์ & โซลินอยด์เอาต์พุต (%QX0.0..%QX0.7)</h3>
             <p data-i18n="wire_2_desc">
-              พิน GP25 (LED Y0) และ GP8..GP14 (Y1..Y7) จ่ายลอจิก 3.3V แนะนำให้ต่อเข้าโมดูล Relay Opto-Isolated หรือไอซี ULN2803 เพื่อขับโหลดกำลังสูง
+              ค่าเริ่มต้น Y0..Y5 = GP15, GP14, GP7, GP6, GP2, GP3 (สามารถเปลี่ยนพินได้อิสระในหน้า Configure I/O Pins) จ่ายลอจิก 3.3V แนะนำให้ต่อเข้าโมดูล Relay Opto-Isolated หรือ ULN2803
             </p>
             <div class="wiring-svg-box">
               <svg viewBox="0 0 320 110" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <rect x="8" y="20" width="76" height="70" rx="8" fill="#064E3B" stroke="#10B981" stroke-width="1.5"/>
                 <text x="46" y="48" text-anchor="middle" fill="#A7F3D0" font-family="monospace" font-size="10" font-weight="700">RP2040</text>
-                <text x="46" y="66" text-anchor="middle" fill="#FFFFFF" font-family="monospace" font-size="9">GP8..GP14</text>
+                <text x="46" y="66" text-anchor="middle" fill="#FFFFFF" font-family="monospace" font-size="8.5">GP15,14,7,6,2,3</text>
                 <line x1="84" y1="55" x2="122" y2="55" stroke="#38BDF8" stroke-width="2.5"/>
                 <rect x="122" y="24" width="82" height="62" rx="8" fill="#0F172A" stroke="#38BDF8" stroke-width="1.5"/>
                 <text x="163" y="50" text-anchor="middle" fill="#F8FAFC" font-family="monospace" font-size="10" font-weight="700">ULN2803 /</text>
@@ -514,16 +648,16 @@
 
           <div class="wiring-card">
             <span class="wiring-tag" data-i18n="wire_3_tag">03 / RS-485 MODBUS RTU</span>
-            <h3 data-i18n="wire_3_title">การต่อโมดูล RS-485 (MB_MASTER)</h3>
+            <h3 data-i18n="wire_3_title">การต่อโมดูล RS-485 (MB_MASTER — UART1)</h3>
             <p data-i18n="wire_3_desc">
-              เชื่อมต่อโมดูล MAX485 / SP3485 (3.3V) เข้ากับพิน UART พร้อมพินควบคุมทิศทาง DE/RE อัตโนมัติ สำหรับอ่านค่าเซนเซอร์และสั่งงานอินเวอร์เตอร์
+              เชื่อมต่อโมดูล MAX485 / SP3485 (3.3V) เข้ากับ UART1: เลือกคู่พิน GP8(TX)/GP9(RX) หรือ GP4(TX)/GP5(RX), กำหนดขา DE/RE (Auto หรือ GP6/GP7/GP16) และ Baud Rate 9600..115200 ได้จากหน้า UI
             </p>
             <div class="wiring-svg-box">
               <svg viewBox="0 0 320 110" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <rect x="8" y="18" width="84" height="74" rx="8" fill="#064E3B" stroke="#10B981" stroke-width="1.5"/>
-                <text x="50" y="42" text-anchor="middle" fill="#A7F3D0" font-family="monospace" font-size="9.5" font-weight="700">RP2040 UART</text>
-                <text x="50" y="58" text-anchor="middle" fill="#FFFFFF" font-family="monospace" font-size="8.5">TX / RX</text>
-                <text x="50" y="74" text-anchor="middle" fill="#38BDF8" font-family="monospace" font-size="8.5">DE/RE Control</text>
+                <text x="50" y="42" text-anchor="middle" fill="#A7F3D0" font-family="monospace" font-size="9.5" font-weight="700">RP2040 UART1</text>
+                <text x="50" y="58" text-anchor="middle" fill="#FFFFFF" font-family="monospace" font-size="8">GP8/9 or GP4/5</text>
+                <text x="50" y="74" text-anchor="middle" fill="#38BDF8" font-family="monospace" font-size="8">DE/RE: Auto/GPx</text>
                 <line x1="92" y1="42" x2="128" y2="42" stroke="#10E182" stroke-width="2"/>
                 <line x1="92" y1="68" x2="128" y2="68" stroke="#38BDF8" stroke-width="2"/>
                 <rect x="128" y="22" width="76" height="66" rx="8" fill="#0F172A" stroke="#A855F7" stroke-width="1.5"/>

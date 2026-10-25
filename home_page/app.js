@@ -106,31 +106,48 @@ const I18N = {
 
     hw_tag: "HARDWARE & MEMORY MAP",
     hw_title: "ตารางพินและหน่วยความจำมาตรฐาน (RP2040 Micro-VM)",
-    hw_subtitle: "การแมปพอร์ตมาตรฐานสำหรับบอร์ด Raspberry Pi Pico (RP2040) และ Address ตามมาตรฐาน IEC 61131-3",
+    hw_subtitle: "การแมปพอร์ตมาตรฐานสำหรับบอร์ด Raspberry Pi Pico (RP2040) พร้อมระบบปรับเปลี่ยนพิน GPIO & RS-485 ผ่านโปรแกรมแบบ Runtime โดยไม่ต้อง Build Firmware ใหม่",
     th_region: "หมวดหมู่ (Region)",
     th_iec: "IEC 61131-3 Address",
     th_alias: "PLC Alias",
-    th_pin: "พินฮาร์ดแวร์ RP2040",
+    th_pin: "พินฮาร์ดแวร์ RP2040 (ปรับเปลี่ยนผ่าน UI ได้)",
     th_desc: "รายละเอียดการใช้งาน",
-    hw_r1_desc: "อินพุตดิจิทัล 8 ช่อง (Active-High / Pull-down) พร้อมระบบ Force I/O",
-    hw_r2_desc: "เอาต์พุตดิจิทัล 8 ช่อง (Y0 = GP25 LED บนบอร์ด Pico, Y1..Y7 = GP8..GP14)",
+    hw_r1_desc: "อินพุตดิจิทัล 8 ช่อง (ปรับพิน, Pull-Up/Down และ Active-Low/High ผ่านโปรแกรมได้ทันที)",
+    hw_r2_desc: "เอาต์พุตดิจิทัล 8 ช่อง (Y0..Y5 ค่าเริ่มต้น GP15,14,7,6,2,3 ปรับพินผ่าน UI บันทึกลง Flash 0x1FD000 ได้)",
+    hw_r_led_desc: "ไฟสถานะ PLC บนบอร์ด (เลือกโหมด 1Hz Heartbeat หรือติดค้าง และเปลี่ยนพินได้แบบ Runtime)",
     hw_r3_desc: "รีเลย์ช่วยภายในทั่วไป (เคลียร์ค่าเมื่อเริ่มรันใหม่)",
     hw_r4_desc: "รีเลย์ช่วยชนิดจำค่าเมื่อไฟดับ บันทึกลง RP2040 Flash อัตโนมัติ",
     hw_r5_desc: "รีจิสเตอร์ข้อมูล 16/32-bit สำหรับคำนวณ ค่านับ และงานทั่วไป",
     hw_r6_desc: "รีจิสเตอร์ข้อมูลชนิดจำค่าเมื่อไฟดับ (Retentive Flash Memory)",
     hw_r7_desc: "อนาล็อกอินพุต 12-bit (0..4095) และเซนเซอร์วัดอุณหภูมิภายในชิป (%IW3)",
-    hw_r8_desc: "พอร์ตสื่อสาร RS-485 Half-Duplex สำหรับบล็อกคำสั่ง MB_MASTER",
-    hw_r9_desc: "สัญญาณนาฬิกาพัลส์ 10ms..60s, First Scan (%SM1) และค่า Scan Time / อุณหภูมิ CPU (%SD6)",
+    hw_r8_desc: "พอร์ต RS-485 (เลือกคู่พิน GP8/GP9 หรือ GP4/GP5, ขา DE/RE และ Baud 9600..115200 ผ่าน UI ได้ทันที)",
+    hw_r_uart0_desc: "พอร์ต Serial อเนกประสงค์ (115200 8N1) สำหรับบล็อกคำสั่งรับ-ส่งข้อมูล UART_SEND / UART_RECV",
+    hw_r9_desc: "สัญญาณนาฬิกาพัลส์ 10ms..60s, First Scan (%SM2) และค่า Scan Time / อุณหภูมิ CPU (%SD6)",
+
+    iocfg_win_title: "🔧 Configure RP2040 Hardware I/O Pins — ตั้งค่าพิน GPIO & RS-485 ผ่านโปรแกรมโดยไม่ต้อง Build Firmware ใหม่!",
+    iocfg_heading: "🔧 RP2040 Runtime GPIO & RS-485 Pin Mapping",
+    iocfg_btn_read: "📥 Read from PLC (0x0B)",
+    iocfg_btn_apply: "⚡ Apply & Save to PLC Flash (0x0C)",
+    iocfg_btn_reset: "↺ Reset Default",
+    iocfg_rs485_title: "📡 RS-485 (Modbus RTU):",
+    iocfg_uart1_lbl: "UART1 TX/RX:",
+    iocfg_dere_lbl: "DE/RE Pin:",
+    iocfg_baud_lbl: "Baud Rate:",
+    iocfg_led_lbl: "Status LED Pin:",
+    iocfg_pullup_lbl: "Input Pull-Up",
+    iocfg_activelow_lbl: "Input Active-Low (GND=ON)",
+    iocfg_hb_lbl: "RUN LED 1Hz Heartbeat",
+    iocfg_toast_ready: "✔ พร้อมปรับตั้งค่าพินแบบ Runtime ผ่าน USB-CDC (CMD 0x0B / 0x0C)",
 
     wire_1_tag: "01 / DIGITAL INPUT WIRING",
     wire_1_title: "การต่อสวิตช์ & เซนเซอร์อินพุต (%IX0.0..%IX0.7)",
-    wire_1_desc: "พิน GP0..GP7 ตั้งค่าเป็น Internal Pull-Down (Active-High 3.3V) สำหรับงานอุตสาหกรรม 24VDC แนะนำให้ต่อผ่านโมดูล Optocoupler (เช่น PC817)",
+    wire_1_desc: "ค่าเริ่มต้น X0..X3 = GP10..GP13 (Internal Pull-Up, Active-Low ทริกเกอร์ด้วย GND หรือสลับเป็น Active-High 3.3V ได้ในหน้า Configure I/O Pins) สำหรับงาน 24VDC แนะนำให้ต่อผ่าน Optocoupler (PC817)",
     wire_2_tag: "02 / DIGITAL OUTPUT WIRING",
     wire_2_title: "การต่อรีเลย์ & โซลินอยด์เอาต์พุต (%QX0.0..%QX0.7)",
-    wire_2_desc: "พิน GP25 (LED Y0) และ GP8..GP14 (Y1..Y7) จ่ายลอจิก 3.3V แนะนำให้ต่อเข้าโมดูล Relay Opto-Isolated หรือไอซี ULN2803 เพื่อขับโหลดกำลังสูง",
+    wire_2_desc: "ค่าเริ่มต้น Y0..Y5 = GP15, GP14, GP7, GP6, GP2, GP3 (สามารถเปลี่ยนพินได้อิสระในหน้า Configure I/O Pins) จ่ายลอจิก 3.3V แนะนำให้ต่อเข้าโมดูล Relay Opto-Isolated หรือ ULN2803",
     wire_3_tag: "03 / RS-485 MODBUS RTU",
-    wire_3_title: "การต่อโมดูล RS-485 (MB_MASTER)",
-    wire_3_desc: "เชื่อมต่อโมดูล MAX485 / SP3485 (3.3V) เข้ากับพิน UART พร้อมพินควบคุมทิศทาง DE/RE อัตโนมัติ สำหรับอ่านค่าเซนเซอร์และสั่งงานอินเวอร์เตอร์",
+    wire_3_title: "การต่อโมดูล RS-485 (MB_MASTER — UART1)",
+    wire_3_desc: "เชื่อมต่อโมดูล MAX485 / SP3485 (3.3V) เข้ากับ UART1: เลือกคู่พิน GP8(TX)/GP9(RX) หรือ GP4(TX)/GP5(RX), กำหนดขา DE/RE (Auto หรือ GP6/GP7/GP16) และ Baud Rate 9600..115200 ได้จากหน้า UI",
 
     ex_tag: "BUNDLED IEC 61131-3 EXAMPLES",
     ex_title: "ตัวอย่างวงจรมาตรฐานพร้อมใช้งานกว่า 14 โปรเจกต์",
@@ -301,32 +318,49 @@ const I18N = {
     s4_box: "Press F7 (Online Monitor) to view live hardware power conduction with automatic CRC16 code verification.",
 
     hw_tag: "HARDWARE & MEMORY MAP",
-    hw_title: "Standard Pinout & Memory Map (RP2040 Micro-VM)",
-    hw_subtitle: "Default hardware pin assignments for Raspberry Pi Pico (RP2040) and IEC 61131-3 memory addressing.",
+    hw_title: "Standard Pinout & Runtime Configurable I/O (RP2040 Micro-VM)",
+    hw_subtitle: "Default hardware pin assignments for Raspberry Pi Pico (RP2040) — all GPIO & RS-485 pins are runtime-configurable from the IDE without rebuilding firmware.",
     th_region: "Memory Region",
     th_iec: "IEC 61131-3 Address",
     th_alias: "PLC Alias",
-    th_pin: "RP2040 Hardware Pin",
+    th_pin: "RP2040 Hardware Pin (UI Configurable)",
     th_desc: "Description",
-    hw_r1_desc: "8 Digital Inputs (Active-High / Pull-down) with real-time Force I/O support",
-    hw_r2_desc: "8 Digital Outputs (Y0 = GP25 onboard Pico LED, Y1..Y7 = GP8..GP14)",
+    hw_r1_desc: "8 Digital Inputs (Runtime-configurable GPIO, Pull-Up/Down & Active-Low/High via IDE)",
+    hw_r2_desc: "8 Digital Outputs (Default Y0..Y5 = GP15,14,7,6,2,3; remappable & saved to Flash 0x1FD000)",
+    hw_r_led_desc: "Onboard PLC Status LED (Selectable 1Hz Heartbeat or Solid ON, runtime-remappable pin)",
     hw_r3_desc: "General-purpose internal bit relays (cleared on PLC reset)",
     hw_r4_desc: "Retentive bit relays automatically backed up to RP2040 Flash",
     hw_r5_desc: "General-purpose signed 32-bit word registers for math & data",
     hw_r6_desc: "Retentive word registers backed up to non-volatile RP2040 Flash",
     hw_r7_desc: "12-bit Analog Inputs (0..4095) & onboard die temperature sensor (%IW3)",
-    hw_r8_desc: "RS-485 Half-Duplex UART1 transceiver pins for MB_MASTER Modbus RTU",
-    hw_r9_desc: "System clock pulses (10ms..60s), First Scan (%SM1), Scan Time & CPU Temp (%SD6)",
+    hw_r8_desc: "RS-485 Half-Duplex UART1 (Selectable GP8/GP9 or GP4/GP5, DE/RE pin & 9600..115200 bps in UI)",
+    hw_r_uart0_desc: "User Serial UART0 (GP0=TX, GP1=RX @ 115200 8N1) for UART_SEND / UART_RECV function blocks",
+    hw_r9_desc: "System clock pulses (10ms..60s), First Scan (%SM2), Scan Time & CPU Temp (%SD6)",
+
+    iocfg_win_title: "🔧 Configure RP2040 Hardware I/O Pins — Remap GPIO & RS-485 at Runtime without Firmware Rebuild!",
+    iocfg_heading: "🔧 RP2040 Runtime GPIO & RS-485 Pin Mapping",
+    iocfg_btn_read: "📥 Read from PLC (0x0B)",
+    iocfg_btn_apply: "⚡ Apply & Save to PLC Flash (0x0C)",
+    iocfg_btn_reset: "↺ Reset Default",
+    iocfg_rs485_title: "📡 RS-485 (Modbus RTU):",
+    iocfg_uart1_lbl: "UART1 TX/RX:",
+    iocfg_dere_lbl: "DE/RE Pin:",
+    iocfg_baud_lbl: "Baud Rate:",
+    iocfg_led_lbl: "Status LED Pin:",
+    iocfg_pullup_lbl: "Input Pull-Up",
+    iocfg_activelow_lbl: "Input Active-Low (GND=ON)",
+    iocfg_hb_lbl: "RUN LED 1Hz Heartbeat",
+    iocfg_toast_ready: "✔ Ready to configure GPIO & RS-485 at runtime via USB-CDC (CMD 0x0B / 0x0C)",
 
     wire_1_tag: "01 / DIGITAL INPUT WIRING",
     wire_1_title: "Digital Input Wiring (%IX0.0..%IX0.7)",
-    wire_1_desc: "Pins GP0..GP7 use internal pull-downs (Active-High 3.3V). For industrial 24VDC sensors, wire through an optocoupler module (e.g. PC817).",
+    wire_1_desc: "Default X0..X3 = GP10..GP13 (Internal Pull-Up, Active-Low GND trigger, or switch to Active-High 3.3V in Configure I/O Pins). For 24VDC sensors, wire through a PC817 optocoupler.",
     wire_2_tag: "02 / DIGITAL OUTPUT WIRING",
     wire_2_title: "Relay & Solenoid Outputs (%QX0.0..%QX0.7)",
-    wire_2_desc: "Pins GP25 (onboard LED Y0) and GP8..GP14 (Y1..Y7) output 3.3V logic. Connect to opto-isolated relay modules or a ULN2803 driver for high-voltage loads.",
+    wire_2_desc: "Default Y0..Y5 = GP15, GP14, GP7, GP6, GP2, GP3 (freely remappable in Configure I/O Pins). Outputs 3.3V logic — connect to opto-isolated relays or a ULN2803 driver.",
     wire_3_tag: "03 / RS-485 MODBUS RTU",
-    wire_3_title: "RS-485 Transceiver Wiring (MB_MASTER)",
-    wire_3_desc: "Connect a 3.3V MAX3485 / MAX485 transceiver to the UART pins with automatic DE/RE direction control to poll Modbus RTU slaves.",
+    wire_3_title: "RS-485 Transceiver Wiring (MB_MASTER — UART1)",
+    wire_3_desc: "Connect a 3.3V MAX3485 / MAX485 transceiver to UART1: choose GP8(TX)/GP9(RX) or GP4(TX)/GP5(RX), DE/RE pin (Auto or GP6/GP7/GP16), and Baud Rate 9600..115200 in the UI.",
 
     ex_tag: "BUNDLED IEC 61131-3 EXAMPLES",
     ex_title: "14+ Ready-to-Run Industrial Ladder Examples",
@@ -750,9 +784,199 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  // Initialize Interactive Configure RP2040 Hardware I/O Pins Showcase
+  initIoConfigShowcase();
+
   // Initialize Visitor & Download Analytics
   initVisitorAnalytics();
 });
+
+/**
+ * Interactive "Configure RP2040 Hardware I/O Pins" Showcase in #hardware section
+ */
+function initIoConfigShowcase() {
+  const tbody = document.getElementById("iocfg-pin-rows");
+  if (!tbody) return;
+
+  const DEFAULT_IN = [10, 11, 12, 13, 255, 255, 255, 255];
+  const DEFAULT_OUT = [15, 14, 7, 6, 2, 3, 255, 255];
+  const ALL_PINS = [255, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 29];
+
+  const state = {
+    inPins: [...DEFAULT_IN],
+    outPins: [...DEFAULT_OUT],
+    rs485AltGp4Gp5: false,
+    rs485DeRe: 255,
+    rs485Baud: 9600,
+    ledPin: 25
+  };
+
+  const pairEl = document.getElementById("iocfg-rs485-pair");
+  const dereEl = document.getElementById("iocfg-rs485-dere");
+  const baudEl = document.getElementById("iocfg-rs485-baud");
+  const ledEl = document.getElementById("iocfg-led-pin");
+  const summaryEl = document.getElementById("iocfg-reserved-summary");
+  const toastEl = document.getElementById("iocfg-status-toast");
+
+  const setToast = (msgTh, msgEn, isSuccess = true) => {
+    if (!toastEl) return;
+    toastEl.textContent = currentLang === "en" ? msgEn : msgTh;
+    toastEl.style.color = isSuccess ? "#10e182" : "#38bdf8";
+  };
+
+  const renderTable = () => {
+    const txPin = state.rs485AltGp4Gp5 ? 4 : 8;
+    const rxPin = state.rs485AltGp4Gp5 ? 5 : 9;
+    const assignable = ALL_PINS.filter((p) => p === 255 || (p !== txPin && p !== rxPin));
+
+    // Sanitize any conflicting X/Y pins if UART1 pair or DE/RE changed
+    for (let i = 0; i < 8; i++) {
+      if (state.inPins[i] === txPin || state.inPins[i] === rxPin || (state.rs485DeRe !== 255 && state.inPins[i] === state.rs485DeRe)) {
+        state.inPins[i] = 255;
+      }
+      if (state.outPins[i] === txPin || state.outPins[i] === rxPin || (state.rs485DeRe !== 255 && state.outPins[i] === state.rs485DeRe)) {
+        state.outPins[i] = 255;
+      }
+    }
+
+    if (summaryEl) {
+      const dereStr = state.rs485DeRe === 255 ? "Auto-Direction (None)" : `GP${state.rs485DeRe}`;
+      summaryEl.textContent =
+        `Reserved peripherals: UART0 (GP0=TX, GP1=RX) • Modbus RS-485 UART1 (GP${txPin}=TX, GP${rxPin}=RX, DE/RE=${dereStr}, ${state.rs485Baud} bps) • Analog ADC (GP26..GP28)`;
+    }
+
+    tbody.innerHTML = "";
+    for (let i = 0; i < 8; i++) {
+      const tr = document.createElement("tr");
+      const buildOptions = (selectedPin) =>
+        assignable
+          .map((p) => {
+            const label = p === 255 ? "Disabled (-)" : `GP${p}`;
+            const sel = p === selectedPin ? " selected" : "";
+            return `<option value="${p}"${sel}>${label}</option>`;
+          })
+          .join("");
+
+      tr.innerHTML = `
+        <td class="mono-cell">X${i}</td>
+        <td class="mono-cell">%IX0.${i}</td>
+        <td><select class="iocfg-select iocfg-in-select" data-idx="${i}">${buildOptions(state.inPins[i])}</select></td>
+        <td class="col-sep">│</td>
+        <td class="mono-cell">Y${i}</td>
+        <td class="mono-cell">%QX0.${i}</td>
+        <td><select class="iocfg-select iocfg-out-select" data-idx="${i}">${buildOptions(state.outPins[i])}</select></td>
+      `;
+      tbody.appendChild(tr);
+    }
+
+    tbody.querySelectorAll(".iocfg-in-select").forEach((sel) => {
+      sel.addEventListener("change", (e) => {
+        const idx = Number(e.target.getAttribute("data-idx"));
+        state.inPins[idx] = Number(e.target.value);
+        setToast(
+          `✔ ตั้งค่า X${idx} (%IX0.${idx}) = ${state.inPins[idx] === 255 ? "Disabled (-)" : "GP" + state.inPins[idx]}`,
+          `✔ Mapped X${idx} (%IX0.${idx}) = ${state.inPins[idx] === 255 ? "Disabled (-)" : "GP" + state.inPins[idx]}`
+        );
+      });
+    });
+
+    tbody.querySelectorAll(".iocfg-out-select").forEach((sel) => {
+      sel.addEventListener("change", (e) => {
+        const idx = Number(e.target.getAttribute("data-idx"));
+        state.outPins[idx] = Number(e.target.value);
+        setToast(
+          `✔ ตั้งค่า Y${idx} (%QX0.${idx}) = ${state.outPins[idx] === 255 ? "Disabled (-)" : "GP" + state.outPins[idx]}`,
+          `✔ Mapped Y${idx} (%QX0.${idx}) = ${state.outPins[idx] === 255 ? "Disabled (-)" : "GP" + state.outPins[idx]}`
+        );
+      });
+    });
+  };
+
+  if (pairEl) {
+    pairEl.addEventListener("change", () => {
+      state.rs485AltGp4Gp5 = pairEl.value === "gp4_5";
+      renderTable();
+      setToast(
+        `📡 สลับพิน RS-485 UART1 เป็น ${state.rs485AltGp4Gp5 ? "GP4(TX)/GP5(RX)" : "GP8(TX)/GP9(RX)"} เรียบร้อย`,
+        `📡 Switched RS-485 UART1 to ${state.rs485AltGp4Gp5 ? "GP4(TX)/GP5(RX)" : "GP8(TX)/GP9(RX)"}`
+      );
+    });
+  }
+
+  if (dereEl) {
+    dereEl.addEventListener("change", () => {
+      state.rs485DeRe = Number(dereEl.value);
+      renderTable();
+      const lbl = state.rs485DeRe === 255 ? "Auto-Direction (None)" : `GP${state.rs485DeRe}`;
+      setToast(`📡 ตั้งค่าขา RS-485 DE/RE = ${lbl}`, `📡 Set RS-485 DE/RE Pin = ${lbl}`);
+    });
+  }
+
+  if (baudEl) {
+    baudEl.addEventListener("change", () => {
+      state.rs485Baud = Number(baudEl.value);
+      renderTable();
+      setToast(
+        `📡 ตั้งค่าความเร็ว RS-485 Modbus RTU = ${state.rs485Baud} bps`,
+        `📡 Set RS-485 Modbus RTU Baud Rate = ${state.rs485Baud} bps`
+      );
+    });
+  }
+
+  if (ledEl) {
+    ledEl.addEventListener("change", () => {
+      state.ledPin = Number(ledEl.value);
+      const lbl = state.ledPin === 255 ? "Disabled (-)" : `GP${state.ledPin}`;
+      setToast(`💡 ตั้งค่า Status LED Pin = ${lbl}`, `💡 Set Status LED Pin = ${lbl}`);
+    });
+  }
+
+  const btnRead = document.getElementById("btn-iocfg-read");
+  if (btnRead) {
+    btnRead.addEventListener("click", () => {
+      setToast(
+        "📥 [CMD 0x0B -> 0x8B] อ่านค่า GPIO & RS-485 Pin Mapping (20 Bytes, CRC16 Verified) จากบอร์ด RP2040 สำเร็จ!",
+        "📥 [CMD 0x0B -> 0x8B] Loaded 20-byte HardwareIoConfig from RP2040 PLC over USB-CDC!",
+        false
+      );
+    });
+  }
+
+  const btnApply = document.getElementById("btn-iocfg-apply");
+  if (btnApply) {
+    btnApply.addEventListener("click", () => {
+      const txPin = state.rs485AltGp4Gp5 ? 4 : 8;
+      const rxPin = state.rs485AltGp4Gp5 ? 5 : 9;
+      setToast(
+        `⚡ [CMD 0x0C -> 0x8C] บันทึกพิน GPIO & RS-485 (GP${txPin}/GP${rxPin} @ ${state.rs485Baud} bps) ลง Flash 0x1FD000 ทันทีโดยไม่ต้อง Build Firmware ใหม่!`,
+        `⚡ [CMD 0x0C -> 0x8C] Applied & saved GPIO + RS-485 (GP${txPin}/GP${rxPin} @ ${state.rs485Baud} bps) to RP2040 Flash 0x1FD000!`
+      );
+    });
+  }
+
+  const btnReset = document.getElementById("btn-iocfg-reset");
+  if (btnReset) {
+    btnReset.addEventListener("click", () => {
+      state.inPins = [...DEFAULT_IN];
+      state.outPins = [...DEFAULT_OUT];
+      state.rs485AltGp4Gp5 = false;
+      state.rs485DeRe = 255;
+      state.rs485Baud = 9600;
+      state.ledPin = 25;
+      if (pairEl) pairEl.value = "gp8_9";
+      if (dereEl) dereEl.value = "255";
+      if (baudEl) baudEl.value = "9600";
+      if (ledEl) ledEl.value = "25";
+      renderTable();
+      setToast(
+        "↺ คืนค่าพินเริ่มต้นโรงงาน (X0..X3=GP10..13, Y0..Y5=GP15,14,7,6,2,3, RS-485=GP8/GP9 @ 9600)",
+        "↺ Restored factory default RP2040 GPIO & RS-485 pin mapping"
+      );
+    });
+  }
+
+  renderTable();
+}
 
 /**
  * ระบบนับสถิติผู้เยี่ยมชมเว็บไซต์และยอดดาวน์โหลด (Visitor & Download Analytics)
