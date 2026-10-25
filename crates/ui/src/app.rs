@@ -111,6 +111,30 @@ pub struct AppSettings {
     pub update_repo_name: String,
     #[serde(default)]
     pub update_custom_manifest_url: String,
+    #[serde(default = "default_rp2040_input_pins")]
+    pub rp2040_input_pins: [u8; 8],
+    #[serde(default = "default_rp2040_output_pins")]
+    pub rp2040_output_pins: [u8; 8],
+    #[serde(default = "default_rp2040_status_led_pin")]
+    pub rp2040_status_led_pin: u8,
+    #[serde(default = "default_rp2040_io_flags")]
+    pub rp2040_io_flags: u8,
+}
+
+fn default_rp2040_input_pins() -> [u8; 8] {
+    my_canvas_core::HardwareIoConfig::default_rp2040().input_pins
+}
+
+fn default_rp2040_output_pins() -> [u8; 8] {
+    my_canvas_core::HardwareIoConfig::default_rp2040().output_pins
+}
+
+fn default_rp2040_status_led_pin() -> u8 {
+    my_canvas_core::HardwareIoConfig::default_rp2040().status_led_pin
+}
+
+fn default_rp2040_io_flags() -> u8 {
+    my_canvas_core::HardwareIoConfig::default_rp2040().flags
 }
 
 fn default_update_repo_owner() -> String {
@@ -166,6 +190,10 @@ impl Default for AppSettings {
             update_repo_owner: default_update_repo_owner(),
             update_repo_name: default_update_repo_name(),
             update_custom_manifest_url: String::new(),
+            rp2040_input_pins: default_rp2040_input_pins(),
+            rp2040_output_pins: default_rp2040_output_pins(),
+            rp2040_status_led_pin: default_rp2040_status_led_pin(),
+            rp2040_io_flags: default_rp2040_io_flags(),
         }
     }
 }
@@ -334,6 +362,7 @@ pub struct CanvasApp {
     pub uart_hex_view: bool,
     pub updater: crate::updater::AppUpdater,
     pub firmware_flasher: crate::firmware_flasher::FirmwareFlasher,
+    pub hw_io_config: my_canvas_core::HardwareIoConfig,
 }
 
 impl Default for CanvasApp {
@@ -346,8 +375,15 @@ impl Default for CanvasApp {
         if !settings.hardware.is_empty() {
             doc.program.hardware = settings.hardware;
         }
+        let mut hw_io_config = my_canvas_core::HardwareIoConfig {
+            input_pins: settings.rp2040_input_pins,
+            output_pins: settings.rp2040_output_pins,
+            status_led_pin: settings.rp2040_status_led_pin,
+            flags: settings.rp2040_io_flags,
+        };
+        hw_io_config.sanitize();
 
-        Self {
+        let mut app = Self {
             doc,
             active_tool: ActiveTool::Select,
             insert_pos: InsertPosition::AppendRung,
@@ -428,7 +464,10 @@ impl Default for CanvasApp {
                 settings.update_custom_manifest_url,
             ),
             firmware_flasher: crate::firmware_flasher::FirmwareFlasher::default(),
-        }
+            hw_io_config,
+        };
+        app.sync_doc_io_mappings_from_hw_config();
+        app
     }
 }
 
@@ -726,6 +765,18 @@ impl CanvasApp {
                                 port_path
                             );
                         }
+                        my_canvas_core::PlcSerialCommand::GetIoConfig => {
+                            self.update_plc_status = format!(
+                                "📥 Read Hardware I/O Pin Mapping (0x0B) sent to {}",
+                                port_path
+                            );
+                        }
+                        my_canvas_core::PlcSerialCommand::SetIoConfig => {
+                            self.update_plc_status = format!(
+                                "✔ Applied & saved Hardware I/O Pin Mapping (0x0C) to {} Flash (Sector 509 / 0x1FD000) without rebuilding firmware!",
+                                port_path
+                            );
+                        }
                     }
                 }
                 Err(e) => {
@@ -778,7 +829,399 @@ impl CanvasApp {
             update_repo_owner: self.updater.repo_owner.clone(),
             update_repo_name: self.updater.repo_name.clone(),
             update_custom_manifest_url: self.updater.custom_manifest_url.clone(),
+            rp2040_input_pins: self.hw_io_config.input_pins,
+            rp2040_output_pins: self.hw_io_config.output_pins,
+            rp2040_status_led_pin: self.hw_io_config.status_led_pin,
+            rp2040_io_flags: self.hw_io_config.flags,
         }
+    }
+
+    /// Format an RP2040 GPIO pin index (`0..=29` or `0xFF`) for display
+    pub fn format_rp2040_pin(pin: u8) -> String {
+        if pin < 30 && !my_canvas_core::HardwareIoConfig::is_reserved_peripheral_pin(pin) {
+            format!("GP{}", pin)
+        } else {
+            "-".to_string()
+        }
+    }
+
+    /// Sync `self.doc.program.io_mappings` (`X0..X7`, `Y0..Y7`) with `self.hw_io_config`
+    pub fn sync_doc_io_mappings_from_hw_config(&mut self) {
+        for i in 0..8 {
+            let plc_addr = format!("X{}", i);
+            let iec_addr = format!("%IX0.{}", i);
+            let hw_pin = Self::format_rp2040_pin(self.hw_io_config.input_pins[i]);
+            if let Some(existing) = self
+                .doc
+                .program
+                .io_mappings
+                .iter_mut()
+                .find(|m| m.is_input && (m.plc_address == plc_addr || m.iec_address == iec_addr))
+            {
+                existing.hw_pin = hw_pin;
+            } else if self.hw_io_config.input_pins[i] != my_canvas_core::PIN_UNASSIGNED {
+                self.doc.program.io_mappings.push(IOPortMapping {
+                    plc_address: plc_addr,
+                    iec_address: iec_addr,
+                    symbol: format!("IN_{}", i),
+                    hw_pin,
+                    description: "RP2040 Digital Input".to_string(),
+                    is_input: true,
+                });
+            }
+        }
+        for i in 0..8 {
+            let plc_addr = format!("Y{}", i);
+            let iec_addr = format!("%QX0.{}", i);
+            let hw_pin = Self::format_rp2040_pin(self.hw_io_config.output_pins[i]);
+            if let Some(existing) = self
+                .doc
+                .program
+                .io_mappings
+                .iter_mut()
+                .find(|m| !m.is_input && (m.plc_address == plc_addr || m.iec_address == iec_addr))
+            {
+                existing.hw_pin = hw_pin;
+            } else if self.hw_io_config.output_pins[i] != my_canvas_core::PIN_UNASSIGNED {
+                self.doc.program.io_mappings.push(IOPortMapping {
+                    plc_address: plc_addr,
+                    iec_address: iec_addr,
+                    symbol: format!("OUT_{}", i),
+                    hw_pin,
+                    description: "RP2040 Digital Output".to_string(),
+                    is_input: false,
+                });
+            }
+        }
+    }
+
+    /// Read current `HardwareIoConfig` from the connected RP2040 PLC via `CMD_GET_IO_CONFIG (0x0B)`
+    pub fn read_io_config_from_plc(&mut self) -> Result<my_canvas_core::HardwareIoConfig, String> {
+        let was_online = self.online_mode && self.online_target_hw;
+        if was_online {
+            self.stop_online_monitoring();
+            thread::sleep(Duration::from_millis(60));
+        }
+
+        let Some(port_path) = self.resolve_serial_port() else {
+            if was_online {
+                self.start_online_monitoring();
+            }
+            return Err(format!("Serial port '{}' not connected", self.com_port_display()));
+        };
+        let baud = serial::parse_baud(&self.baud_rate);
+
+        let res = (|| -> Result<my_canvas_core::HardwareIoConfig, String> {
+            use std::io::Write;
+            let mut file = serial::open(&port_path, baud, 200)
+                .map_err(|e| format!("Failed to open {}: {}", port_path, e))?;
+
+            let mut drain = [0u8; 512];
+            let _ = serial::read_some(&mut *file, &mut drain);
+
+            let req = my_canvas_core::PlcSerialCommand::create_get_io_config_packet();
+            file.write_all(&req)
+                .map_err(|e| format!("Failed to write to {}: {}", port_path, e))?;
+            file.flush()
+                .map_err(|e| format!("Failed to flush {}: {}", port_path, e))?;
+
+            let mut rx_accum = Vec::with_capacity(64);
+            let mut chunk = [0u8; 64];
+            let start = Instant::now();
+
+            while start.elapsed().as_millis() < 600 {
+                match serial::read_some(&mut *file, &mut chunk) {
+                    Ok(0) => thread::sleep(Duration::from_millis(10)),
+                    Ok(n) => {
+                        rx_accum.extend_from_slice(&chunk[..n]);
+                        if let Some(pos) = rx_accum.windows(2).position(|w| w == [0xAA, 0x8B]) {
+                            if pos > 0 {
+                                rx_accum.drain(..pos);
+                            }
+                            if rx_accum.len() >= my_canvas_core::IO_CONFIG_PACKET_LEN {
+                                let frame: Vec<u8> = rx_accum
+                                    .drain(..my_canvas_core::IO_CONFIG_PACKET_LEN)
+                                    .collect();
+                                return my_canvas_core::PlcSerialCommand::parse_io_config_response(&frame);
+                            }
+                        }
+                    }
+                    Err(e) => return Err(format!("Serial read error: {}", e)),
+                }
+            }
+            Err("Timed out waiting for CMD 0x8B IO config response from PLC".to_string())
+        })();
+
+        if was_online {
+            self.online_mode = false;
+            self.start_online_monitoring();
+        }
+
+        match res {
+            Ok(cfg) => {
+                self.hw_io_config = cfg;
+                self.sync_doc_io_mappings_from_hw_config();
+                self.save_settings();
+                self.update_plc_is_error = false;
+                self.update_plc_status = format!(
+                    "✔ Loaded Hardware I/O Pin Mapping from PLC ({}) — Status LED: {}",
+                    port_path,
+                    Self::format_rp2040_pin(cfg.status_led_pin)
+                );
+                Ok(cfg)
+            }
+            Err(e) => {
+                self.update_plc_is_error = true;
+                self.update_plc_status = format!("✖ Read I/O Config from PLC failed: {}", e);
+                Err(e)
+            }
+        }
+    }
+
+    /// Apply and save `self.hw_io_config` to the connected RP2040 PLC Flash via `CMD_SET_IO_CONFIG (0x0C)`
+    pub fn apply_io_config_to_plc(&mut self) {
+        self.hw_io_config.sanitize();
+        self.sync_doc_io_mappings_from_hw_config();
+        self.save_settings();
+        let pkt = my_canvas_core::PlcSerialCommand::create_set_io_config_packet(&self.hw_io_config);
+        self.transmit_custom_packet_to_plc(my_canvas_core::PlcSerialCommand::SetIoConfig, pkt);
+    }
+
+    /// Render the interactive RP2040 Hardware I/O Pin Mapping configuration table & Flash controls.
+    /// Returns `true` if any setting was modified.
+    pub fn render_rp2040_io_pin_config_ui(&mut self, ui: &mut Ui, id_prefix: &str) -> bool {
+        let palette = self.theme.palette();
+        let mut changed = false;
+
+        // Available assignable GPIO pins on RP2040 (excludes UART0 GP0..1, UART1 GP8..9, ADC GP26..28)
+        const ASSIGNABLE_PINS: [u8; 24] = [
+            my_canvas_core::PIN_UNASSIGNED,
+            2, 3, 4, 5, 6, 7, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 29,
+        ];
+
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new("🔧 RP2040 Runtime GPIO Pin Mapping (No Firmware Rebuild Required)")
+                    .color(palette.accent_heading)
+                    .strong(),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .small_button("↺ Reset Default Pinout")
+                    .on_hover_text("Restore factory default RP2040 GPIO pin mapping (X0..X3 = GP10..GP13, Y0..Y5 = GP15,14,7,6,2,3, LED = GP25)")
+                    .clicked()
+                {
+                    self.hw_io_config = my_canvas_core::HardwareIoConfig::default_rp2040();
+                    self.sync_doc_io_mappings_from_hw_config();
+                    changed = true;
+                }
+            });
+        });
+
+        ui.label(
+            RichText::new(
+                "Reserved peripherals: UART0 (GP0=TX, GP1=RX) | Modbus RS-485 UART1 (GP8=TX, GP9=RX) | Analog Inputs (GP26=AI0, GP27=AI1, GP28=AI2)",
+            )
+            .size(10.5)
+            .color(palette.symbol_subtext),
+        );
+        ui.add_space(4.0);
+
+        ui.columns(2, |cols| {
+            // Left Column: Digital Inputs X0..X7 (%IX0.0..%IX0.7)
+            cols[0].label(
+                RichText::new("📥 Digital Inputs X0..X7 (%IX0.0..%IX0.7)")
+                    .strong()
+                    .size(11.5)
+                    .color(palette.accent_ok),
+            );
+            egui::Grid::new(format!("{}_in_pins_grid", id_prefix))
+                .striped(true)
+                .num_columns(3)
+                .spacing([10.0, 4.0])
+                .show(&mut cols[0], |ui| {
+                    ui.strong("PLC");
+                    ui.strong("IEC 61131-3");
+                    ui.strong("RP2040 GPIO");
+                    ui.end_row();
+                    for i in 0..8 {
+                        ui.monospace(format!("X{}", i));
+                        ui.monospace(format!("%IX0.{}", i));
+                        let cur_pin = self.hw_io_config.input_pins[i];
+                        let cur_label = if cur_pin == my_canvas_core::PIN_UNASSIGNED {
+                            "Disabled (-)".to_string()
+                        } else {
+                            format!("GP{}", cur_pin)
+                        };
+                        egui::ComboBox::from_id_salt(format!("{}_in_pin_{}", id_prefix, i))
+                            .width(110.0)
+                            .selected_text(cur_label)
+                            .show_ui(ui, |ui| {
+                                for &p in &ASSIGNABLE_PINS {
+                                    let lbl = if p == my_canvas_core::PIN_UNASSIGNED {
+                                        "Disabled (-)".to_string()
+                                    } else {
+                                        format!("GP{}", p)
+                                    };
+                                    if ui
+                                        .selectable_value(&mut self.hw_io_config.input_pins[i], p, lbl)
+                                        .changed()
+                                    {
+                                        self.sync_doc_io_mappings_from_hw_config();
+                                        changed = true;
+                                    }
+                                }
+                            });
+                        ui.end_row();
+                    }
+                });
+
+            // Right Column: Digital Outputs Y0..Y7 (%QX0.0..%QX0.7)
+            cols[1].label(
+                RichText::new("📤 Digital Outputs Y0..Y7 (%QX0.0..%QX0.7)")
+                    .strong()
+                    .size(11.5)
+                    .color(egui::Color32::from_rgb(52, 152, 219)),
+            );
+            egui::Grid::new(format!("{}_out_pins_grid", id_prefix))
+                .striped(true)
+                .num_columns(3)
+                .spacing([10.0, 4.0])
+                .show(&mut cols[1], |ui| {
+                    ui.strong("PLC");
+                    ui.strong("IEC 61131-3");
+                    ui.strong("RP2040 GPIO");
+                    ui.end_row();
+                    for i in 0..8 {
+                        ui.monospace(format!("Y{}", i));
+                        ui.monospace(format!("%QX0.{}", i));
+                        let cur_pin = self.hw_io_config.output_pins[i];
+                        let cur_label = if cur_pin == my_canvas_core::PIN_UNASSIGNED {
+                            "Disabled (-)".to_string()
+                        } else {
+                            format!("GP{}", cur_pin)
+                        };
+                        egui::ComboBox::from_id_salt(format!("{}_out_pin_{}", id_prefix, i))
+                            .width(110.0)
+                            .selected_text(cur_label)
+                            .show_ui(ui, |ui| {
+                                for &p in &ASSIGNABLE_PINS {
+                                    let lbl = if p == my_canvas_core::PIN_UNASSIGNED {
+                                        "Disabled (-)".to_string()
+                                    } else {
+                                        format!("GP{}", p)
+                                    };
+                                    if ui
+                                        .selectable_value(&mut self.hw_io_config.output_pins[i], p, lbl)
+                                        .changed()
+                                    {
+                                        self.sync_doc_io_mappings_from_hw_config();
+                                        changed = true;
+                                    }
+                                }
+                            });
+                        ui.end_row();
+                    }
+                });
+        });
+
+        ui.add_space(4.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("Status LED:").strong());
+            let led_pin = self.hw_io_config.status_led_pin;
+            let led_lbl = if led_pin == my_canvas_core::PIN_UNASSIGNED {
+                "Disabled (-)".to_string()
+            } else if led_pin == 25 {
+                "GP25 (Onboard LED)".to_string()
+            } else {
+                format!("GP{}", led_pin)
+            };
+            egui::ComboBox::from_id_salt(format!("{}_status_led_pin", id_prefix))
+                .width(135.0)
+                .selected_text(led_lbl)
+                .show_ui(ui, |ui| {
+                    for &p in &ASSIGNABLE_PINS {
+                        let lbl = if p == my_canvas_core::PIN_UNASSIGNED {
+                            "Disabled (-)".to_string()
+                        } else if p == 25 {
+                            "GP25 (Onboard LED)".to_string()
+                        } else {
+                            format!("GP{}", p)
+                        };
+                        if ui
+                            .selectable_value(&mut self.hw_io_config.status_led_pin, p, lbl)
+                            .changed()
+                        {
+                            changed = true;
+                        }
+                    }
+                });
+
+            let mut pull_up = self.hw_io_config.input_pull_up();
+            if ui
+                .checkbox(&mut pull_up, "Input Pull-Up")
+                .on_hover_text("Checked = Internal Pull-Up resistor; Unchecked = Internal Pull-Down resistor")
+                .changed()
+            {
+                self.hw_io_config.set_input_pull_up(pull_up);
+                changed = true;
+            }
+
+            let mut active_low = self.hw_io_config.input_active_low();
+            if ui
+                .checkbox(&mut active_low, "Input Active-Low (GND=ON)")
+                .on_hover_text("Checked = Active-Low (0V/GND triggers logic 1); Unchecked = Active-High (3.3V triggers logic 1)")
+                .changed()
+            {
+                self.hw_io_config.set_input_active_low(active_low);
+                changed = true;
+            }
+
+            let mut led_hb = self.hw_io_config.status_led_heartbeat();
+            if ui
+                .checkbox(&mut led_hb, "RUN LED 1Hz Heartbeat")
+                .on_hover_text("Checked = 1 Hz blinking heartbeat in RUN mode; Unchecked = Solid ON in RUN mode")
+                .changed()
+            {
+                self.hw_io_config.set_status_led_heartbeat(led_hb);
+                changed = true;
+            }
+        });
+
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            let read_btn = egui::Button::new(
+                RichText::new("📥 Read I/O Config from PLC (0x0B)")
+                    .strong()
+                    .size(11.5),
+            )
+            .corner_radius(egui::CornerRadius::same(5));
+            if ui
+                .add(read_btn)
+                .on_hover_text("Read current GPIO pin mapping stored on the connected RP2040 PLC via USB-CDC (CMD 0x0B)")
+                .clicked()
+            {
+                let _ = self.read_io_config_from_plc();
+            }
+
+            let apply_btn = egui::Button::new(
+                RichText::new("⚡ Apply & Save I/O Config to PLC Flash (0x0C)")
+                    .strong()
+                    .size(11.5)
+                    .color(egui::Color32::WHITE),
+            )
+            .fill(egui::Color32::from_rgb(39, 174, 96))
+            .corner_radius(egui::CornerRadius::same(5));
+            if ui
+                .add(apply_btn)
+                .on_hover_text("Immediately reconfigure RP2040 GPIO pins at runtime and save to Flash Sector 509 (0x1FD000) without rebuilding firmware!")
+                .clicked()
+            {
+                self.apply_io_config_to_plc();
+            }
+        });
+
+        changed
     }
 
     /// Evaluates live value and display styling for any address in the Watch Table
@@ -2935,6 +3378,11 @@ impl eframe::App for CanvasApp {
                         });
 
                     ui.separator();
+                    if self.render_rp2040_io_pin_config_ui(ui, "settings_dlg") {
+                        settings_changed = true;
+                    }
+
+                    ui.separator();
                     ui.weak(format!(
                         "Settings file: {}",
                         AppSettings::config_path().display()
@@ -3320,6 +3768,17 @@ impl eframe::App for CanvasApp {
                             self.update_plc_tab = 1;
                         }
 
+                        let tab2_btn = egui::Button::new(
+                            RichText::new("🔧 3. RP2040 Hardware I/O Pin Mapping")
+                                .strong()
+                                .size(12.0),
+                        )
+                        .selected(self.update_plc_tab == 2)
+                        .corner_radius(egui::CornerRadius::same(6));
+                        if ui.add(tab2_btn).clicked() {
+                            self.update_plc_tab = 2;
+                        }
+
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui
                                 .small_button("📋 Copy Packet Hex")
@@ -3386,7 +3845,7 @@ impl eframe::App for CanvasApp {
                                         );
                                     });
                             }
-                            _ => {
+                            1 => {
                                 ui.label(
                                     RichText::new(
                                         "Unified Memory Space: X[0x00..0x1F] | Y[0x20..0x3F] | M[0x40..0xBF] | T[0xC0..0xDF] | C[0xE0..0xFF]",
@@ -3430,6 +3889,16 @@ impl eframe::App for CanvasApp {
                                                     ui.end_row();
                                                 }
                                             });
+                                    });
+                            }
+                            _ => {
+                                egui::ScrollArea::vertical()
+                                    .id_salt("update_plc_io_cfg_scroll")
+                                    .max_height(265.0)
+                                    .show(ui, |ui| {
+                                        if self.render_rp2040_io_pin_config_ui(ui, "update_plc") {
+                                            settings_changed = true;
+                                        }
                                     });
                             }
                         });
@@ -3835,6 +4304,10 @@ mod tests {
                     update_repo_owner: default_update_repo_owner(),
                     update_repo_name: default_update_repo_name(),
                     update_custom_manifest_url: String::new(),
+                    rp2040_input_pins: default_rp2040_input_pins(),
+                    rp2040_output_pins: default_rp2040_output_pins(),
+                    rp2040_status_led_pin: default_rp2040_status_led_pin(),
+                    rp2040_io_flags: default_rp2040_io_flags(),
                 };
                 let json = serde_json::to_string_pretty(&settings).unwrap();
                 let loaded: AppSettings = serde_json::from_str(&json).unwrap();

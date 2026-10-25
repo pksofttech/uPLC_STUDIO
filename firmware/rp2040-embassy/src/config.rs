@@ -47,6 +47,10 @@ pub const FLASH_MAGIC: u32 = 0x5550_4C43; // "UPLC" in ASCII
 pub const FLASH_PERSISTENT_OFFSET: u32 = 0x1FF000;
 pub const FLASH_PERSISTENT_MAGIC: u32 = 0x5045_5253; // "PERS" in ASCII
 
+/// Flash offset reserved for saving Runtime Hardware I/O Pin Mapping (Sector 509, 0x1FD000..0x1FDFFF)
+pub const FLASH_IO_CONFIG_OFFSET: u32 = 0x1FD000;
+pub const FLASH_IO_CONFIG_MAGIC: u32 = 0x494F_4346; // "IOCF" in ASCII
+
 // =============================================================================
 // 3. Serial & Modbus RTU Communication Configuration
 // =============================================================================
@@ -82,6 +86,7 @@ pub enum PlcStatus {
 /// Status LED (GP25) Pattern in RUN mode:
 /// - `true`: Heartbeat 1 Hz (500ms ON / 500ms OFF) - Indicates active CPU logic execution
 /// - `false`: Solid ON - Continuous light (traditional PLC RUN LED)
+#[allow(dead_code)]
 pub const STATUS_LED_RUN_HEARTBEAT: bool = true;
 
 // =============================================================================
@@ -91,12 +96,15 @@ pub const STATUS_LED_RUN_HEARTBEAT: bool = true;
 /// Default pull resistor mode for digital inputs
 /// - `Pull::Down`: Active-High (logic 1 when connected to 3.3V)
 /// - `Pull::Up`: Active-Low (logic 0 when connected to GND)
+#[allow(dead_code)]
 pub const INPUT_PULL_MODE: Pull = Pull::Up;
 
 /// Whether digital inputs are Active-Low (True = GND triggers logic 1, False = 3.3V triggers logic 1)
+#[allow(dead_code)]
 pub const INPUT_ACTIVE_LOW: bool = true;
 
 /// Bundled Hardware I/O resources passed to the PLC scan task
+#[allow(dead_code)]
 pub struct HardwareIo {
     pub inputs: [Option<Input<'static>>; 8],
     pub outputs: [Option<Output<'static>>; 8],
@@ -215,6 +223,94 @@ pub fn configure_hardware_io_degraded(
         inputs: in_pins.map(|p| p.map(|pin| Input::new(pin, INPUT_PULL_MODE))),
         outputs: out_pins.map(|p| p.map(|pin| Output::new(pin, Level::Low))),
         status_led: Output::new(led_pin, Level::Low),
+    }
+}
+
+/// Apply `HardwareIoConfig` directly to RP2040 `SIO`, `IO_BANK0`, and `PADS_BANK0` registers at runtime
+/// without requiring firmware recompilation.
+pub fn apply_runtime_io_config(
+    prev: Option<&uplc_vm::HardwareIoConfig>,
+    cfg: &uplc_vm::HardwareIoConfig,
+) {
+    // 1. Safely release any previously configured output pins to Hi-Z input with pull-down
+    if let Some(old) = prev {
+        for &pin in old.output_pins.iter().chain(core::iter::once(&old.status_led_pin)) {
+            if pin < 30 && !uplc_vm::HardwareIoConfig::is_reserved_peripheral_pin(pin) {
+                embassy_rp::pac::SIO.gpio_out(0).value_clr().write_value(1u32 << pin);
+                embassy_rp::pac::SIO.gpio_oe(0).value_clr().write_value(1u32 << pin);
+                embassy_rp::pac::PADS_BANK0.gpio(pin as usize).modify(|w| {
+                    w.set_ie(true);
+                    w.set_pue(false);
+                    w.set_pde(true);
+                });
+            }
+        }
+    }
+
+    let pull_up = cfg.input_pull_up();
+
+    // 2. Configure Digital Input pins X0..X7
+    for &pin in &cfg.input_pins {
+        if pin < 30 && !uplc_vm::HardwareIoConfig::is_reserved_peripheral_pin(pin) {
+            embassy_rp::pac::SIO.gpio_oe(0).value_clr().write_value(1u32 << pin);
+            embassy_rp::pac::PADS_BANK0.gpio(pin as usize).modify(|w| {
+                w.set_od(false);
+                w.set_ie(true);
+                w.set_pue(pull_up);
+                w.set_pde(!pull_up);
+            });
+            embassy_rp::pac::IO_BANK0
+                .gpio(pin as usize)
+                .ctrl()
+                .write(|w| w.set_funcsel(5)); // 5 = SIO function on RP2040
+        }
+    }
+
+    // 3. Configure Digital Output pins Y0..Y7
+    for &pin in &cfg.output_pins {
+        if pin < 30 && !uplc_vm::HardwareIoConfig::is_reserved_peripheral_pin(pin) {
+            embassy_rp::pac::SIO.gpio_out(0).value_clr().write_value(1u32 << pin);
+            embassy_rp::pac::SIO.gpio_oe(0).value_set().write_value(1u32 << pin);
+            embassy_rp::pac::PADS_BANK0.gpio(pin as usize).modify(|w| {
+                w.set_od(false);
+                w.set_ie(true);
+                w.set_pue(false);
+                w.set_pde(false);
+            });
+            embassy_rp::pac::IO_BANK0
+                .gpio(pin as usize)
+                .ctrl()
+                .write(|w| w.set_funcsel(5));
+        }
+    }
+
+    // 4. Configure Status LED pin
+    let led_pin = cfg.status_led_pin;
+    if led_pin < 30 && !uplc_vm::HardwareIoConfig::is_reserved_peripheral_pin(led_pin) {
+        embassy_rp::pac::SIO.gpio_out(0).value_clr().write_value(1u32 << led_pin);
+        embassy_rp::pac::SIO.gpio_oe(0).value_set().write_value(1u32 << led_pin);
+        embassy_rp::pac::PADS_BANK0.gpio(led_pin as usize).modify(|w| {
+            w.set_od(false);
+            w.set_ie(true);
+            w.set_pue(false);
+            w.set_pde(false);
+        });
+        embassy_rp::pac::IO_BANK0
+            .gpio(led_pin as usize)
+            .ctrl()
+            .write(|w| w.set_funcsel(5));
+    }
+}
+
+/// Drive a dynamically mapped RP2040 GPIO output pin HIGH or LOW via `SIO`.
+#[inline]
+pub fn write_runtime_gpio_pin(pin: u8, high: bool) {
+    if pin < 30 && !uplc_vm::HardwareIoConfig::is_reserved_peripheral_pin(pin) {
+        if high {
+            embassy_rp::pac::SIO.gpio_out(0).value_set().write_value(1u32 << pin);
+        } else {
+            embassy_rp::pac::SIO.gpio_out(0).value_clr().write_value(1u32 << pin);
+        }
     }
 }
 

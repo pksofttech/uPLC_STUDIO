@@ -7,8 +7,10 @@ pub mod shape;
 pub mod simulation;
 
 pub use bytecode::{
-    BytecodeCompiler, BytecodeInstruction, BytecodeProgram, CompileReport, MemoryMapEntry, MemoryRegion,
-    PlcSerialCommand, PlcStatusSnapshot, VmOpcode, PACKET_SOF,
+    BytecodeCompiler, BytecodeInstruction, BytecodeProgram, CompileReport, HardwareIoConfig,
+    MemoryMapEntry, MemoryRegion, PlcSerialCommand, PlcStatusSnapshot, VmOpcode,
+    IO_CONFIG_PACKET_LEN, IO_CONFIG_PAYLOAD_LEN, IO_FLAG_INPUT_ACTIVE_LOW, IO_FLAG_INPUT_PULL_UP,
+    IO_FLAG_STATUS_LED_HEARTBEAT, PACKET_SOF, PIN_UNASSIGNED,
 };
 pub use document::Document;
 pub use ladder::{

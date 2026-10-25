@@ -279,6 +279,11 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 ui.label(RichText::new(format!("Current: {}", app.doc.program.hardware)).italics().size(11.0));
             }
             ui.separator();
+            if ui.button("🔧 Configure RP2040 Hardware I/O Pins...").clicked() {
+                app.show_update_plc = true;
+                app.update_plc_tab = 2;
+                ui.close();
+            }
             if ui.button("⚡ Update to PLC (Compile IL → Bytecode)...").clicked() {
                 app.show_update_plc = true;
                 ui.close();
@@ -291,6 +296,11 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
 
         // --- TOOLS MENU ---
         ui.menu_button("Tools", |ui| {
+            if ui.button("🔧 Configure RP2040 Hardware I/O Pins...").clicked() {
+                app.show_update_plc = true;
+                app.update_plc_tab = 2;
+                ui.close();
+            }
             if ui.button("⚡ Update to PLC (Compile IL → Bytecode)...").clicked() {
                 app.show_update_plc = true;
                 ui.close();

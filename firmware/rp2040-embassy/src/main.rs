@@ -18,7 +18,7 @@ use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_rp::bind_interrupts;
 use embassy_rp::flash::{Async, Flash, ERASE_SIZE};
-use embassy_rp::gpio::{Input, Output};
+use embassy_rp::gpio::Output;
 use embassy_rp::peripherals::{FLASH, UART0, UART1, USB};
 use embassy_rp::uart::{self, BufferedInterruptHandler, BufferedUart};
 use embassy_rp::usb::{Driver as UsbDriver, InterruptHandler as UsbInterruptHandler};
@@ -30,11 +30,12 @@ use embassy_usb::class::cdc_acm::{CdcAcmClass, State as CdcAcmState};
 use embassy_usb::{Builder as UsbBuilder, Config as UsbConfig, UsbDevice};
 use static_cell::StaticCell;
 use uplc_vm::{
-    MicroVm, CMD_DOWNLOAD_PROGRAM, CMD_FORCE_IO, CMD_FORCE_IO_RESPONSE, CMD_MONITOR_STATUS,
-    CMD_RUN_STOP, CMD_STEP, CMD_UPLOAD_PROGRAM, CMD_WRITE_VALUE, CMD_WRITE_VALUE_RESPONSE,
-    CMD_PERSIST_SAVE, CMD_PERSIST_SAVE_RESPONSE, CMD_PERSIST_CLEAR, CMD_PERSIST_CLEAR_RESPONSE,
-    CMD_ENTER_BOOTSEL, CMD_ENTER_BOOTSEL_RESPONSE,
-    MAX_INSTRUCTIONS, PACKET_SOF,
+    HardwareIoConfig, MicroVm, CMD_DOWNLOAD_PROGRAM, CMD_FORCE_IO, CMD_FORCE_IO_RESPONSE,
+    CMD_MONITOR_STATUS, CMD_RUN_STOP, CMD_STEP, CMD_UPLOAD_PROGRAM, CMD_WRITE_VALUE,
+    CMD_WRITE_VALUE_RESPONSE, CMD_PERSIST_SAVE, CMD_PERSIST_SAVE_RESPONSE, CMD_PERSIST_CLEAR,
+    CMD_PERSIST_CLEAR_RESPONSE, CMD_ENTER_BOOTSEL, CMD_ENTER_BOOTSEL_RESPONSE,
+    CMD_GET_IO_CONFIG, CMD_SET_IO_CONFIG, CMD_SET_IO_CONFIG_RESPONSE,
+    IO_CONFIG_PACKET_LEN, IO_CONFIG_PAYLOAD_LEN, MAX_INSTRUCTIONS, PACKET_SOF,
 };
 use panic_halt as _;
 
@@ -95,14 +96,15 @@ async fn main(spawner: Spawner) {
     info!("====================================================");
 
     // -------------------------------------------------------------------------
-    // 1. Configure Hardware Digital Inputs & Outputs (from config.rs)
-    // -------------------------------------------------------------------------
-    let hw_io = configure_hardware_io!(p);
-
-    // -------------------------------------------------------------------------
-    // 3. Initialize Flash Storage & Load Saved Bytecode & Persistent Data on Boot
+    // 1. Initialize Flash Storage & Load Saved Hardware I/O Config, Bytecode & Persistent Data
     // -------------------------------------------------------------------------
     let mut flash = Flash::<_, Async, FLASH_SIZE_BYTES>::new(p.FLASH, p.DMA_CH0);
+    let boot_io_cfg = load_io_config_from_flash(&mut flash).unwrap_or_else(HardwareIoConfig::default_rp2040);
+    apply_runtime_io_config(None, &boot_io_cfg);
+    {
+        let mut vm = SHARED_VM.lock().await;
+        vm.io_config = boot_io_cfg;
+    }
     load_program_from_flash(&mut flash).await;
     {
         let mut bit_latch = [0u8; 32];
@@ -209,7 +211,7 @@ async fn main(spawner: Spawner) {
 
     // Spawn the Deterministic PLC Scan Cycle Task
     spawner
-        .spawn(plc_scan_task(hw_io.inputs, hw_io.outputs, hw_io.status_led, Some(adc_hw)))
+        .spawn(plc_scan_task(Some(adc_hw)))
         .unwrap();
 }
 
@@ -267,9 +269,11 @@ async fn usb_cdc_comm_task(mut class: CdcAcmClass<'static, UsbDriver<'static, US
 
                 if let Some(total_len) = expected_len {
                     if rx_pos == total_len {
-                        let result = {
+                        let (prev_io_cfg, result) = {
                             let mut vm = SHARED_VM.lock().await;
-                            vm.process_serial_packet(&frame_buf[..total_len])
+                            let prev = vm.io_config;
+                            let res = vm.process_serial_packet(&frame_buf[..total_len]);
+                            (prev, res)
                         };
 
                         match result {
@@ -453,6 +457,39 @@ async fn usb_cdc_comm_task(mut class: CdcAcmClass<'static, UsbDriver<'static, US
                                 embassy_time::Timer::after(Duration::from_millis(30)).await;
                                 embassy_rp::rom_data::reset_to_usb_boot(0, 0);
                             }
+                            Ok(CMD_GET_IO_CONFIG) => {
+                                let mut io_pkt = [0u8; IO_CONFIG_PACKET_LEN];
+                                let len = {
+                                    let vm = SHARED_VM.lock().await;
+                                    vm.io_config.write_response_packet(&mut io_pkt).unwrap_or(0)
+                                };
+                                if len > 0 {
+                                    let _ = class.write_packet(&io_pkt[..len]).await;
+                                }
+                            }
+                            Ok(CMD_SET_IO_CONFIG) => {
+                                let new_cfg = {
+                                    let vm = SHARED_VM.lock().await;
+                                    vm.io_config
+                                };
+                                apply_runtime_io_config(Some(&prev_io_cfg), &new_cfg);
+                                let ok = {
+                                    let mut fl_guard = SHARED_FLASH.lock().await;
+                                    if let Some(flash) = fl_guard.as_mut() {
+                                        save_io_config_to_flash(flash, &new_cfg)
+                                    } else {
+                                        false
+                                    }
+                                };
+                                if ok {
+                                    PLC_HAS_ERROR.store(false, Ordering::Relaxed);
+                                    info!("USB-CDC CMD 0x0C: Applied & saved new Hardware I/O Pin Mapping to Flash!");
+                                    let _ = class.write_packet(&[PACKET_SOF, CMD_SET_IO_CONFIG_RESPONSE, 0x00]).await;
+                                } else {
+                                    PLC_HAS_ERROR.store(true, Ordering::Relaxed);
+                                    let _ = class.write_packet(&[PACKET_SOF, 0xFF, 0x0C]).await;
+                                }
+                            }
                             Err(e) => {
                                 info!("USB-CDC Packet Error: {}", e);
                                 PLC_HAS_ERROR.store(true, Ordering::Relaxed);
@@ -473,9 +510,6 @@ async fn usb_cdc_comm_task(mut class: CdcAcmClass<'static, UsbDriver<'static, US
 /// Deterministic PLC Scan Cycle Task (`Read Inputs -> Execute Micro-VM -> Write Outputs -> Update Status LED`)
 #[embassy_executor::task]
 async fn plc_scan_task(
-    inputs: [Option<Input<'static>>; 8],
-    mut outputs: [Option<Output<'static>>; 8],
-    mut status_led: Output<'static>,
     mut adc_hw: Option<HardwareAdc>,
 ) {
     let mut ticker = Ticker::every(Duration::from_millis(SCAN_CYCLE_MS as u64));
@@ -492,15 +526,15 @@ async fn plc_scan_task(
         led_ms = (led_ms + SCAN_CYCLE_MS) % 2000;
 
         let mut vm = SHARED_VM.lock().await;
+        let io_cfg = vm.io_config;
 
-        // 1. Sample Physical Digital Inputs X0..X7 into Unified Bit Memory (0x00..0x07)
-        for (i, pin_opt) in inputs.iter().enumerate() {
-            if let Some(pin) = pin_opt {
-                let is_active = if INPUT_ACTIVE_LOW {
-                    pin.is_low()
-                } else {
-                    pin.is_high()
-                };
+        // 1. Sample Physical Digital Inputs X0..X7 into Unified Bit Memory (0x00..0x07) via runtime SIO mask
+        let gpio_in_mask = embassy_rp::pac::SIO.gpio_in(0).read();
+        let active_low = io_cfg.input_active_low();
+        for (i, &pin) in io_cfg.input_pins.iter().enumerate() {
+            if pin < 30 && !HardwareIoConfig::is_reserved_peripheral_pin(pin) {
+                let raw_high = (gpio_in_mask & (1u32 << pin)) != 0;
+                let is_active = if active_low { !raw_high } else { raw_high };
                 vm.set_digital_input(i as u8, is_active);
             } else {
                 vm.set_digital_input(i as u8, false);
@@ -580,14 +614,8 @@ async fn plc_scan_task(
         }
 
         // 3. Update Physical Outputs Y0..Y7 from Unified Bit Memory (0x20..0x27)
-        for (i, out_opt) in outputs.iter_mut().enumerate() {
-            if let Some(out_pin) = out_opt {
-                if vm.get_digital_output(i as u8) {
-                    out_pin.set_high();
-                } else {
-                    out_pin.set_low();
-                }
-            }
+        for (i, &out_pin) in io_cfg.output_pins.iter().enumerate() {
+            write_runtime_gpio_pin(out_pin, vm.get_digital_output(i as u8));
         }
 
         // 4. Determine PLC Operating Status
@@ -600,13 +628,13 @@ async fn plc_scan_task(
             PlcStatus::Stop
         };
 
-        // 5. Drive Status LED (GP25) based on PLC status:
+        // 5. Drive Status LED (default GP25) based on PLC status:
         // - RUN: Heartbeat 1 Hz (500ms ON / 500ms OFF) or Solid ON
         // - STOP: Slow Beacon (60ms pulse every 2000ms)
         // - ERROR: Fast Strobe (100ms ON / 100ms OFF = 5 Hz)
         let led_on = match plc_status {
             PlcStatus::Run => {
-                if STATUS_LED_RUN_HEARTBEAT {
+                if io_cfg.status_led_heartbeat() {
                     (led_ms % 1000) < 500
                 } else {
                     true
@@ -615,11 +643,7 @@ async fn plc_scan_task(
             PlcStatus::Stop => led_ms < 60,
             PlcStatus::Error => (led_ms % 200) < 100,
         };
-        if led_on {
-            status_led.set_high();
-        } else {
-            status_led.set_low();
-        }
+        write_runtime_gpio_pin(io_cfg.status_led_pin, led_on);
 
         if vm.running && vm.prog_len > 0 {
             scan_div = scan_div.wrapping_add(1);
@@ -862,6 +886,55 @@ fn clear_persistent_data_in_flash(
     );
     RETAIN_DIRTY.store(false, Ordering::Relaxed);
     info!("Cleared persistent Latch data in Flash (Sector 511 erased)");
+    true
+}
+
+/// Load runtime Hardware I/O Pin Mapping from RP2040 Flash Sector 509 (`0x1FD000`)
+fn load_io_config_from_flash(
+    flash: &mut Flash<'static, FLASH, Async, FLASH_SIZE_BYTES>,
+) -> Option<HardwareIoConfig> {
+    let mut page_buf = [0u8; 64];
+    if flash.blocking_read(FLASH_IO_CONFIG_OFFSET, &mut page_buf).is_ok() {
+        let magic = u32::from_le_bytes([page_buf[0], page_buf[1], page_buf[2], page_buf[3]]);
+        if magic == FLASH_IO_CONFIG_MAGIC {
+            let version = u16::from_le_bytes([page_buf[4], page_buf[5]]);
+            let expected_crc = u16::from_le_bytes([page_buf[6], page_buf[7]]);
+            let payload = &page_buf[8..8 + IO_CONFIG_PAYLOAD_LEN];
+            let actual_crc = MicroVm::compute_crc16(payload);
+            if version == 1 && actual_crc == expected_crc {
+                if let Some(cfg) = HardwareIoConfig::from_bytes(payload) {
+                    info!("Loaded custom Hardware I/O Pin Mapping from Flash (CRC16: 0x{:04X})", actual_crc);
+                    return Some(cfg);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Save runtime Hardware I/O Pin Mapping to RP2040 Flash Sector 509 (`0x1FD000`)
+fn save_io_config_to_flash(
+    flash: &mut Flash<'static, FLASH, Async, FLASH_SIZE_BYTES>,
+    cfg: &HardwareIoConfig,
+) -> bool {
+    if flash
+        .blocking_erase(FLASH_IO_CONFIG_OFFSET, FLASH_IO_CONFIG_OFFSET + ERASE_SIZE as u32)
+        .is_err()
+    {
+        return false;
+    }
+    let mut page_buf = [0xFFu8; 256];
+    let payload = cfg.to_bytes();
+    let crc16 = MicroVm::compute_crc16(&payload);
+    page_buf[0..4].copy_from_slice(&FLASH_IO_CONFIG_MAGIC.to_le_bytes());
+    page_buf[4..6].copy_from_slice(&1u16.to_le_bytes());
+    page_buf[6..8].copy_from_slice(&crc16.to_le_bytes());
+    page_buf[8..8 + IO_CONFIG_PAYLOAD_LEN].copy_from_slice(&payload);
+
+    if flash.blocking_write(FLASH_IO_CONFIG_OFFSET, &page_buf).is_err() {
+        return false;
+    }
+    info!("Saved Hardware I/O Pin Mapping to Flash (Sector 509, CRC16: 0x{:04X})", crc16);
     true
 }
 

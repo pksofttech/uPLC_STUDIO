@@ -45,6 +45,202 @@ pub const CMD_PERSIST_CLEAR: u8 = 0x09;
 pub const CMD_PERSIST_CLEAR_RESPONSE: u8 = 0x89;
 pub const CMD_ENTER_BOOTSEL: u8 = 0x0A;
 pub const CMD_ENTER_BOOTSEL_RESPONSE: u8 = 0x8A;
+pub const CMD_GET_IO_CONFIG: u8 = 0x0B;
+pub const CMD_GET_IO_CONFIG_RESPONSE: u8 = 0x8B;
+pub const CMD_SET_IO_CONFIG: u8 = 0x0C;
+pub const CMD_SET_IO_CONFIG_RESPONSE: u8 = 0x8C;
+
+pub const PIN_UNASSIGNED: u8 = 0xFF;
+pub const IO_CONFIG_PAYLOAD_LEN: usize = 18;
+pub const IO_CONFIG_PACKET_LEN: usize = 5 + IO_CONFIG_PAYLOAD_LEN; // 23 bytes
+
+pub const IO_FLAG_INPUT_PULL_UP: u8 = 0x01;
+pub const IO_FLAG_INPUT_ACTIVE_LOW: u8 = 0x02;
+pub const IO_FLAG_STATUS_LED_HEARTBEAT: u8 = 0x04;
+
+/// Runtime-configurable Hardware GPIO Pin Mapping for RP2040 Micro-VM (`18 bytes` payload)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub struct HardwareIoConfig {
+    /// GPIO pin number (`0..=29`) for Digital Inputs `X0..X7` (`%IX0.0..%IX0.7`), or `0xFF` (`PIN_UNASSIGNED`)
+    pub input_pins: [u8; 8],
+    /// GPIO pin number (`0..=29`) for Digital Outputs `Y0..Y7` (`%QX0.0..%QX0.7`), or `0xFF` (`PIN_UNASSIGNED`)
+    pub output_pins: [u8; 8],
+    /// GPIO pin number (`0..=29`) for PLC Status LED, or `0xFF` (`PIN_UNASSIGNED`)
+    pub status_led_pin: u8,
+    /// Bitflags:
+    /// - Bit 0 (`0x01`): `input_pull_up` (`1` = Pull-Up, `0` = Pull-Down)
+    /// - Bit 1 (`0x02`): `input_active_low` (`1` = Active-Low / GND triggers ON, `0` = Active-High / 3.3V triggers ON)
+    /// - Bit 2 (`0x04`): `status_led_heartbeat` (`1` = 1 Hz Heartbeat in RUN, `0` = Solid ON in RUN)
+    pub flags: u8,
+}
+
+impl Default for HardwareIoConfig {
+    fn default() -> Self {
+        Self::default_rp2040()
+    }
+}
+
+impl HardwareIoConfig {
+    /// Factory default RP2040 GPIO mapping matching `firmware/rp2040-embassy/src/config.rs`
+    pub const fn default_rp2040() -> Self {
+        Self {
+            input_pins: [
+                10,             // X0: GP10
+                11,             // X1: GP11
+                12,             // X2: GP12
+                13,             // X3: GP13
+                PIN_UNASSIGNED, // X4: -
+                PIN_UNASSIGNED, // X5: -
+                PIN_UNASSIGNED, // X6: -
+                PIN_UNASSIGNED, // X7: -
+            ],
+            output_pins: [
+                15,             // Y0: GP15
+                14,             // Y1: GP14
+                7,              // Y2: GP7
+                6,              // Y3: GP6
+                2,              // Y4: GP2
+                3,              // Y5: GP3
+                PIN_UNASSIGNED, // Y6: -
+                PIN_UNASSIGNED, // Y7: -
+            ],
+            status_led_pin: 25, // GP25
+            flags: IO_FLAG_INPUT_PULL_UP
+                | IO_FLAG_INPUT_ACTIVE_LOW
+                | IO_FLAG_STATUS_LED_HEARTBEAT,
+        }
+    }
+
+    #[inline]
+    pub const fn input_pull_up(&self) -> bool {
+        (self.flags & IO_FLAG_INPUT_PULL_UP) != 0
+    }
+
+    #[inline]
+    pub fn set_input_pull_up(&mut self, pull_up: bool) {
+        if pull_up {
+            self.flags |= IO_FLAG_INPUT_PULL_UP;
+        } else {
+            self.flags &= !IO_FLAG_INPUT_PULL_UP;
+        }
+    }
+
+    #[inline]
+    pub const fn input_active_low(&self) -> bool {
+        (self.flags & IO_FLAG_INPUT_ACTIVE_LOW) != 0
+    }
+
+    #[inline]
+    pub fn set_input_active_low(&mut self, active_low: bool) {
+        if active_low {
+            self.flags |= IO_FLAG_INPUT_ACTIVE_LOW;
+        } else {
+            self.flags &= !IO_FLAG_INPUT_ACTIVE_LOW;
+        }
+    }
+
+    #[inline]
+    pub const fn status_led_heartbeat(&self) -> bool {
+        (self.flags & IO_FLAG_STATUS_LED_HEARTBEAT) != 0
+    }
+
+    #[inline]
+    pub fn set_status_led_heartbeat(&mut self, heartbeat: bool) {
+        if heartbeat {
+            self.flags |= IO_FLAG_STATUS_LED_HEARTBEAT;
+        } else {
+            self.flags &= !IO_FLAG_STATUS_LED_HEARTBEAT;
+        }
+    }
+
+    /// Returns `true` if `pin` is dedicated to UART0 (`GP0..1`), UART1 Modbus (`GP8..9`), or ADC (`GP26..28`).
+    #[inline]
+    pub const fn is_reserved_peripheral_pin(pin: u8) -> bool {
+        matches!(pin, 0 | 1 | 8 | 9 | 26 | 27 | 28)
+    }
+
+    /// Sanitize pin assignments so out-of-range, reserved, or duplicate GPIO pins are safely cleared to `PIN_UNASSIGNED`.
+    pub fn sanitize(&mut self) {
+        let mut used_mask: u32 = 0;
+
+        for p in &mut self.input_pins {
+            if *p >= 30 || Self::is_reserved_peripheral_pin(*p) || (used_mask & (1u32 << *p)) != 0 {
+                *p = PIN_UNASSIGNED;
+            } else {
+                used_mask |= 1u32 << *p;
+            }
+        }
+        for p in &mut self.output_pins {
+            if *p >= 30 || Self::is_reserved_peripheral_pin(*p) || (used_mask & (1u32 << *p)) != 0 {
+                *p = PIN_UNASSIGNED;
+            } else {
+                used_mask |= 1u32 << *p;
+            }
+        }
+        if self.status_led_pin >= 30
+            || Self::is_reserved_peripheral_pin(self.status_led_pin)
+            || (used_mask & (1u32 << self.status_led_pin)) != 0
+        {
+            self.status_led_pin = PIN_UNASSIGNED;
+        }
+        self.flags &= 0x07;
+    }
+
+    #[inline]
+    pub const fn to_bytes(&self) -> [u8; IO_CONFIG_PAYLOAD_LEN] {
+        [
+            self.input_pins[0],
+            self.input_pins[1],
+            self.input_pins[2],
+            self.input_pins[3],
+            self.input_pins[4],
+            self.input_pins[5],
+            self.input_pins[6],
+            self.input_pins[7],
+            self.output_pins[0],
+            self.output_pins[1],
+            self.output_pins[2],
+            self.output_pins[3],
+            self.output_pins[4],
+            self.output_pins[5],
+            self.output_pins[6],
+            self.output_pins[7],
+            self.status_led_pin,
+            self.flags,
+        ]
+    }
+
+    pub fn from_bytes(b: &[u8]) -> Option<Self> {
+        if b.len() < IO_CONFIG_PAYLOAD_LEN {
+            return None;
+        }
+        let mut cfg = Self {
+            input_pins: [b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]],
+            output_pins: [b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]],
+            status_led_pin: b[16],
+            flags: b[17],
+        };
+        cfg.sanitize();
+        Some(cfg)
+    }
+
+    /// Encode a complete `CMD_GET_IO_CONFIG_RESPONSE (0x8B)` frame (`23 bytes`) into `out_buf`.
+    pub fn write_response_packet(&self, out_buf: &mut [u8]) -> Result<usize, &'static str> {
+        if out_buf.len() < IO_CONFIG_PACKET_LEN {
+            return Err("Buffer too small for IO config response packet");
+        }
+        out_buf[0] = PACKET_SOF;
+        out_buf[1] = CMD_GET_IO_CONFIG_RESPONSE;
+        let len_bytes = (IO_CONFIG_PAYLOAD_LEN as u16).to_le_bytes();
+        out_buf[2] = len_bytes[0];
+        out_buf[3] = len_bytes[1];
+        out_buf[4..4 + IO_CONFIG_PAYLOAD_LEN].copy_from_slice(&self.to_bytes());
+        out_buf[IO_CONFIG_PACKET_LEN - 1] =
+            MicroVm::compute_crc8(&out_buf[1..IO_CONFIG_PACKET_LEN - 1]);
+        Ok(IO_CONFIG_PACKET_LEN)
+    }
+}
 
 /// RETAIN area (Flash-latched): `M64..M95` = `bit_mem[0x80..0xA0]`, `D96..D127` = `word_mem[0x80..0xA0]`
 pub const RETAIN_BIT_START: usize = 0x80;
@@ -134,6 +330,8 @@ pub struct MicroVm {
     pub uart_tx_prev: [bool; MAX_UART_INSTANCES],
     /// Previous EN state per edge slot for edge-triggered function blocks (Shift / ShiftReg)
     pub fb_edge_prev: [u8; MAX_FB_EDGE_SLOTS],
+    /// Runtime-configurable Hardware I/O Pin Mapping (`X0..X7`, `Y0..Y7`, `status_led`, `flags`)
+    pub io_config: HardwareIoConfig,
 }
 
 impl Default for MicroVm {
@@ -181,6 +379,7 @@ impl MicroVm {
             uart_tx_req: [false; MAX_UART_INSTANCES],
             uart_tx_prev: [false; MAX_UART_INSTANCES],
             fb_edge_prev: [0; MAX_FB_EDGE_SLOTS],
+            io_config: HardwareIoConfig::default_rp2040(),
         }
     }
 
@@ -1106,6 +1305,15 @@ impl MicroVm {
                 }
                 Ok(CMD_ENTER_BOOTSEL)
             }
+            CMD_GET_IO_CONFIG => Ok(CMD_GET_IO_CONFIG),
+            CMD_SET_IO_CONFIG => {
+                if let Some(cfg) = HardwareIoConfig::from_bytes(payload) {
+                    self.io_config = cfg;
+                    Ok(CMD_SET_IO_CONFIG)
+                } else {
+                    Err("Invalid CMD_SET_IO_CONFIG payload")
+                }
+            }
             _ => Err("Unknown command code"),
         }
     }
@@ -1700,6 +1908,50 @@ mod tests {
         assert_eq!(vm.word_mem[0x80], 99);
         assert_eq!(vm.word_mem[0x9F], -3);
         assert_eq!(vm.word_mem[0xA0], 0);
+    }
+
+    #[test]
+    fn test_vm_runtime_io_config_packets() {
+        let mut vm = MicroVm::new();
+        assert_eq!(vm.io_config, HardwareIoConfig::default_rp2040());
+
+        // 1. Test CMD_GET_IO_CONFIG request and response packet encoding
+        let mut get_pkt = [PACKET_SOF, CMD_GET_IO_CONFIG, 0x00, 0x00, 0x00];
+        get_pkt[4] = MicroVm::compute_crc8(&get_pkt[1..4]);
+        assert_eq!(vm.process_serial_packet(&get_pkt), Ok(CMD_GET_IO_CONFIG));
+
+        let mut resp_buf = [0u8; IO_CONFIG_PACKET_LEN];
+        let written = vm.io_config.write_response_packet(&mut resp_buf).unwrap();
+        assert_eq!(written, IO_CONFIG_PACKET_LEN);
+        assert_eq!(resp_buf[0], PACKET_SOF);
+        assert_eq!(resp_buf[1], CMD_GET_IO_CONFIG_RESPONSE);
+
+        // 2. Test CMD_SET_IO_CONFIG with custom pin assignment + sanitization of reserved/duplicate pins
+        let mut custom_cfg = HardwareIoConfig::default_rp2040();
+        custom_cfg.input_pins[0] = 16; // X0 -> GP16
+        custom_cfg.input_pins[4] = 17; // X4 -> GP17
+        custom_cfg.output_pins[0] = 18; // Y0 -> GP18
+        custom_cfg.output_pins[6] = 19; // Y6 -> GP19
+        custom_cfg.set_input_active_low(false);
+        custom_cfg.set_input_pull_up(false);
+
+        let payload = custom_cfg.to_bytes();
+        let mut set_pkt = [0u8; IO_CONFIG_PACKET_LEN];
+        set_pkt[0] = PACKET_SOF;
+        set_pkt[1] = CMD_SET_IO_CONFIG;
+        set_pkt[2] = IO_CONFIG_PAYLOAD_LEN as u8;
+        set_pkt[3] = 0x00;
+        set_pkt[4..4 + IO_CONFIG_PAYLOAD_LEN].copy_from_slice(&payload);
+        set_pkt[IO_CONFIG_PACKET_LEN - 1] =
+            MicroVm::compute_crc8(&set_pkt[1..IO_CONFIG_PACKET_LEN - 1]);
+
+        assert_eq!(vm.process_serial_packet(&set_pkt), Ok(CMD_SET_IO_CONFIG));
+        assert_eq!(vm.io_config.input_pins[0], 16);
+        assert_eq!(vm.io_config.input_pins[4], 17);
+        assert_eq!(vm.io_config.output_pins[0], 18);
+        assert_eq!(vm.io_config.output_pins[6], 19);
+        assert!(!vm.io_config.input_active_low());
+        assert!(!vm.io_config.input_pull_up());
     }
 }
 

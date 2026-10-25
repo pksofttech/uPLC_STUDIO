@@ -4,6 +4,10 @@ use crate::il_format::IlParser;
 use crate::ladder::{parse_int_literal, CoilMode, ContactMode, IOPortMapping, LadderElement, LadderProgram, Rung, TypeTag};
 use crate::simulation::bitwise_opcode;
 use uplc_vm::{OPND_KIND_BIT, OPND_KIND_CONST, OPND_KIND_WORD, SHIFT_EDGE_FLAG};
+pub use uplc_vm::{
+    HardwareIoConfig, IO_CONFIG_PACKET_LEN, IO_CONFIG_PAYLOAD_LEN, IO_FLAG_INPUT_ACTIVE_LOW,
+    IO_FLAG_INPUT_PULL_UP, IO_FLAG_STATUS_LED_HEARTBEAT, PIN_UNASSIGNED,
+};
 
 /// Start of Frame byte for Serial Packet Protocol
 pub const PACKET_SOF: u8 = 0xAA;
@@ -32,6 +36,10 @@ pub enum PlcSerialCommand {
     PersistClear = 0x09,
     /// 0x0A: Safely stop PLC, save RETAIN area, and reboot RP2040 into USB BOOTSEL mode (`RPI-RP2`)
     EnterBootsel = 0x0A,
+    /// 0x0B: Read Runtime Hardware I/O Pin Mapping (`HardwareIoConfig`) from PLC
+    GetIoConfig = 0x0B,
+    /// 0x0C: Apply & Save Runtime Hardware I/O Pin Mapping (`HardwareIoConfig`) to PLC Flash (Sector 509)
+    SetIoConfig = 0x0C,
     /// 0x02 (Payload = 0x00): Stop / HALT PLC Scan Execution & Safe Output Shutdown
     StopPlc = 0x12,
 }
@@ -66,6 +74,63 @@ impl PlcSerialCommand {
         let crc = BytecodeProgram::compute_crc8(&buf[1..10]);
         buf.push(crc);
         buf
+    }
+
+    /// Create CMD 0x0B packet: `[0xAA, 0x0B, 0x00, 0x00, CRC8]`
+    pub fn create_get_io_config_packet() -> Vec<u8> {
+        let mut buf = vec![PACKET_SOF, 0x0B, 0x00, 0x00];
+        let crc = BytecodeProgram::compute_crc8(&buf[1..4]);
+        buf.push(crc);
+        buf
+    }
+
+    /// Create CMD 0x0C packet: `[0xAA, 0x0C, 18, 0, <18-byte HardwareIoConfig>, CRC8]`
+    pub fn create_set_io_config_packet(cfg: &HardwareIoConfig) -> Vec<u8> {
+        let payload = cfg.to_bytes();
+        let len = (payload.len() as u16).to_le_bytes();
+        let mut buf = Vec::with_capacity(5 + payload.len());
+        buf.push(PACKET_SOF);
+        buf.push(0x0C); // CMD_SET_IO_CONFIG
+        buf.push(len[0]);
+        buf.push(len[1]);
+        buf.extend_from_slice(&payload);
+        let crc = BytecodeProgram::compute_crc8(&buf[1..]);
+        buf.push(crc);
+        buf
+    }
+
+    /// Parse a complete `CMD_GET_IO_CONFIG_RESPONSE (0x8B)` frame (`23 bytes`)
+    pub fn parse_io_config_response(packet: &[u8]) -> Result<HardwareIoConfig, String> {
+        if packet.len() < IO_CONFIG_PACKET_LEN {
+            return Err(format!(
+                "Packet too short for IO config response (expected {} bytes, got {})",
+                IO_CONFIG_PACKET_LEN,
+                packet.len()
+            ));
+        }
+        if packet[0] != PACKET_SOF {
+            return Err("Invalid SOF byte (expected 0xAA)".to_string());
+        }
+        if packet[1] != 0x8B {
+            return Err(format!("Unexpected command ID 0x{:02X} (expected 0x8B)", packet[1]));
+        }
+        let len = u16::from_le_bytes([packet[2], packet[3]]) as usize;
+        if len != IO_CONFIG_PAYLOAD_LEN {
+            return Err(format!(
+                "Unexpected IO config payload length {} (expected {})",
+                len, IO_CONFIG_PAYLOAD_LEN
+            ));
+        }
+        let expected_crc = packet[4 + len];
+        let actual_crc = BytecodeProgram::compute_crc8(&packet[1..4 + len]);
+        if actual_crc != expected_crc {
+            return Err(format!(
+                "CRC8 checksum error: computed 0x{:02X}, received 0x{:02X}",
+                actual_crc, expected_crc
+            ));
+        }
+        HardwareIoConfig::from_bytes(&packet[4..4 + len])
+            .ok_or_else(|| "Failed to decode HardwareIoConfig payload".to_string())
     }
 }
 
@@ -742,6 +807,11 @@ impl BytecodeProgram {
             PlcSerialCommand::PersistSave => (0x08u8, Vec::new()),
             PlcSerialCommand::PersistClear => (0x09u8, Vec::new()),
             PlcSerialCommand::EnterBootsel => (0x0Au8, Vec::new()),
+            PlcSerialCommand::GetIoConfig => (0x0Bu8, Vec::new()),
+            PlcSerialCommand::SetIoConfig => (
+                0x0Cu8,
+                HardwareIoConfig::default_rp2040().to_bytes().to_vec(),
+            ),
         };
         let len = (payload.len() as u16).to_le_bytes();
         let mut packet = Vec::with_capacity(5 + payload.len());
