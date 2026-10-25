@@ -18,7 +18,6 @@ use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_rp::bind_interrupts;
 use embassy_rp::flash::{Async, Flash, ERASE_SIZE};
-use embassy_rp::gpio::Output;
 use embassy_rp::peripherals::{FLASH, UART0, UART1, USB};
 use embassy_rp::uart::{self, BufferedInterruptHandler, BufferedUart};
 use embassy_rp::usb::{Driver as UsbDriver, InterruptHandler as UsbInterruptHandler};
@@ -100,7 +99,6 @@ async fn main(spawner: Spawner) {
     // -------------------------------------------------------------------------
     let mut flash = Flash::<_, Async, FLASH_SIZE_BYTES>::new(p.FLASH, p.DMA_CH0);
     let boot_io_cfg = load_io_config_from_flash(&mut flash).unwrap_or_else(HardwareIoConfig::default_rp2040);
-    apply_runtime_io_config(None, &boot_io_cfg);
     {
         let mut vm = SHARED_VM.lock().await;
         vm.io_config = boot_io_cfg;
@@ -163,12 +161,12 @@ async fn main(spawner: Spawner) {
 
     // -------------------------------------------------------------------------
     // 5. Configure Buffered UART1 for Modbus RTU RS-485
-    //    GP8 = TX, GP9 = RX, DE/RE = None (Auto-direction hardware)
+    //    Default: GP8 = TX, GP9 = RX (or GP4 = TX, GP5 = RX via HardwareIoConfig)
     // -------------------------------------------------------------------------
     static MB_TX_BUF: StaticCell<[u8; 256]> = StaticCell::new();
     static MB_RX_BUF: StaticCell<[u8; 512]> = StaticCell::new();
     let mut mb_uart_cfg = uart::Config::default();
-    mb_uart_cfg.baudrate = MODBUS_BAUD_RATE;
+    mb_uart_cfg.baudrate = boot_io_cfg.rs485_baud_rate();
 
     let mb_uart = BufferedUart::new(
         p.UART1,
@@ -180,8 +178,11 @@ async fn main(spawner: Spawner) {
         mb_uart_cfg,
     );
 
-    // Spawn Modbus RTU Master Task (DE/RE = None)
-    spawner.spawn(modbus_master_task(mb_uart, None)).unwrap();
+    // Apply runtime I/O & RS-485 pin mux after UART1 is initialized so custom GP4/GP5 or GP8/GP9 mappings take effect
+    apply_runtime_io_config(None, &boot_io_cfg);
+
+    // Spawn Modbus RTU Master Task
+    spawner.spawn(modbus_master_task(mb_uart)).unwrap();
 
     // -------------------------------------------------------------------------
     // 5b. Configure Buffered UART0 for User UART_SEND / UART_RECV Function Blocks
@@ -532,7 +533,7 @@ async fn plc_scan_task(
         let gpio_in_mask = embassy_rp::pac::SIO.gpio_in(0).read();
         let active_low = io_cfg.input_active_low();
         for (i, &pin) in io_cfg.input_pins.iter().enumerate() {
-            if pin < 30 && !HardwareIoConfig::is_reserved_peripheral_pin(pin) {
+            if pin < 30 && !io_cfg.is_pin_reserved_for_config(pin) {
                 let raw_high = (gpio_in_mask & (1u32 << pin)) != 0;
                 let is_active = if active_low { !raw_high } else { raw_high };
                 vm.set_digital_input(i as u8, is_active);
@@ -899,12 +900,19 @@ fn load_io_config_from_flash(
         if magic == FLASH_IO_CONFIG_MAGIC {
             let version = u16::from_le_bytes([page_buf[4], page_buf[5]]);
             let expected_crc = u16::from_le_bytes([page_buf[6], page_buf[7]]);
-            let payload = &page_buf[8..8 + IO_CONFIG_PAYLOAD_LEN];
-            let actual_crc = MicroVm::compute_crc16(payload);
-            if version == 1 && actual_crc == expected_crc {
-                if let Some(cfg) = HardwareIoConfig::from_bytes(payload) {
-                    info!("Loaded custom Hardware I/O Pin Mapping from Flash (CRC16: 0x{:04X})", actual_crc);
-                    return Some(cfg);
+            if version == 1 {
+                for &len in &[IO_CONFIG_PAYLOAD_LEN, uplc_vm::LEGACY_IO_CONFIG_PAYLOAD_LEN] {
+                    let payload = &page_buf[8..8 + len];
+                    let actual_crc = MicroVm::compute_crc16(payload);
+                    if actual_crc == expected_crc {
+                        if let Some(cfg) = HardwareIoConfig::from_bytes(payload) {
+                            info!(
+                                "Loaded custom Hardware I/O Pin Mapping from Flash ({}B, CRC16: 0x{:04X})",
+                                len, actual_crc
+                            );
+                            return Some(cfg);
+                        }
+                    }
                 }
             }
         }
@@ -1014,12 +1022,11 @@ async fn uart_task(mut uart: BufferedUart<'static, UART0>) {
 #[embassy_executor::task]
 async fn modbus_master_task(
     mut uart: BufferedUart<'static, UART1>,
-    mut de_re: Option<Output<'static>>,
 ) {
     use embedded_io_async::{Read, Write};
 
     info!(
-        "Modbus RTU Master Task Ready on UART1 (GP8=TX, GP9=RX @ {} baud)...",
+        "Modbus RTU Master Task Ready on UART1 (Default {} baud)...",
         MODBUS_BAUD_RATE
     );
 
@@ -1034,26 +1041,28 @@ async fn modbus_master_task(
         };
 
         if let Some(job) = pending_job {
-            let (word_snapshot, bit_snapshot) = {
+            let (word_snapshot, bit_snapshot, de_re_pin, has_de_re) = {
                 let vm = SHARED_VM.lock().await;
-                (vm.word_mem, vm.bit_mem)
+                let pin = vm.io_config.rs485_de_re_pin;
+                let valid = pin < 30 && !vm.io_config.is_pin_reserved_for_config(pin);
+                (vm.word_mem, vm.bit_mem, pin, valid)
             };
 
             match uplc_vm::encode_rtu_request(&job, &word_snapshot, &bit_snapshot, &mut tx_buf) {
                 Ok(tx_len) => {
                     // Set DE/RE pin HIGH (Driver Transmit mode) if configured
-                    if let Some(pin) = de_re.as_mut() {
-                        pin.set_high();
-                        cortex_m::asm::delay(100);
+                    if has_de_re {
+                        write_runtime_gpio_pin(de_re_pin, true);
+                        cortex_m::asm::delay(200);
                     }
 
                     let write_res = uart.write_all(&tx_buf[..tx_len]).await;
                     let flush_res = uart.flush().await;
 
                     // Allow line settle time before returning to receive mode
-                    if let Some(pin) = de_re.as_mut() {
+                    if has_de_re {
                         cortex_m::asm::delay(500);
-                        pin.set_low();
+                        write_runtime_gpio_pin(de_re_pin, false);
                     }
 
                     if write_res.is_err() || flush_res.is_err() {

@@ -6,7 +6,8 @@ use crate::simulation::bitwise_opcode;
 use uplc_vm::{OPND_KIND_BIT, OPND_KIND_CONST, OPND_KIND_WORD, SHIFT_EDGE_FLAG};
 pub use uplc_vm::{
     HardwareIoConfig, IO_CONFIG_PACKET_LEN, IO_CONFIG_PAYLOAD_LEN, IO_FLAG_INPUT_ACTIVE_LOW,
-    IO_FLAG_INPUT_PULL_UP, IO_FLAG_STATUS_LED_HEARTBEAT, PIN_UNASSIGNED,
+    IO_FLAG_INPUT_PULL_UP, IO_FLAG_STATUS_LED_HEARTBEAT, LEGACY_IO_CONFIG_PAYLOAD_LEN,
+    PIN_UNASSIGNED, RS485_FLAG_ALT_PINS_GP4_GP5,
 };
 
 /// Start of Frame byte for Serial Packet Protocol
@@ -99,12 +100,12 @@ impl PlcSerialCommand {
         buf
     }
 
-    /// Parse a complete `CMD_GET_IO_CONFIG_RESPONSE (0x8B)` frame (`23 bytes`)
+    /// Parse a complete `CMD_GET_IO_CONFIG_RESPONSE (0x8B)` frame (`23` or `25 bytes`)
     pub fn parse_io_config_response(packet: &[u8]) -> Result<HardwareIoConfig, String> {
-        if packet.len() < IO_CONFIG_PACKET_LEN {
+        if packet.len() < 5 + LEGACY_IO_CONFIG_PAYLOAD_LEN {
             return Err(format!(
-                "Packet too short for IO config response (expected {} bytes, got {})",
-                IO_CONFIG_PACKET_LEN,
+                "Packet too short for IO config response (expected at least {} bytes, got {})",
+                5 + LEGACY_IO_CONFIG_PAYLOAD_LEN,
                 packet.len()
             ));
         }
@@ -115,10 +116,17 @@ impl PlcSerialCommand {
             return Err(format!("Unexpected command ID 0x{:02X} (expected 0x8B)", packet[1]));
         }
         let len = u16::from_le_bytes([packet[2], packet[3]]) as usize;
-        if len != IO_CONFIG_PAYLOAD_LEN {
+        if len != IO_CONFIG_PAYLOAD_LEN && len != LEGACY_IO_CONFIG_PAYLOAD_LEN {
             return Err(format!(
-                "Unexpected IO config payload length {} (expected {})",
-                len, IO_CONFIG_PAYLOAD_LEN
+                "Unexpected IO config payload length {} (expected {} or {})",
+                len, IO_CONFIG_PAYLOAD_LEN, LEGACY_IO_CONFIG_PAYLOAD_LEN
+            ));
+        }
+        if packet.len() < 5 + len {
+            return Err(format!(
+                "Incomplete IO config packet (expected {} bytes, got {})",
+                5 + len,
+                packet.len()
             ));
         }
         let expected_crc = packet[4 + len];

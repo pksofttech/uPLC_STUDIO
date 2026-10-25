@@ -10,7 +10,8 @@ pub use bytecode::{
     BytecodeCompiler, BytecodeInstruction, BytecodeProgram, CompileReport, HardwareIoConfig,
     MemoryMapEntry, MemoryRegion, PlcSerialCommand, PlcStatusSnapshot, VmOpcode,
     IO_CONFIG_PACKET_LEN, IO_CONFIG_PAYLOAD_LEN, IO_FLAG_INPUT_ACTIVE_LOW, IO_FLAG_INPUT_PULL_UP,
-    IO_FLAG_STATUS_LED_HEARTBEAT, PACKET_SOF, PIN_UNASSIGNED,
+    IO_FLAG_STATUS_LED_HEARTBEAT, LEGACY_IO_CONFIG_PAYLOAD_LEN, PACKET_SOF, PIN_UNASSIGNED,
+    RS485_FLAG_ALT_PINS_GP4_GP5,
 };
 pub use document::Document;
 pub use ladder::{

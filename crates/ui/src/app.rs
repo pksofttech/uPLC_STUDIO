@@ -119,6 +119,10 @@ pub struct AppSettings {
     pub rp2040_status_led_pin: u8,
     #[serde(default = "default_rp2040_io_flags")]
     pub rp2040_io_flags: u8,
+    #[serde(default = "default_rp2040_rs485_de_re_pin")]
+    pub rp2040_rs485_de_re_pin: u8,
+    #[serde(default = "default_rp2040_rs485_config")]
+    pub rp2040_rs485_config: u8,
 }
 
 fn default_rp2040_input_pins() -> [u8; 8] {
@@ -135,6 +139,14 @@ fn default_rp2040_status_led_pin() -> u8 {
 
 fn default_rp2040_io_flags() -> u8 {
     my_canvas_core::HardwareIoConfig::default_rp2040().flags
+}
+
+fn default_rp2040_rs485_de_re_pin() -> u8 {
+    my_canvas_core::HardwareIoConfig::default_rp2040().rs485_de_re_pin
+}
+
+fn default_rp2040_rs485_config() -> u8 {
+    my_canvas_core::HardwareIoConfig::default_rp2040().rs485_config
 }
 
 fn default_update_repo_owner() -> String {
@@ -194,6 +206,8 @@ impl Default for AppSettings {
             rp2040_output_pins: default_rp2040_output_pins(),
             rp2040_status_led_pin: default_rp2040_status_led_pin(),
             rp2040_io_flags: default_rp2040_io_flags(),
+            rp2040_rs485_de_re_pin: default_rp2040_rs485_de_re_pin(),
+            rp2040_rs485_config: default_rp2040_rs485_config(),
         }
     }
 }
@@ -380,6 +394,8 @@ impl Default for CanvasApp {
             output_pins: settings.rp2040_output_pins,
             status_led_pin: settings.rp2040_status_led_pin,
             flags: settings.rp2040_io_flags,
+            rs485_de_re_pin: settings.rp2040_rs485_de_re_pin,
+            rs485_config: settings.rp2040_rs485_config,
         };
         hw_io_config.sanitize();
 
@@ -833,12 +849,14 @@ impl CanvasApp {
             rp2040_output_pins: self.hw_io_config.output_pins,
             rp2040_status_led_pin: self.hw_io_config.status_led_pin,
             rp2040_io_flags: self.hw_io_config.flags,
+            rp2040_rs485_de_re_pin: self.hw_io_config.rs485_de_re_pin,
+            rp2040_rs485_config: self.hw_io_config.rs485_config,
         }
     }
 
     /// Format an RP2040 GPIO pin index (`0..=29` or `0xFF`) for display
     pub fn format_rp2040_pin(pin: u8) -> String {
-        if pin < 30 && !my_canvas_core::HardwareIoConfig::is_reserved_peripheral_pin(pin) {
+        if pin < 30 && !matches!(pin, 0 | 1 | 26 | 27 | 28) {
             format!("GP{}", pin)
         } else {
             "-".to_string()
@@ -938,11 +956,13 @@ impl CanvasApp {
                             if pos > 0 {
                                 rx_accum.drain(..pos);
                             }
-                            if rx_accum.len() >= my_canvas_core::IO_CONFIG_PACKET_LEN {
-                                let frame: Vec<u8> = rx_accum
-                                    .drain(..my_canvas_core::IO_CONFIG_PACKET_LEN)
-                                    .collect();
-                                return my_canvas_core::PlcSerialCommand::parse_io_config_response(&frame);
+                            if rx_accum.len() >= 4 {
+                                let payload_len = u16::from_le_bytes([rx_accum[2], rx_accum[3]]) as usize;
+                                let total_len = 5 + payload_len;
+                                if rx_accum.len() >= total_len {
+                                    let frame: Vec<u8> = rx_accum.drain(..total_len).collect();
+                                    return my_canvas_core::PlcSerialCommand::parse_io_config_response(&frame);
+                                }
                             }
                         }
                     }
@@ -993,22 +1013,65 @@ impl CanvasApp {
         let palette = self.theme.palette();
         let mut changed = false;
 
-        // Available assignable GPIO pins on RP2040 (excludes UART0 GP0..1, UART1 GP8..9, ADC GP26..28)
-        const ASSIGNABLE_PINS: [u8; 24] = [
+        // Candidate GPIO pins on RP2040 (excludes UART0 GP0..1 and ADC GP26..28; active UART1 TX/RX pair is filtered out dynamically)
+        const ALL_CANDIDATE_PINS: [u8; 26] = [
             my_canvas_core::PIN_UNASSIGNED,
-            2, 3, 4, 5, 6, 7, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 29,
+            2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+            29,
         ];
+        let (rs485_tx, rs485_rx) = self.hw_io_config.rs485_tx_rx_pins();
+        let assignable_pins: Vec<u8> = ALL_CANDIDATE_PINS
+            .iter()
+            .copied()
+            .filter(|&p| p == my_canvas_core::PIN_UNASSIGNED || (p != rs485_tx && p != rs485_rx))
+            .collect();
 
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new("🔧 RP2040 Runtime GPIO Pin Mapping (No Firmware Rebuild Required)")
-                    .color(palette.accent_heading)
-                    .strong(),
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(8.0, 6.0);
+
+            // Header & Action Toolbar Row
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    RichText::new("🔧 RP2040 Runtime GPIO & RS-485 Pin Mapping")
+                        .color(palette.accent_heading)
+                        .strong()
+                        .size(12.5),
+                );
+                ui.separator();
+
+                let read_btn = egui::Button::new(
+                    RichText::new("📥 Read from PLC (0x0B)")
+                        .strong()
+                        .size(11.0),
+                )
+                .corner_radius(egui::CornerRadius::same(5));
                 if ui
-                    .small_button("↺ Reset Default Pinout")
-                    .on_hover_text("Restore factory default RP2040 GPIO pin mapping (X0..X3 = GP10..GP13, Y0..Y5 = GP15,14,7,6,2,3, LED = GP25)")
+                    .add(read_btn)
+                    .on_hover_text("Read current GPIO & RS-485 pin mapping stored on the connected RP2040 PLC via USB-CDC (CMD 0x0B)")
+                    .clicked()
+                {
+                    let _ = self.read_io_config_from_plc();
+                }
+
+                let apply_btn = egui::Button::new(
+                    RichText::new("⚡ Apply & Save to PLC Flash (0x0C)")
+                        .strong()
+                        .size(11.0)
+                        .color(egui::Color32::WHITE),
+                )
+                .fill(egui::Color32::from_rgb(39, 174, 96))
+                .corner_radius(egui::CornerRadius::same(5));
+                if ui
+                    .add(apply_btn)
+                    .on_hover_text("Immediately reconfigure RP2040 GPIO & RS-485 pins at runtime and save to Flash Sector 509 (0x1FD000) without rebuilding firmware!")
+                    .clicked()
+                {
+                    self.apply_io_config_to_plc();
+                }
+
+                if ui
+                    .button(RichText::new("↺ Reset Default").size(11.0))
+                    .on_hover_text("Restore factory default RP2040 GPIO & RS-485 mapping (X0..X3 = GP10..GP13, Y0..Y5 = GP15,14,7,6,2,3, RS-485 = GP8/GP9 @ 9600, LED = GP25)")
                     .clicked()
                 {
                     self.hw_io_config = my_canvas_core::HardwareIoConfig::default_rp2040();
@@ -1016,48 +1079,67 @@ impl CanvasApp {
                     changed = true;
                 }
             });
-        });
 
-        ui.label(
-            RichText::new(
-                "Reserved peripherals: UART0 (GP0=TX, GP1=RX) | Modbus RS-485 UART1 (GP8=TX, GP9=RX) | Analog Inputs (GP26=AI0, GP27=AI1, GP28=AI2)",
-            )
-            .size(10.5)
-            .color(palette.symbol_subtext),
-        );
-        ui.add_space(4.0);
-
-        ui.columns(2, |cols| {
-            // Left Column: Digital Inputs X0..X7 (%IX0.0..%IX0.7)
-            cols[0].label(
-                RichText::new("📥 Digital Inputs X0..X7 (%IX0.0..%IX0.7)")
-                    .strong()
-                    .size(11.5)
-                    .color(palette.accent_ok),
+            let de_re_summary = if self.hw_io_config.rs485_de_re_pin == my_canvas_core::PIN_UNASSIGNED {
+                "Auto-Direction (None)".to_string()
+            } else {
+                format!("GP{}", self.hw_io_config.rs485_de_re_pin)
+            };
+            ui.label(
+                RichText::new(format!(
+                    "Reserved peripherals: UART0 (GP0=TX, GP1=RX) • Modbus RS-485 UART1 (GP{}=TX, GP{}=RX, DE/RE={}, {} bps) • Analog ADC (GP26..GP28)",
+                    rs485_tx,
+                    rs485_rx,
+                    de_re_summary,
+                    self.hw_io_config.rs485_baud_rate()
+                ))
+                .size(10.5)
+                .color(palette.symbol_subtext),
             );
-            egui::Grid::new(format!("{}_in_pins_grid", id_prefix))
+
+            // Unified 7-Column Grid for Inputs X0..X7 (Left) & Outputs Y0..Y7 (Right) — prevents any column overlap
+            egui::Grid::new(format!("{}_io_pins_unified_grid", id_prefix))
                 .striped(true)
-                .num_columns(3)
-                .spacing([10.0, 4.0])
-                .show(&mut cols[0], |ui| {
-                    ui.strong("PLC");
-                    ui.strong("IEC 61131-3");
-                    ui.strong("RP2040 GPIO");
+                .num_columns(7)
+                .min_col_width(36.0)
+                .spacing([12.0, 5.0])
+                .show(ui, |ui| {
+                    ui.label(RichText::new("Input").strong().color(palette.accent_ok));
+                    ui.label(RichText::new("IEC Addr").strong().color(palette.accent_ok));
+                    ui.label(RichText::new("RP2040 GPIO Pin").strong().color(palette.accent_ok));
+                    ui.label(RichText::new("│").weak());
+                    ui.label(
+                        RichText::new("Output")
+                            .strong()
+                            .color(egui::Color32::from_rgb(52, 152, 219)),
+                    );
+                    ui.label(
+                        RichText::new("IEC Addr")
+                            .strong()
+                            .color(egui::Color32::from_rgb(52, 152, 219)),
+                    );
+                    ui.label(
+                        RichText::new("RP2040 GPIO Pin")
+                            .strong()
+                            .color(egui::Color32::from_rgb(52, 152, 219)),
+                    );
                     ui.end_row();
+
                     for i in 0..8 {
+                        // Left: Digital Input Xi
                         ui.monospace(format!("X{}", i));
                         ui.monospace(format!("%IX0.{}", i));
-                        let cur_pin = self.hw_io_config.input_pins[i];
-                        let cur_label = if cur_pin == my_canvas_core::PIN_UNASSIGNED {
+                        let in_pin = self.hw_io_config.input_pins[i];
+                        let in_label = if in_pin == my_canvas_core::PIN_UNASSIGNED {
                             "Disabled (-)".to_string()
                         } else {
-                            format!("GP{}", cur_pin)
+                            format!("GP{}", in_pin)
                         };
                         egui::ComboBox::from_id_salt(format!("{}_in_pin_{}", id_prefix, i))
-                            .width(110.0)
-                            .selected_text(cur_label)
+                            .width(115.0)
+                            .selected_text(in_label)
                             .show_ui(ui, |ui| {
-                                for &p in &ASSIGNABLE_PINS {
+                                for &p in &assignable_pins {
                                     let lbl = if p == my_canvas_core::PIN_UNASSIGNED {
                                         "Disabled (-)".to_string()
                                     } else {
@@ -1072,40 +1154,23 @@ impl CanvasApp {
                                     }
                                 }
                             });
-                        ui.end_row();
-                    }
-                });
 
-            // Right Column: Digital Outputs Y0..Y7 (%QX0.0..%QX0.7)
-            cols[1].label(
-                RichText::new("📤 Digital Outputs Y0..Y7 (%QX0.0..%QX0.7)")
-                    .strong()
-                    .size(11.5)
-                    .color(egui::Color32::from_rgb(52, 152, 219)),
-            );
-            egui::Grid::new(format!("{}_out_pins_grid", id_prefix))
-                .striped(true)
-                .num_columns(3)
-                .spacing([10.0, 4.0])
-                .show(&mut cols[1], |ui| {
-                    ui.strong("PLC");
-                    ui.strong("IEC 61131-3");
-                    ui.strong("RP2040 GPIO");
-                    ui.end_row();
-                    for i in 0..8 {
+                        ui.label(RichText::new("│").weak());
+
+                        // Right: Digital Output Yi
                         ui.monospace(format!("Y{}", i));
                         ui.monospace(format!("%QX0.{}", i));
-                        let cur_pin = self.hw_io_config.output_pins[i];
-                        let cur_label = if cur_pin == my_canvas_core::PIN_UNASSIGNED {
+                        let out_pin = self.hw_io_config.output_pins[i];
+                        let out_label = if out_pin == my_canvas_core::PIN_UNASSIGNED {
                             "Disabled (-)".to_string()
                         } else {
-                            format!("GP{}", cur_pin)
+                            format!("GP{}", out_pin)
                         };
                         egui::ComboBox::from_id_salt(format!("{}_out_pin_{}", id_prefix, i))
-                            .width(110.0)
-                            .selected_text(cur_label)
+                            .width(115.0)
+                            .selected_text(out_label)
                             .show_ui(ui, |ui| {
-                                for &p in &ASSIGNABLE_PINS {
+                                for &p in &assignable_pins {
                                     let lbl = if p == my_canvas_core::PIN_UNASSIGNED {
                                         "Disabled (-)".to_string()
                                     } else {
@@ -1123,102 +1188,173 @@ impl CanvasApp {
                         ui.end_row();
                     }
                 });
-        });
 
-        ui.add_space(4.0);
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("Status LED:").strong());
-            let led_pin = self.hw_io_config.status_led_pin;
-            let led_lbl = if led_pin == my_canvas_core::PIN_UNASSIGNED {
-                "Disabled (-)".to_string()
-            } else if led_pin == 25 {
-                "GP25 (Onboard LED)".to_string()
-            } else {
-                format!("GP{}", led_pin)
-            };
-            egui::ComboBox::from_id_salt(format!("{}_status_led_pin", id_prefix))
-                .width(135.0)
-                .selected_text(led_lbl)
-                .show_ui(ui, |ui| {
-                    for &p in &ASSIGNABLE_PINS {
-                        let lbl = if p == my_canvas_core::PIN_UNASSIGNED {
-                            "Disabled (-)".to_string()
-                        } else if p == 25 {
-                            "GP25 (Onboard LED)".to_string()
-                        } else {
-                            format!("GP{}", p)
-                        };
+            ui.separator();
+
+            // RS-485 (Modbus RTU — UART1) Configuration Row
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(10.0, 6.0);
+                ui.label(
+                    RichText::new("📡 RS-485 (Modbus RTU):")
+                        .strong()
+                        .color(palette.accent_heading),
+                );
+
+                // 1. UART1 TX/RX Pin Pair selector
+                ui.label(RichText::new("UART1 TX/RX:").strong());
+                let mut use_alt_gp4_gp5 = self.hw_io_config.rs485_use_alt_pins_gp4_gp5();
+                let uart1_pair_lbl = if use_alt_gp4_gp5 {
+                    "GP4 (TX) / GP5 (RX) [Alt]"
+                } else {
+                    "GP8 (TX) / GP9 (RX) [Default]"
+                };
+                egui::ComboBox::from_id_salt(format!("{}_rs485_tx_rx_pair", id_prefix))
+                    .width(195.0)
+                    .selected_text(uart1_pair_lbl)
+                    .show_ui(ui, |ui| {
                         if ui
-                            .selectable_value(&mut self.hw_io_config.status_led_pin, p, lbl)
+                            .selectable_value(
+                                &mut use_alt_gp4_gp5,
+                                false,
+                                "GP8 (TX) / GP9 (RX) [Default]",
+                            )
                             .changed()
+                            || ui
+                                .selectable_value(
+                                    &mut use_alt_gp4_gp5,
+                                    true,
+                                    "GP4 (TX) / GP5 (RX) [Alt]",
+                                )
+                                .changed()
                         {
+                            self.hw_io_config
+                                .set_rs485_use_alt_pins_gp4_gp5(use_alt_gp4_gp5);
+                            self.hw_io_config.sanitize();
+                            self.sync_doc_io_mappings_from_hw_config();
                             changed = true;
                         }
-                    }
-                });
+                    });
 
-            let mut pull_up = self.hw_io_config.input_pull_up();
-            if ui
-                .checkbox(&mut pull_up, "Input Pull-Up")
-                .on_hover_text("Checked = Internal Pull-Up resistor; Unchecked = Internal Pull-Down resistor")
-                .changed()
-            {
-                self.hw_io_config.set_input_pull_up(pull_up);
-                changed = true;
-            }
+                // 2. DE/RE Direction Control Pin selector
+                ui.label(RichText::new("DE/RE Pin:").strong());
+                let de_pin = self.hw_io_config.rs485_de_re_pin;
+                let de_lbl = if de_pin == my_canvas_core::PIN_UNASSIGNED {
+                    "Auto-Direction (None)".to_string()
+                } else {
+                    format!("GP{}", de_pin)
+                };
+                egui::ComboBox::from_id_salt(format!("{}_rs485_de_re_pin", id_prefix))
+                    .width(155.0)
+                    .selected_text(de_lbl)
+                    .show_ui(ui, |ui| {
+                        for &p in &assignable_pins {
+                            let lbl = if p == my_canvas_core::PIN_UNASSIGNED {
+                                "Auto-Direction (None)".to_string()
+                            } else if p == 6 || p == 7 || p == 16 {
+                                format!("GP{} (Recommended)", p)
+                            } else {
+                                format!("GP{}", p)
+                            };
+                            if ui
+                                .selectable_value(&mut self.hw_io_config.rs485_de_re_pin, p, lbl)
+                                .changed()
+                            {
+                                self.hw_io_config.sanitize();
+                                self.sync_doc_io_mappings_from_hw_config();
+                                changed = true;
+                            }
+                        }
+                    });
 
-            let mut active_low = self.hw_io_config.input_active_low();
-            if ui
-                .checkbox(&mut active_low, "Input Active-Low (GND=ON)")
-                .on_hover_text("Checked = Active-Low (0V/GND triggers logic 1); Unchecked = Active-High (3.3V triggers logic 1)")
-                .changed()
-            {
-                self.hw_io_config.set_input_active_low(active_low);
-                changed = true;
-            }
+                // 3. Modbus RTU Baud Rate selector
+                ui.label(RichText::new("Baud Rate:").strong());
+                let current_baud = self.hw_io_config.rs485_baud_rate();
+                egui::ComboBox::from_id_salt(format!("{}_rs485_baud", id_prefix))
+                    .width(115.0)
+                    .selected_text(format!("{} bps", current_baud))
+                    .show_ui(ui, |ui| {
+                        for &baud in &[9_600u32, 19_200, 38_400, 57_600, 115_200] {
+                            let lbl = if baud == 9_600 {
+                                "9600 bps (Default)".to_string()
+                            } else {
+                                format!("{} bps", baud)
+                            };
+                            if ui
+                                .selectable_label(current_baud == baud, lbl)
+                                .clicked()
+                            {
+                                self.hw_io_config.set_rs485_baud_rate(baud);
+                                changed = true;
+                            }
+                        }
+                    });
+            });
 
-            let mut led_hb = self.hw_io_config.status_led_heartbeat();
-            if ui
-                .checkbox(&mut led_hb, "RUN LED 1Hz Heartbeat")
-                .on_hover_text("Checked = 1 Hz blinking heartbeat in RUN mode; Unchecked = Solid ON in RUN mode")
-                .changed()
-            {
-                self.hw_io_config.set_status_led_heartbeat(led_hb);
-                changed = true;
-            }
-        });
+            ui.separator();
 
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            let read_btn = egui::Button::new(
-                RichText::new("📥 Read I/O Config from PLC (0x0B)")
-                    .strong()
-                    .size(11.5),
-            )
-            .corner_radius(egui::CornerRadius::same(5));
-            if ui
-                .add(read_btn)
-                .on_hover_text("Read current GPIO pin mapping stored on the connected RP2040 PLC via USB-CDC (CMD 0x0B)")
-                .clicked()
-            {
-                let _ = self.read_io_config_from_plc();
-            }
+            // Electrical & Status LED Options Row
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(10.0, 6.0);
+                ui.label(RichText::new("Status LED Pin:").strong());
+                let led_pin = self.hw_io_config.status_led_pin;
+                let led_lbl = if led_pin == my_canvas_core::PIN_UNASSIGNED {
+                    "Disabled (-)".to_string()
+                } else if led_pin == 25 {
+                    "GP25 (Onboard LED)".to_string()
+                } else {
+                    format!("GP{}", led_pin)
+                };
+                egui::ComboBox::from_id_salt(format!("{}_status_led_pin", id_prefix))
+                    .width(140.0)
+                    .selected_text(led_lbl)
+                    .show_ui(ui, |ui| {
+                        for &p in &assignable_pins {
+                            let lbl = if p == my_canvas_core::PIN_UNASSIGNED {
+                                "Disabled (-)".to_string()
+                            } else if p == 25 {
+                                "GP25 (Onboard LED)".to_string()
+                            } else {
+                                format!("GP{}", p)
+                            };
+                            if ui
+                                .selectable_value(&mut self.hw_io_config.status_led_pin, p, lbl)
+                                .changed()
+                            {
+                                changed = true;
+                            }
+                        }
+                    });
 
-            let apply_btn = egui::Button::new(
-                RichText::new("⚡ Apply & Save I/O Config to PLC Flash (0x0C)")
-                    .strong()
-                    .size(11.5)
-                    .color(egui::Color32::WHITE),
-            )
-            .fill(egui::Color32::from_rgb(39, 174, 96))
-            .corner_radius(egui::CornerRadius::same(5));
-            if ui
-                .add(apply_btn)
-                .on_hover_text("Immediately reconfigure RP2040 GPIO pins at runtime and save to Flash Sector 509 (0x1FD000) without rebuilding firmware!")
-                .clicked()
-            {
-                self.apply_io_config_to_plc();
-            }
+                let mut pull_up = self.hw_io_config.input_pull_up();
+                if ui
+                    .checkbox(&mut pull_up, "Input Pull-Up")
+                    .on_hover_text("Checked = Internal Pull-Up resistor; Unchecked = Internal Pull-Down resistor")
+                    .changed()
+                {
+                    self.hw_io_config.set_input_pull_up(pull_up);
+                    changed = true;
+                }
+
+                let mut active_low = self.hw_io_config.input_active_low();
+                if ui
+                    .checkbox(&mut active_low, "Input Active-Low (GND=ON)")
+                    .on_hover_text("Checked = Active-Low (0V/GND triggers logic 1); Unchecked = Active-High (3.3V triggers logic 1)")
+                    .changed()
+                {
+                    self.hw_io_config.set_input_active_low(active_low);
+                    changed = true;
+                }
+
+                let mut led_hb = self.hw_io_config.status_led_heartbeat();
+                if ui
+                    .checkbox(&mut led_hb, "RUN LED 1Hz Heartbeat")
+                    .on_hover_text("Checked = 1 Hz blinking heartbeat in RUN mode; Unchecked = Solid ON in RUN mode")
+                    .changed()
+                {
+                    self.hw_io_config.set_status_led_heartbeat(led_hb);
+                    changed = true;
+                }
+            });
         });
 
         changed
@@ -3262,15 +3398,20 @@ impl eframe::App for CanvasApp {
             Window::new("Settings & Hardware Configuration")
                 .order(egui::Order::Foreground)
                 .open(&mut open_io_config)
-                .min_size([460.0, 360.0])
+                .min_size([640.0, 480.0])
+                .default_size([680.0, 540.0])
                 .collapsible(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .show(ui.ctx(), |ui| {
-                    ui.label(
-                        RichText::new("Appearance & Environment Settings")
-                            .color(palette.accent_heading)
-                            .strong(),
-                    );
+                    egui::ScrollArea::vertical()
+                        .id_salt("settings_hw_cfg_scroll")
+                        .max_height(480.0)
+                        .show(ui, |ui| {
+                            ui.label(
+                                RichText::new("Appearance & Environment Settings")
+                                    .color(palette.accent_heading)
+                                    .strong(),
+                            );
                     ui.add_space(4.0);
 
                     egui::Grid::new("ui_theme_settings_grid")
@@ -3433,6 +3574,7 @@ impl eframe::App for CanvasApp {
                                 self.save_settings();
                             }
                         });
+                    });
                     });
                 });
 
@@ -3747,9 +3889,9 @@ impl eframe::App for CanvasApp {
                     // 3. Modern Segmented View Mode Tabs
                     ui.horizontal(|ui| {
                         let tab0_btn = egui::Button::new(
-                            RichText::new("📦 1. 32-Bit Bytecode & Packet Frame")
+                            RichText::new("📦 1. 32-Bit Bytecode")
                                 .strong()
-                                .size(12.0),
+                                .size(11.5),
                         )
                         .selected(self.update_plc_tab == 0)
                         .corner_radius(egui::CornerRadius::same(6));
@@ -3758,9 +3900,9 @@ impl eframe::App for CanvasApp {
                         }
 
                         let tab1_btn = egui::Button::new(
-                            RichText::new("🗺 2. Unified Memory Mapping (0x00..0xFF)")
+                            RichText::new("🗺 2. Memory Mapping (0x00..0xFF)")
                                 .strong()
-                                .size(12.0),
+                                .size(11.5),
                         )
                         .selected(self.update_plc_tab == 1)
                         .corner_radius(egui::CornerRadius::same(6));
@@ -3769,9 +3911,9 @@ impl eframe::App for CanvasApp {
                         }
 
                         let tab2_btn = egui::Button::new(
-                            RichText::new("🔧 3. RP2040 Hardware I/O Pin Mapping")
+                            RichText::new("🔧 3. RP2040 Hardware I/O Pins")
                                 .strong()
-                                .size(12.0),
+                                .size(11.5),
                         )
                         .selected(self.update_plc_tab == 2)
                         .corner_radius(egui::CornerRadius::same(6));
@@ -3781,7 +3923,7 @@ impl eframe::App for CanvasApp {
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui
-                                .small_button("📋 Copy Packet Hex")
+                                .small_button("📋 Copy Hex")
                                 .on_hover_text("Copy raw Serial frame hex string to clipboard")
                                 .clicked()
                             {
@@ -4308,6 +4450,8 @@ mod tests {
                     rp2040_output_pins: default_rp2040_output_pins(),
                     rp2040_status_led_pin: default_rp2040_status_led_pin(),
                     rp2040_io_flags: default_rp2040_io_flags(),
+                    rp2040_rs485_de_re_pin: default_rp2040_rs485_de_re_pin(),
+                    rp2040_rs485_config: default_rp2040_rs485_config(),
                 };
                 let json = serde_json::to_string_pretty(&settings).unwrap();
                 let loaded: AppSettings = serde_json::from_str(&json).unwrap();

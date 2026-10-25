@@ -51,14 +51,18 @@ pub const CMD_SET_IO_CONFIG: u8 = 0x0C;
 pub const CMD_SET_IO_CONFIG_RESPONSE: u8 = 0x8C;
 
 pub const PIN_UNASSIGNED: u8 = 0xFF;
-pub const IO_CONFIG_PAYLOAD_LEN: usize = 18;
-pub const IO_CONFIG_PACKET_LEN: usize = 5 + IO_CONFIG_PAYLOAD_LEN; // 23 bytes
+pub const LEGACY_IO_CONFIG_PAYLOAD_LEN: usize = 18;
+pub const IO_CONFIG_PAYLOAD_LEN: usize = 20;
+pub const IO_CONFIG_PACKET_LEN: usize = 5 + IO_CONFIG_PAYLOAD_LEN; // 25 bytes
 
 pub const IO_FLAG_INPUT_PULL_UP: u8 = 0x01;
 pub const IO_FLAG_INPUT_ACTIVE_LOW: u8 = 0x02;
 pub const IO_FLAG_STATUS_LED_HEARTBEAT: u8 = 0x04;
 
-/// Runtime-configurable Hardware GPIO Pin Mapping for RP2040 Micro-VM (`18 bytes` payload)
+/// Bit 4 of `rs485_config`: `0` = UART1 on `GP8(TX)/GP9(RX)`, `1` = UART1 on `GP4(TX)/GP5(RX)`
+pub const RS485_FLAG_ALT_PINS_GP4_GP5: u8 = 0x10;
+
+/// Runtime-configurable Hardware GPIO & RS-485 Pin Mapping for RP2040 Micro-VM (`20 bytes` payload)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct HardwareIoConfig {
@@ -73,6 +77,12 @@ pub struct HardwareIoConfig {
     /// - Bit 1 (`0x02`): `input_active_low` (`1` = Active-Low / GND triggers ON, `0` = Active-High / 3.3V triggers ON)
     /// - Bit 2 (`0x04`): `status_led_heartbeat` (`1` = 1 Hz Heartbeat in RUN, `0` = Solid ON in RUN)
     pub flags: u8,
+    /// GPIO pin number (`0..=29`) for RS-485 `DE/RE` direction control, or `0xFF` (`PIN_UNASSIGNED` = Auto-direction)
+    pub rs485_de_re_pin: u8,
+    /// RS-485 UART1 configuration byte:
+    /// - Bits `0..=3`: Baud rate code (`0`=9600, `1`=19200, `2`=38400, `3`=57600, `4`=115200)
+    /// - Bit `4` (`0x10`): TX/RX pin pair (`0` = `GP8(TX)/GP9(RX)`, `1` = `GP4(TX)/GP5(RX)`)
+    pub rs485_config: u8,
 }
 
 impl Default for HardwareIoConfig {
@@ -109,6 +119,8 @@ impl HardwareIoConfig {
             flags: IO_FLAG_INPUT_PULL_UP
                 | IO_FLAG_INPUT_ACTIVE_LOW
                 | IO_FLAG_STATUS_LED_HEARTBEAT,
+            rs485_de_re_pin: PIN_UNASSIGNED, // Auto-direction (None)
+            rs485_config: 0,                 // 9600 bps on GP8(TX)/GP9(RX)
         }
     }
 
@@ -154,37 +166,117 @@ impl HardwareIoConfig {
         }
     }
 
-    /// Returns `true` if `pin` is dedicated to UART0 (`GP0..1`), UART1 Modbus (`GP8..9`), or ADC (`GP26..28`).
+    /// `true` if RS-485 UART1 uses `GP4(TX)/GP5(RX)` instead of default `GP8(TX)/GP9(RX)`
+    #[inline]
+    pub const fn rs485_use_alt_pins_gp4_gp5(&self) -> bool {
+        (self.rs485_config & RS485_FLAG_ALT_PINS_GP4_GP5) != 0
+    }
+
+    #[inline]
+    pub fn set_rs485_use_alt_pins_gp4_gp5(&mut self, alt_gp4_gp5: bool) {
+        if alt_gp4_gp5 {
+            self.rs485_config |= RS485_FLAG_ALT_PINS_GP4_GP5;
+        } else {
+            self.rs485_config &= !RS485_FLAG_ALT_PINS_GP4_GP5;
+        }
+    }
+
+    /// Return RS-485 UART1 `(tx_pin, rx_pin)` pair (`(8, 9)` or `(4, 5)`)
+    #[inline]
+    pub const fn rs485_tx_rx_pins(&self) -> (u8, u8) {
+        if self.rs485_use_alt_pins_gp4_gp5() {
+            (4, 5)
+        } else {
+            (8, 9)
+        }
+    }
+
+    /// Baud rate code `0..=4` (`0`=9600, `1`=19200, `2`=38400, `3`=57600, `4`=115200)
+    #[inline]
+    pub const fn rs485_baud_code(&self) -> u8 {
+        self.rs485_config & 0x0F
+    }
+
+    #[inline]
+    pub fn set_rs485_baud_code(&mut self, code: u8) {
+        self.rs485_config = (self.rs485_config & !0x0F) | (code.min(4) & 0x0F);
+    }
+
+    /// Return RS-485 Modbus RTU baud rate in bps (`9600`, `19200`, `38400`, `57600`, or `115200`)
+    #[inline]
+    pub const fn rs485_baud_rate(&self) -> u32 {
+        match self.rs485_baud_code() {
+            1 => 19_200,
+            2 => 38_400,
+            3 => 57_600,
+            4 => 115_200,
+            _ => 9_600,
+        }
+    }
+
+    #[inline]
+    pub fn set_rs485_baud_rate(&mut self, baud: u32) {
+        let code = match baud {
+            19_200 => 1,
+            38_400 => 2,
+            57_600 => 3,
+            115_200 => 4,
+            _ => 0,
+        };
+        self.set_rs485_baud_code(code);
+    }
+
+    /// Returns `true` if `pin` is dedicated to UART0 (`GP0..1`), default UART1 (`GP8..9`), or ADC (`GP26..28`).
     #[inline]
     pub const fn is_reserved_peripheral_pin(pin: u8) -> bool {
         matches!(pin, 0 | 1 | 8 | 9 | 26 | 27 | 28)
     }
 
+    /// Returns `true` if `pin` is reserved by fixed peripherals or the currently active RS-485 UART1 TX/RX pair.
+    #[inline]
+    pub const fn is_pin_reserved_for_config(&self, pin: u8) -> bool {
+        let (tx, rx) = self.rs485_tx_rx_pins();
+        matches!(pin, 0 | 1 | 26 | 27 | 28) || pin == tx || pin == rx
+    }
+
     /// Sanitize pin assignments so out-of-range, reserved, or duplicate GPIO pins are safely cleared to `PIN_UNASSIGNED`.
     pub fn sanitize(&mut self) {
-        let mut used_mask: u32 = 0;
+        let (mb_tx, mb_rx) = self.rs485_tx_rx_pins();
+        let mut used_mask: u32 = (1u32 << 0)
+            | (1u32 << 1)
+            | (1u32 << 26)
+            | (1u32 << 27)
+            | (1u32 << 28)
+            | (1u32 << mb_tx)
+            | (1u32 << mb_rx);
+
+        if self.rs485_de_re_pin >= 30 || (used_mask & (1u32 << self.rs485_de_re_pin)) != 0 {
+            self.rs485_de_re_pin = PIN_UNASSIGNED;
+        } else {
+            used_mask |= 1u32 << self.rs485_de_re_pin;
+        }
 
         for p in &mut self.input_pins {
-            if *p >= 30 || Self::is_reserved_peripheral_pin(*p) || (used_mask & (1u32 << *p)) != 0 {
+            if *p >= 30 || (used_mask & (1u32 << *p)) != 0 {
                 *p = PIN_UNASSIGNED;
             } else {
                 used_mask |= 1u32 << *p;
             }
         }
         for p in &mut self.output_pins {
-            if *p >= 30 || Self::is_reserved_peripheral_pin(*p) || (used_mask & (1u32 << *p)) != 0 {
+            if *p >= 30 || (used_mask & (1u32 << *p)) != 0 {
                 *p = PIN_UNASSIGNED;
             } else {
                 used_mask |= 1u32 << *p;
             }
         }
-        if self.status_led_pin >= 30
-            || Self::is_reserved_peripheral_pin(self.status_led_pin)
-            || (used_mask & (1u32 << self.status_led_pin)) != 0
-        {
+        if self.status_led_pin >= 30 || (used_mask & (1u32 << self.status_led_pin)) != 0 {
             self.status_led_pin = PIN_UNASSIGNED;
         }
         self.flags &= 0x07;
+        let baud_code = (self.rs485_config & 0x0F).min(4);
+        let alt_flag = self.rs485_config & RS485_FLAG_ALT_PINS_GP4_GP5;
+        self.rs485_config = baud_code | alt_flag;
     }
 
     #[inline]
@@ -208,24 +300,33 @@ impl HardwareIoConfig {
             self.output_pins[7],
             self.status_led_pin,
             self.flags,
+            self.rs485_de_re_pin,
+            self.rs485_config,
         ]
     }
 
     pub fn from_bytes(b: &[u8]) -> Option<Self> {
-        if b.len() < IO_CONFIG_PAYLOAD_LEN {
+        if b.len() < LEGACY_IO_CONFIG_PAYLOAD_LEN {
             return None;
         }
+        let (rs485_de_re_pin, rs485_config) = if b.len() >= IO_CONFIG_PAYLOAD_LEN {
+            (b[18], b[19])
+        } else {
+            (PIN_UNASSIGNED, 0)
+        };
         let mut cfg = Self {
             input_pins: [b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]],
             output_pins: [b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]],
             status_led_pin: b[16],
             flags: b[17],
+            rs485_de_re_pin,
+            rs485_config,
         };
         cfg.sanitize();
         Some(cfg)
     }
 
-    /// Encode a complete `CMD_GET_IO_CONFIG_RESPONSE (0x8B)` frame (`23 bytes`) into `out_buf`.
+    /// Encode a complete `CMD_GET_IO_CONFIG_RESPONSE (0x8B)` frame (`25 bytes`) into `out_buf`.
     pub fn write_response_packet(&self, out_buf: &mut [u8]) -> Result<usize, &'static str> {
         if out_buf.len() < IO_CONFIG_PACKET_LEN {
             return Err("Buffer too small for IO config response packet");

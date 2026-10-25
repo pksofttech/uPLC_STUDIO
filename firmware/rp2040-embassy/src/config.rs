@@ -226,16 +226,21 @@ pub fn configure_hardware_io_degraded(
     }
 }
 
-/// Apply `HardwareIoConfig` directly to RP2040 `SIO`, `IO_BANK0`, and `PADS_BANK0` registers at runtime
+/// Apply `HardwareIoConfig` directly to RP2040 `SIO`, `IO_BANK0`, `PADS_BANK0`, and `UART1` registers at runtime
 /// without requiring firmware recompilation.
 pub fn apply_runtime_io_config(
     prev: Option<&uplc_vm::HardwareIoConfig>,
     cfg: &uplc_vm::HardwareIoConfig,
 ) {
-    // 1. Safely release any previously configured output pins to Hi-Z input with pull-down
+    // 1. Safely release any previously configured output pins (Y0..Y7, Status LED, RS-485 DE/RE) to Hi-Z input with pull-down
     if let Some(old) = prev {
-        for &pin in old.output_pins.iter().chain(core::iter::once(&old.status_led_pin)) {
-            if pin < 30 && !uplc_vm::HardwareIoConfig::is_reserved_peripheral_pin(pin) {
+        for &pin in old
+            .output_pins
+            .iter()
+            .chain(core::iter::once(&old.status_led_pin))
+            .chain(core::iter::once(&old.rs485_de_re_pin))
+        {
+            if pin < 30 && !old.is_pin_reserved_for_config(pin) {
                 embassy_rp::pac::SIO.gpio_out(0).value_clr().write_value(1u32 << pin);
                 embassy_rp::pac::SIO.gpio_oe(0).value_clr().write_value(1u32 << pin);
                 embassy_rp::pac::PADS_BANK0.gpio(pin as usize).modify(|w| {
@@ -247,11 +252,86 @@ pub fn apply_runtime_io_config(
         }
     }
 
+    // 1.5 Configure RS-485 (UART1) TX/RX pin routing and Baud Rate
+    let (uart1_tx_pin, uart1_rx_pin, released_tx_pin, released_rx_pin) =
+        if cfg.rs485_use_alt_pins_gp4_gp5() {
+            (4usize, 5usize, 8usize, 9usize)
+        } else {
+            (8usize, 9usize, 4usize, 5usize)
+        };
+
+    // Release the inactive UART1 pin pair back to SIO Hi-Z input (may be overridden below if mapped to X/Y)
+    for pin in [released_tx_pin, released_rx_pin] {
+        embassy_rp::pac::SIO.gpio_out(0).value_clr().write_value(1u32 << pin);
+        embassy_rp::pac::SIO.gpio_oe(0).value_clr().write_value(1u32 << pin);
+        embassy_rp::pac::PADS_BANK0.gpio(pin).modify(|w| {
+            w.set_od(false);
+            w.set_ie(true);
+            w.set_pue(false);
+            w.set_pde(true);
+        });
+        embassy_rp::pac::IO_BANK0
+            .gpio(pin)
+            .ctrl()
+            .write(|w| w.set_funcsel(5)); // 5 = SIO
+    }
+
+    // Route the active UART1 TX/RX pin pair to Function 2 (UART1)
+    embassy_rp::pac::SIO
+        .gpio_oe(0)
+        .value_clr()
+        .write_value((1u32 << uart1_tx_pin) | (1u32 << uart1_rx_pin));
+    embassy_rp::pac::PADS_BANK0.gpio(uart1_tx_pin).modify(|w| {
+        w.set_od(false);
+        w.set_ie(true);
+        w.set_pue(false);
+        w.set_pde(false);
+    });
+    embassy_rp::pac::IO_BANK0
+        .gpio(uart1_tx_pin)
+        .ctrl()
+        .write(|w| w.set_funcsel(2)); // 2 = UART1 TX
+
+    embassy_rp::pac::PADS_BANK0.gpio(uart1_rx_pin).modify(|w| {
+        w.set_od(false);
+        w.set_ie(true);
+        w.set_pue(true);
+        w.set_pde(false);
+    });
+    embassy_rp::pac::IO_BANK0
+        .gpio(uart1_rx_pin)
+        .ctrl()
+        .write(|w| w.set_funcsel(2)); // 2 = UART1 RX
+
+    // Update PL011 UART1 Baud Rate Divisor Registers at runtime
+    let clk_peri = embassy_rp::clocks::clk_peri_freq();
+    let baud = cfg.rs485_baud_rate();
+    if baud > 0 && clk_peri > 0 {
+        let baud_rate_div = (8 * clk_peri) / baud;
+        let mut baud_ibrd = baud_rate_div >> 7;
+        let baud_fbrd = if baud_ibrd == 0 {
+            baud_ibrd = 1;
+            0
+        } else if baud_ibrd >= 65535 {
+            baud_ibrd = 65535;
+            0
+        } else {
+            ((baud_rate_div & 0x7f) + 1) / 2
+        };
+        embassy_rp::pac::UART1
+            .uartibrd()
+            .write(|w| w.set_baud_divint(baud_ibrd as u16));
+        embassy_rp::pac::UART1
+            .uartfbrd()
+            .write(|w| w.set_baud_divfrac(baud_fbrd as u8));
+        embassy_rp::pac::UART1.uartlcr_h().modify(|_| {});
+    }
+
     let pull_up = cfg.input_pull_up();
 
     // 2. Configure Digital Input pins X0..X7
     for &pin in &cfg.input_pins {
-        if pin < 30 && !uplc_vm::HardwareIoConfig::is_reserved_peripheral_pin(pin) {
+        if pin < 30 && !cfg.is_pin_reserved_for_config(pin) {
             embassy_rp::pac::SIO.gpio_oe(0).value_clr().write_value(1u32 << pin);
             embassy_rp::pac::PADS_BANK0.gpio(pin as usize).modify(|w| {
                 w.set_od(false);
@@ -268,7 +348,7 @@ pub fn apply_runtime_io_config(
 
     // 3. Configure Digital Output pins Y0..Y7
     for &pin in &cfg.output_pins {
-        if pin < 30 && !uplc_vm::HardwareIoConfig::is_reserved_peripheral_pin(pin) {
+        if pin < 30 && !cfg.is_pin_reserved_for_config(pin) {
             embassy_rp::pac::SIO.gpio_out(0).value_clr().write_value(1u32 << pin);
             embassy_rp::pac::SIO.gpio_oe(0).value_set().write_value(1u32 << pin);
             embassy_rp::pac::PADS_BANK0.gpio(pin as usize).modify(|w| {
@@ -286,7 +366,7 @@ pub fn apply_runtime_io_config(
 
     // 4. Configure Status LED pin
     let led_pin = cfg.status_led_pin;
-    if led_pin < 30 && !uplc_vm::HardwareIoConfig::is_reserved_peripheral_pin(led_pin) {
+    if led_pin < 30 && !cfg.is_pin_reserved_for_config(led_pin) {
         embassy_rp::pac::SIO.gpio_out(0).value_clr().write_value(1u32 << led_pin);
         embassy_rp::pac::SIO.gpio_oe(0).value_set().write_value(1u32 << led_pin);
         embassy_rp::pac::PADS_BANK0.gpio(led_pin as usize).modify(|w| {
@@ -300,12 +380,29 @@ pub fn apply_runtime_io_config(
             .ctrl()
             .write(|w| w.set_funcsel(5));
     }
+
+    // 5. Configure RS-485 DE/RE Direction Control pin (if assigned, default LOW = Receive mode)
+    let de_re_pin = cfg.rs485_de_re_pin;
+    if de_re_pin < 30 && !cfg.is_pin_reserved_for_config(de_re_pin) {
+        embassy_rp::pac::SIO.gpio_out(0).value_clr().write_value(1u32 << de_re_pin);
+        embassy_rp::pac::SIO.gpio_oe(0).value_set().write_value(1u32 << de_re_pin);
+        embassy_rp::pac::PADS_BANK0.gpio(de_re_pin as usize).modify(|w| {
+            w.set_od(false);
+            w.set_ie(true);
+            w.set_pue(false);
+            w.set_pde(false);
+        });
+        embassy_rp::pac::IO_BANK0
+            .gpio(de_re_pin as usize)
+            .ctrl()
+            .write(|w| w.set_funcsel(5));
+    }
 }
 
 /// Drive a dynamically mapped RP2040 GPIO output pin HIGH or LOW via `SIO`.
 #[inline]
 pub fn write_runtime_gpio_pin(pin: u8, high: bool) {
-    if pin < 30 && !uplc_vm::HardwareIoConfig::is_reserved_peripheral_pin(pin) {
+    if pin < 30 && !matches!(pin, 0 | 1 | 26 | 27 | 28) {
         if high {
             embassy_rp::pac::SIO.gpio_out(0).value_set().write_value(1u32 << pin);
         } else {
