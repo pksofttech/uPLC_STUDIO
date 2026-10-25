@@ -14,6 +14,14 @@ pub enum ScrollbarDrag {
     Horizontal { start_mouse_x: f32, start_pan_x: f32 },
 }
 
+#[derive(Clone, Debug)]
+pub enum CanvasDebugEvent {
+    ForceBit { addr: String, val: bool },
+    UnforceBit { addr: String },
+    ClearAllForces,
+    SwitchToEditMode { open_elem_id: Option<u64> },
+}
+
 pub struct CanvasViewport {
     pub pan_offset: Vec2,
     pub zoom: f32,
@@ -25,6 +33,9 @@ pub struct CanvasViewport {
     pub dragging_tool: Option<(ActiveTool, String)>,
     pub marquee_start: Option<Pos2>,
     pub dragging_scrollbar: Option<ScrollbarDrag>,
+    pub is_edit_mode: bool,
+    pub is_online_hw_mode: bool,
+    pub pending_debug_event: Option<CanvasDebugEvent>,
 }
 
 impl Default for CanvasViewport {
@@ -40,6 +51,9 @@ impl Default for CanvasViewport {
             dragging_tool: None,
             marquee_start: None,
             dragging_scrollbar: None,
+            is_edit_mode: true,
+            is_online_hw_mode: false,
+            pending_debug_event: None,
         }
     }
 }
@@ -144,6 +158,11 @@ enum CanvasAction {
     DeleteSelectedElements,
     DuplicateRung(usize),
     DeleteRung(usize),
+    DebugToggleBit(String),
+    DebugForceBit(String, bool),
+    DebugUnforceBit(String),
+    DebugClearAllForces,
+    SwitchToEditMode(Option<u64>),
 }
 
 impl CanvasViewport {
@@ -626,7 +645,7 @@ impl CanvasViewport {
             canvas_enabled && (ui.input(|i| i.key_down(egui::Key::Space)) || *active_tool == ActiveTool::Pan);
 
         // Promote drag_candidate to active dragging_elem once pointer moves > 6px
-        if primary_down && !sim_active && !pan_mode {
+        if primary_down && self.is_edit_mode && !sim_active && !pan_mode {
             if let Some((cid, ref cname, start_pos)) = self.drag_candidate {
                 if self.dragging_elem.is_none() {
                     if let Some(hp) = hover_pos {
@@ -918,12 +937,12 @@ impl CanvasViewport {
                     power_in = elem.is_energized && sim_active;
                 }
 
-                // If no right-aligned coil yet, show [+] button at end of elements
+                // If no right-aligned coil yet, show [+] button at end of elements (only in Edit mode)
                 let has_coil = rung
                     .elements
                     .iter()
                     .any(|e| e.element_type.is_right_aligned());
-                if !has_coil && cur_x < margin_right - 40.0 {
+                if self.is_edit_mode && !sim_active && !has_coil && cur_x < margin_right - 40.0 {
                     self.draw_add_slot_button(
                         &painter,
                         origin,
@@ -1169,8 +1188,8 @@ impl CanvasViewport {
             Stroke::new(3.0 * self.zoom, palette.l2_rail),
         );
 
-        // --- Floating Quick-Action HUD Bar above the Selected Element(s) (in Edit Mode) ---
-        if !sim_active && !is_dragging && active_marquee_rect.is_none() {
+        // --- Floating Quick-Action HUD Bar above the Selected Element(s) ---
+        if self.is_edit_mode && !sim_active && !is_dragging && active_marquee_rect.is_none() {
             if doc.selected_element_ids.len() > 1 {
                 // Multi-Selection HUD Bar
                 let mut group_rect: Option<Rect> = None;
@@ -1389,6 +1408,170 @@ impl CanvasViewport {
                         );
                         if is_clicked && b_hov {
                             action = Some(btn_act);
+                        }
+                    }
+                }
+            }
+        } else if (!self.is_edit_mode || sim_active) && !is_dragging {
+            // --- Live Debug / Force Floating HUD Bar (Simulator & Online Hardware Modes) ---
+            if let (Some(_), Some(sel_id)) = (doc.selected_rung_idx, doc.selected_element_id) {
+                if let Some(sel_elem) = doc.element_by_id(sel_id).cloned() {
+                    if let Some(sel_rect) = self.find_selected_rect_on_screen(
+                        doc,
+                        origin,
+                        margin_left,
+                        margin_top,
+                        margin_right,
+                        cell_w,
+                        cell_h,
+                        sel_id,
+                    ) {
+                        let elem_addr = sel_elem.name.trim().to_string();
+                        let hud_w = 342.0;
+                        let hud_h = 26.0;
+                        let hud_y = if sel_rect.min.y - hud_h - 6.0 > viewport_rect.min.y + 40.0 {
+                            sel_rect.min.y - hud_h - 5.0
+                        } else {
+                            sel_rect.max.y + 5.0
+                        };
+                        let hud_cx = sel_rect.center().x.clamp(
+                            viewport_rect.min.x + hud_w * 0.5 + 8.0,
+                            (viewport_rect.max.x - hud_w * 0.5 - 8.0)
+                                .max(viewport_rect.min.x + hud_w * 0.5 + 8.0),
+                        );
+                        let hud_rect = Rect::from_center_size(
+                            pos2(hud_cx, hud_y + hud_h * 0.5),
+                            vec2(hud_w, hud_h),
+                        );
+                        if hover_pos.map_or(false, |hp| hud_rect.contains(hp)) {
+                            any_interactive_hovered = true;
+                        }
+
+                        let mode_border_col = if self.is_online_hw_mode {
+                            palette.accent_warn
+                        } else {
+                            palette.accent_ok
+                        };
+                        painter.rect_filled(hud_rect, CornerRadius::same(6), palette.banner_bg);
+                        painter.rect_stroke(
+                            hud_rect,
+                            CornerRadius::same(6),
+                            Stroke::new(1.4, mode_border_col),
+                            StrokeKind::Inside,
+                        );
+
+                        // Address & Live State Badge on left
+                        let is_on = doc.simulator.get_var_value(&elem_addr);
+                        let badge_w = 92.0;
+                        let badge_rect = Rect::from_min_size(
+                            pos2(hud_rect.min.x + 4.0, hud_rect.min.y + 3.0),
+                            vec2(badge_w, hud_h - 6.0),
+                        );
+                        let state_col = if is_on {
+                            palette.accent_ok
+                        } else {
+                            palette.accent_heading
+                        };
+                        painter.rect_filled(
+                            badge_rect,
+                            CornerRadius::same(4),
+                            state_col.gamma_multiply(0.20),
+                        );
+                        painter.text(
+                            badge_rect.center(),
+                            Align2::CENTER_CENTER,
+                            format!(
+                                "{}={}",
+                                elem_addr,
+                                if is_on { "ON(1)" } else { "OFF(0)" }
+                            ),
+                            FontId::monospace(9.5),
+                            state_col,
+                        );
+
+                        let debug_btns: [(&str, Color32, CanvasAction); 4] = if self.is_online_hw_mode {
+                            [
+                                (
+                                    "⚡ Force 1",
+                                    palette.accent_ok,
+                                    CanvasAction::DebugForceBit(elem_addr.clone(), true),
+                                ),
+                                (
+                                    "⚡ Force 0",
+                                    palette.accent_danger,
+                                    CanvasAction::DebugForceBit(elem_addr.clone(), false),
+                                ),
+                                (
+                                    "🔓 Unforce",
+                                    palette.accent_warn,
+                                    CanvasAction::DebugUnforceBit(elem_addr.clone()),
+                                ),
+                                (
+                                    "✏ Edit",
+                                    palette.accent_heading,
+                                    CanvasAction::SwitchToEditMode(Some(sel_id)),
+                                ),
+                            ]
+                        } else {
+                            [
+                                (
+                                    "🔁 Toggle",
+                                    palette.accent_ok,
+                                    CanvasAction::DebugToggleBit(elem_addr.clone()),
+                                ),
+                                (
+                                    "⚡ Force 1",
+                                    palette.accent_warn,
+                                    CanvasAction::DebugForceBit(elem_addr.clone(), true),
+                                ),
+                                (
+                                    "🔓 Unforce",
+                                    palette.text_primary,
+                                    CanvasAction::DebugUnforceBit(elem_addr.clone()),
+                                ),
+                                (
+                                    "✏ Edit",
+                                    palette.accent_heading,
+                                    CanvasAction::SwitchToEditMode(Some(sel_id)),
+                                ),
+                            ]
+                        };
+
+                        let rem_w = hud_w - badge_w - 10.0;
+                        let btn_w = rem_w / 4.0;
+                        for (i, (lbl, col, btn_act)) in debug_btns.into_iter().enumerate() {
+                            let bx = hud_rect.min.x + badge_w + 5.0 + i as f32 * btn_w;
+                            let b_rect = Rect::from_min_size(
+                                pos2(bx + 1.0, hud_rect.min.y + 3.0),
+                                vec2(btn_w - 2.0, hud_h - 6.0),
+                            );
+                            let b_hov = hover_pos.map_or(false, |hp| b_rect.contains(hp));
+                            if b_hov {
+                                painter.rect_filled(
+                                    b_rect,
+                                    CornerRadius::same(4),
+                                    col.gamma_multiply(0.25),
+                                );
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                            }
+                            painter.text(
+                                b_rect.center(),
+                                Align2::CENTER_CENTER,
+                                lbl,
+                                FontId::proportional(10.0),
+                                if b_hov {
+                                    if palette.is_light() {
+                                        palette.text_primary
+                                    } else {
+                                        Color32::WHITE
+                                    }
+                                } else {
+                                    col
+                                },
+                            );
+                            if is_clicked && b_hov {
+                                action = Some(btn_act);
+                            }
                         }
                     }
                 }
@@ -1749,98 +1932,197 @@ impl CanvasViewport {
         // --- Context Menu Popup (Right-Click on Element or Network) ---
         if let Some((r_idx, el_id)) = self.context_menu_elem {
             let mut close_menu = false;
-            egui::Window::new("Quick Element & Network Menu")
+            let menu_title = if !self.is_edit_mode || sim_active {
+                if self.is_online_hw_mode {
+                    "🔌 Online PLC Debug & Force Menu"
+                } else {
+                    "💻 Simulator Debug & Force Menu"
+                }
+            } else {
+                "Quick Element & Network Menu"
+            };
+            egui::Window::new(menu_title)
                 .collapsible(false)
                 .resizable(false)
                 .default_pos(mouse_pos.unwrap_or(viewport_rect.center()))
                 .show(ui.ctx(), |ui| {
-                    let is_multi = doc.selected_element_ids.len() > 1 && doc.selected_element_ids.contains(&el_id);
-                    if is_multi {
-                        ui.label(egui::RichText::new(format!("Selected Group ({} Elements)", doc.selected_element_ids.len())).color(palette.accent_heading).strong());
-                        ui.separator();
-                        if ui.button("+ Add in Parallel (Below)").clicked() {
-                            action = Some(CanvasAction::AddParallelToSelection);
-                            close_menu = true;
+                    if !self.is_edit_mode || sim_active {
+                        if let Some(el) = doc.element_by_id(el_id).cloned() {
+                            let addr = el.name.trim().to_string();
+                            let is_on = doc.simulator.get_var_value(&addr);
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(format!("{} ({})", addr, el.element_type.display_name()))
+                                        .color(palette.accent_heading)
+                                        .strong(),
+                                );
+                                ui.label(
+                                    egui::RichText::new(if is_on { "● ON (1)" } else { "○ OFF (0)" })
+                                        .monospace()
+                                        .strong()
+                                        .color(if is_on { palette.accent_ok } else { palette.rung_text_dim }),
+                                );
+                            });
+                            ui.separator();
+                            if !self.is_online_hw_mode {
+                                if ui
+                                    .button(
+                                        egui::RichText::new("🔁 Toggle Input State (ON ↔ OFF)")
+                                            .color(palette.accent_ok)
+                                            .strong(),
+                                    )
+                                    .clicked()
+                                {
+                                    action = Some(CanvasAction::DebugToggleBit(addr.clone()));
+                                    close_menu = true;
+                                }
+                            }
+                            if ui
+                                .button(
+                                    egui::RichText::new("⚡ Force ON (1)")
+                                        .color(palette.accent_ok)
+                                        .strong(),
+                                )
+                                .clicked()
+                            {
+                                action = Some(CanvasAction::DebugForceBit(addr.clone(), true));
+                                close_menu = true;
+                            }
+                            if ui
+                                .button(
+                                    egui::RichText::new("⚡ Force OFF (0)")
+                                        .color(palette.accent_danger)
+                                        .strong(),
+                                )
+                                .clicked()
+                            {
+                                action = Some(CanvasAction::DebugForceBit(addr.clone(), false));
+                                close_menu = true;
+                            }
+                            if ui
+                                .button(
+                                    egui::RichText::new("🔓 Release Force (Normal)")
+                                        .color(palette.accent_warn),
+                                )
+                                .clicked()
+                            {
+                                action = Some(CanvasAction::DebugUnforceBit(addr));
+                                close_menu = true;
+                            }
+                            ui.separator();
                         }
-                        if ui.button("+ Add in Series (Right / After)").clicked() {
-                            action = Some(CanvasAction::AddSeriesToSelection(true));
-                            close_menu = true;
+                        if !doc.simulator.forced_bits.is_empty() || self.is_online_hw_mode {
+                            if ui.button("🔓 Clear All Forced Bits").clicked() {
+                                action = Some(CanvasAction::DebugClearAllForces);
+                                close_menu = true;
+                            }
+                            ui.separator();
                         }
-                        if ui.button("+ Add in Series (Left / Before)").clicked() {
-                            action = Some(CanvasAction::AddSeriesToSelection(false));
-                            close_menu = true;
-                        }
-                        if ui.button("Toggle Contact / Coil Modes").clicked() {
-                            action = Some(CanvasAction::ToggleSelectedModes);
-                            close_menu = true;
-                        }
-                        if ui
-                            .button(egui::RichText::new("Delete Selected Elements").color(palette.accent_danger))
-                            .clicked()
-                        {
-                            action = Some(CanvasAction::DeleteSelectedElements);
-                            close_menu = true;
-                        }
-                        ui.separator();
-                    } else if el_id != 0 {
-                        ui.label(egui::RichText::new(format!("Element ID #{}", el_id)).strong());
-                        ui.separator();
                         if ui
                             .button(
-                                egui::RichText::new("Configure Element... (Enter)")
+                                egui::RichText::new("✏ Switch to Edit Mode to Modify Circuit")
                                     .color(palette.accent_heading)
                                     .strong(),
                             )
                             .clicked()
                         {
-                            action = Some(CanvasAction::OpenConfigModal(el_id));
-                            close_menu = true;
-                        }
-                        if ui.button("+ Add in Parallel (Below)").clicked() {
-                            doc.set_single_selection(Some(r_idx), el_id);
-                            action = Some(CanvasAction::AddParallelToSelection);
-                            close_menu = true;
-                        }
-                        if ui.button("+ Add in Series (Right / After)").clicked() {
-                            doc.set_single_selection(Some(r_idx), el_id);
-                            action = Some(CanvasAction::AddSeriesToSelection(true));
-                            close_menu = true;
-                        }
-                        if ui.button("+ Add in Series (Left / Before)").clicked() {
-                            doc.set_single_selection(Some(r_idx), el_id);
-                            action = Some(CanvasAction::AddSeriesToSelection(false));
-                            close_menu = true;
-                        }
-                        if ui.button("Toggle Contact / Coil Mode").clicked() {
-                            action = Some(CanvasAction::ToggleElementMode(el_id));
-                            close_menu = true;
-                        }
-                        if ui
-                            .button(
-                                egui::RichText::new("Delete Element").color(palette.accent_danger),
-                            )
-                            .clicked()
-                        {
-                            action = Some(CanvasAction::DeleteElement(el_id));
+                            let open_id = if el_id != 0 { Some(el_id) } else { None };
+                            action = Some(CanvasAction::SwitchToEditMode(open_id));
                             close_menu = true;
                         }
                         ui.separator();
-                    }
-                    ui.label(egui::RichText::new(format!("Network #{:02}", r_idx + 1)).strong());
-                    if ui.button("Duplicate Network Below").clicked() {
-                        action = Some(CanvasAction::DuplicateRung(r_idx));
-                        close_menu = true;
-                    }
-                    if ui
-                        .button(egui::RichText::new("Delete Network").color(palette.accent_danger))
-                        .clicked()
-                    {
-                        action = Some(CanvasAction::DeleteRung(r_idx));
-                        close_menu = true;
-                    }
-                    ui.separator();
-                    if ui.button("Close").clicked() {
-                        close_menu = true;
+                        if ui.button("Close").clicked() {
+                            close_menu = true;
+                        }
+                    } else {
+                        let is_multi = doc.selected_element_ids.len() > 1 && doc.selected_element_ids.contains(&el_id);
+                        if is_multi {
+                            ui.label(egui::RichText::new(format!("Selected Group ({} Elements)", doc.selected_element_ids.len())).color(palette.accent_heading).strong());
+                            ui.separator();
+                            if ui.button("+ Add in Parallel (Below)").clicked() {
+                                action = Some(CanvasAction::AddParallelToSelection);
+                                close_menu = true;
+                            }
+                            if ui.button("+ Add in Series (Right / After)").clicked() {
+                                action = Some(CanvasAction::AddSeriesToSelection(true));
+                                close_menu = true;
+                            }
+                            if ui.button("+ Add in Series (Left / Before)").clicked() {
+                                action = Some(CanvasAction::AddSeriesToSelection(false));
+                                close_menu = true;
+                            }
+                            if ui.button("Toggle Contact / Coil Modes").clicked() {
+                                action = Some(CanvasAction::ToggleSelectedModes);
+                                close_menu = true;
+                            }
+                            if ui
+                                .button(egui::RichText::new("Delete Selected Elements").color(palette.accent_danger))
+                                .clicked()
+                            {
+                                action = Some(CanvasAction::DeleteSelectedElements);
+                                close_menu = true;
+                            }
+                            ui.separator();
+                        } else if el_id != 0 {
+                            ui.label(egui::RichText::new(format!("Element ID #{}", el_id)).strong());
+                            ui.separator();
+                            if ui
+                                .button(
+                                    egui::RichText::new("Configure Element... (Enter)")
+                                        .color(palette.accent_heading)
+                                        .strong(),
+                                )
+                                .clicked()
+                            {
+                                action = Some(CanvasAction::OpenConfigModal(el_id));
+                                close_menu = true;
+                            }
+                            if ui.button("+ Add in Parallel (Below)").clicked() {
+                                doc.set_single_selection(Some(r_idx), el_id);
+                                action = Some(CanvasAction::AddParallelToSelection);
+                                close_menu = true;
+                            }
+                            if ui.button("+ Add in Series (Right / After)").clicked() {
+                                doc.set_single_selection(Some(r_idx), el_id);
+                                action = Some(CanvasAction::AddSeriesToSelection(true));
+                                close_menu = true;
+                            }
+                            if ui.button("+ Add in Series (Left / Before)").clicked() {
+                                doc.set_single_selection(Some(r_idx), el_id);
+                                action = Some(CanvasAction::AddSeriesToSelection(false));
+                                close_menu = true;
+                            }
+                            if ui.button("Toggle Contact / Coil Mode").clicked() {
+                                action = Some(CanvasAction::ToggleElementMode(el_id));
+                                close_menu = true;
+                            }
+                            if ui
+                                .button(
+                                    egui::RichText::new("Delete Element").color(palette.accent_danger),
+                                )
+                                .clicked()
+                            {
+                                action = Some(CanvasAction::DeleteElement(el_id));
+                                close_menu = true;
+                            }
+                            ui.separator();
+                        }
+                        ui.label(egui::RichText::new(format!("Network #{:02}", r_idx + 1)).strong());
+                        if ui.button("Duplicate Network Below").clicked() {
+                            action = Some(CanvasAction::DuplicateRung(r_idx));
+                            close_menu = true;
+                        }
+                        if ui
+                            .button(egui::RichText::new("Delete Network").color(palette.accent_danger))
+                            .clicked()
+                        {
+                            action = Some(CanvasAction::DeleteRung(r_idx));
+                            close_menu = true;
+                        }
+                        ui.separator();
+                        if ui.button("Close").clicked() {
+                            close_menu = true;
+                        }
                     }
                 });
             if close_menu {
@@ -1867,18 +2149,45 @@ impl CanvasViewport {
                     double_clicked,
                     additive,
                 } => {
-                    if additive && !sim_active && *active_tool == ActiveTool::Select {
+                    if additive && self.is_edit_mode && !sim_active && *active_tool == ActiveTool::Select {
                         doc.toggle_element_selection(Some(rung_idx), elem_id);
                     } else {
                         doc.set_single_selection(Some(rung_idx), elem_id);
                     }
 
-                    if sim_active {
-                        doc.toggle_input(&elem_name);
+                    if !self.is_edit_mode || sim_active {
+                        if self.is_online_hw_mode {
+                            // In Online Hardware Debug mode, double-clicking toggles hardware Force ON/OFF
+                            if double_clicked {
+                                let cur_on = doc.simulator.get_var_value(&elem_name);
+                                self.pending_debug_event = Some(CanvasDebugEvent::ForceBit {
+                                    addr: elem_name,
+                                    val: !cur_on,
+                                });
+                            }
+                        } else {
+                            // In Simulator mode, clicking toggles the bit immediately
+                            doc.toggle_input(&elem_name);
+                        }
                     } else if double_clicked {
                         // Double-clicking any element in Edit mode opens the Professional Configuration Dialog!
                         open_modal_for_id = Some(elem_id);
                     }
+                }
+                CanvasAction::DebugToggleBit(addr) => {
+                    doc.toggle_input(&addr);
+                }
+                CanvasAction::DebugForceBit(addr, val) => {
+                    self.pending_debug_event = Some(CanvasDebugEvent::ForceBit { addr, val });
+                }
+                CanvasAction::DebugUnforceBit(addr) => {
+                    self.pending_debug_event = Some(CanvasDebugEvent::UnforceBit { addr });
+                }
+                CanvasAction::DebugClearAllForces => {
+                    self.pending_debug_event = Some(CanvasDebugEvent::ClearAllForces);
+                }
+                CanvasAction::SwitchToEditMode(open_elem_id) => {
+                    self.pending_debug_event = Some(CanvasDebugEvent::SwitchToEditMode { open_elem_id });
                 }
                 CanvasAction::OpenConfigModal(el_id) => {
                     doc.set_single_selection(doc.selected_rung_idx, el_id);
@@ -2331,7 +2640,7 @@ impl CanvasViewport {
             }
 
             // Record drag candidate when pressing primary mouse button on an element
-            if primary_pressed && is_hovered && !sim_active {
+            if primary_pressed && is_hovered && self.is_edit_mode && !sim_active {
                 self.drag_candidate = Some((
                     elem.id,
                     format!("{} ({})", elem.name, elem.element_type.display_name()),

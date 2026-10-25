@@ -1,4 +1,4 @@
-use crate::app::CanvasApp;
+use crate::app::{CanvasApp, WorkMode};
 use crate::icons::{paint_icon, VectorIcon};
 use crate::theme::ThemePalette;
 use crate::tools::ActiveTool;
@@ -9,7 +9,48 @@ use egui::{
 
 pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
     let palette = app.theme.palette();
+    let is_edit_mode = app.work_mode == WorkMode::Edit;
 
+    if !is_edit_mode {
+        let (mode_title, mode_col) = match app.work_mode {
+            WorkMode::Simulator => ("💻 Simulator Mode", palette.accent_ok),
+            WorkMode::OnlineDebug => ("🔌 Online PLC Debug", palette.accent_warn),
+            WorkMode::Edit => ("✏ Edit Mode", palette.accent_heading),
+        };
+        egui::Frame::new()
+            .fill(mode_col.gamma_multiply(0.14))
+            .stroke(Stroke::new(1.2, mode_col))
+            .corner_radius(CornerRadius::same(6))
+            .inner_margin(egui::Margin::symmetric(8, 6))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(RichText::new(mode_title).color(mode_col).strong().size(11.5));
+                ui.label(
+                    RichText::new("🔒 Circuit editing is locked while testing.")
+                        .size(10.0)
+                        .color(palette.text_primary),
+                );
+                ui.add_space(4.0);
+                if ui
+                    .add_sized(
+                        [ui.available_width(), 24.0],
+                        egui::Button::new(
+                            RichText::new("✏ Switch to Edit Mode")
+                                .strong()
+                                .size(11.0)
+                                .color(Color32::WHITE),
+                        )
+                        .fill(palette.accent_heading),
+                    )
+                    .clicked()
+                {
+                    app.set_work_mode(WorkMode::Edit);
+                }
+            });
+        ui.add_space(6.0);
+    }
+
+    ui.add_enabled_ui(is_edit_mode, |ui| {
     // --- 1. Top Box: Modern Icon Grid for Network Tools ---
     ui.group(|ui| {
         ui.set_width(ui.available_width());
@@ -940,6 +981,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     });
                 }
             });
+    });
     });
 }
 

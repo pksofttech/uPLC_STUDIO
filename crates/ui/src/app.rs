@@ -9,12 +9,42 @@ use std::time::{Duration, Instant};
 use egui::{CentralPanel, Color32, Panel, RichText, Ui, Window};
 use my_canvas_core::{Document, IOPortMapping, InsertPosition, PlcStatusSnapshot, SchematicStyle, SimState};
 use serde::{Deserialize, Serialize};
-use crate::canvas::CanvasViewport;
+use crate::canvas::{CanvasDebugEvent, CanvasViewport};
 use crate::panels::{element_dialog::ElementConfigModal, find_dialog, left_panel, menu_bar, right_panel, status_bar, toolbar};
 use crate::panels::find_dialog::FindState;
 use crate::serial;
 use crate::theme::{self, AppTheme};
 use crate::tools::ActiveTool;
+
+/// Primary IDE operating mode: makes it immediately clear whether the user is
+/// designing the circuit (`Edit`), testing locally (`Simulator`), or debugging hardware (`OnlineDebug`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WorkMode {
+    /// Offline circuit design & editing (Edit Mode)
+    Edit,
+    /// Local PC software PLC simulation (Simulator Mode)
+    Simulator,
+    /// Live hardware PLC connection & telemetry over USB-CDC (Online Debug Mode)
+    OnlineDebug,
+}
+
+impl WorkMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Edit => "✏ Edit Mode",
+            Self::Simulator => "💻 Simulator",
+            Self::OnlineDebug => "🔌 Online PLC",
+        }
+    }
+
+    pub fn short_label(self) -> &'static str {
+        match self {
+            Self::Edit => "✏ Edit",
+            Self::Simulator => "💻 Sim",
+            Self::OnlineDebug => "🔌 Online",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WatchDisplayFormat {
@@ -189,7 +219,7 @@ impl Default for AppSettings {
             baud_rate: "115200".to_string(),
             cycle_time_ms: 10,
             hardware: "IEC 61131-3 Standard PLC".to_string(),
-            online_target_hw: true,
+            online_target_hw: false,
             window_width: Some(1280.0),
             window_height: Some(720.0),
             window_maximized: false,
@@ -310,6 +340,7 @@ pub enum PendingAction {
 
 pub struct CanvasApp {
     pub doc: Document,
+    pub work_mode: WorkMode,
     pub active_tool: ActiveTool,
     pub insert_pos: InsertPosition,
     /// "Copy Network" clipboard: a snapshot of the copied rung (not an index, so later edits don't change it)
@@ -401,6 +432,7 @@ impl Default for CanvasApp {
 
         let mut app = Self {
             doc,
+            work_mode: WorkMode::Edit,
             active_tool: ActiveTool::Select,
             insert_pos: InsertPosition::AppendRung,
             copied_rung: None,
@@ -2233,9 +2265,104 @@ impl CanvasApp {
                 .map_or(false, |t| t.elapsed() < Duration::from_millis(1000))
     }
 
+    /// Switch between the 3 primary IDE modes (`Edit`, `Simulator`, `OnlineDebug`).
+    pub fn set_work_mode(&mut self, mode: WorkMode) {
+        if self.work_mode == mode {
+            return;
+        }
+        match mode {
+            WorkMode::Edit => {
+                if self.online_mode {
+                    self.stop_online_monitoring();
+                }
+                if self.doc.simulator.is_active() {
+                    self.doc.stop_simulation();
+                }
+                self.online_target_hw = false;
+                self.work_mode = WorkMode::Edit;
+                self.save_settings();
+                // Restore right panel to Property inspector if it was auto-switched to I/O Monitor
+                if self.right_panel_tab == 2 {
+                    self.right_panel_tab = 0;
+                }
+            }
+            WorkMode::Simulator => {
+                if self.online_mode {
+                    self.stop_online_monitoring();
+                }
+                self.online_target_hw = false;
+                self.work_mode = WorkMode::Simulator;
+                self.active_tool = ActiveTool::Select;
+                if self.doc.simulator.state == SimState::Stopped {
+                    self.doc.toggle_simulation();
+                }
+                self.save_settings();
+                // Auto-switch right panel to I/O Monitor so user can toggle inputs & see LEDs
+                if self.right_panel_tab == 0 {
+                    self.right_panel_tab = 2;
+                }
+            }
+            WorkMode::OnlineDebug => {
+                if self.doc.simulator.is_active() {
+                    self.doc.stop_simulation();
+                }
+                self.online_target_hw = true;
+                self.work_mode = WorkMode::OnlineDebug;
+                self.active_tool = ActiveTool::Select;
+                if !self.online_mode {
+                    self.start_online_monitoring();
+                }
+                self.save_settings();
+                // Auto-switch right panel to I/O Monitor so user can see live Hardware I/O & Force controls
+                if self.right_panel_tab == 0 {
+                    self.right_panel_tab = 2;
+                }
+            }
+        }
+    }
+
+    /// Force a bit operand by symbolic or direct address name (e.g. `%IX0.0`, `X0`, `%QX0.0`, `Y0`, `%MX0`, `M0`)
+    pub fn force_bit_by_name(&mut self, addr_str: &str, val: bool) {
+        let clean = addr_str.trim().to_ascii_uppercase();
+        if let Some((vm_addr, _name, region)) =
+            my_canvas_core::BytecodeCompiler::parse_direct_address(&clean, false)
+        {
+            match region {
+                my_canvas_core::MemoryRegion::DigitalInputX
+                | my_canvas_core::MemoryRegion::DigitalOutputY
+                | my_canvas_core::MemoryRegion::InternalRelayM => {
+                    self.doc.simulator.set_var_value(&clean, val);
+                    self.force_bit(vm_addr, val);
+                    return;
+                }
+                _ => {}
+            }
+        }
+        self.doc.simulator.set_var_value(&clean, val);
+    }
+
+    /// Release force override on a bit operand by symbolic or direct address name
+    pub fn unforce_bit_by_name(&mut self, addr_str: &str) {
+        let clean = addr_str.trim().to_ascii_uppercase();
+        if let Some((vm_addr, _name, region)) =
+            my_canvas_core::BytecodeCompiler::parse_direct_address(&clean, false)
+        {
+            match region {
+                my_canvas_core::MemoryRegion::DigitalInputX
+                | my_canvas_core::MemoryRegion::DigitalOutputY
+                | my_canvas_core::MemoryRegion::InternalRelayM => {
+                    self.unforce_bit(vm_addr);
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Toggle RUN/STOP mode for either local simulator or hardware PLC.
     pub fn toggle_run_mode(&mut self) {
-        if self.online_target_hw {
+        if self.work_mode == WorkMode::OnlineDebug || (self.online_mode && self.online_target_hw) {
+            self.work_mode = WorkMode::OnlineDebug;
+            self.online_target_hw = true;
             if !self.online_mode {
                 self.start_online_monitoring();
             }
@@ -2244,6 +2371,8 @@ impl CanvasApp {
             } else {
                 self.transmit_bytecode_to_plc(my_canvas_core::PlcSerialCommand::RunStopControl);
             }
+        } else if self.work_mode == WorkMode::Edit {
+            self.set_work_mode(WorkMode::Simulator);
         } else {
             self.doc.toggle_simulation();
         }
@@ -2251,19 +2380,29 @@ impl CanvasApp {
 
     /// Execute a single scan step on either local simulator or hardware PLC.
     pub fn single_step_mode(&mut self) {
-        if self.online_target_hw {
+        if self.work_mode == WorkMode::OnlineDebug || (self.online_mode && self.online_target_hw) {
+            self.work_mode = WorkMode::OnlineDebug;
+            self.online_target_hw = true;
             if !self.online_mode {
                 self.start_online_monitoring();
             }
             self.transmit_bytecode_to_plc(my_canvas_core::PlcSerialCommand::StepPlc);
         } else {
+            if self.work_mode == WorkMode::Edit {
+                self.online_target_hw = false;
+                self.work_mode = WorkMode::Simulator;
+                self.active_tool = ActiveTool::Select;
+                if self.right_panel_tab == 0 {
+                    self.right_panel_tab = 2;
+                }
+            }
             self.doc.single_step_simulation(self.doc.simulator.cycle_time_ms);
         }
     }
 
     /// Stop execution and safely turn off outputs for either local simulator or hardware PLC.
     pub fn stop_run_mode(&mut self) {
-        if self.online_target_hw {
+        if self.work_mode == WorkMode::OnlineDebug || (self.online_mode && self.online_target_hw) {
             self.plc_remote_running = false;
             self.doc.simulator.remote_running = false;
             self.doc.clear_conduction();
@@ -2275,7 +2414,7 @@ impl CanvasApp {
 
     /// Reset simulation/PLC execution.
     pub fn reset_run_mode(&mut self) {
-        if self.online_target_hw {
+        if self.work_mode == WorkMode::OnlineDebug || (self.online_mode && self.online_target_hw) {
             self.plc_remote_running = false;
             self.doc.simulator.remote_running = false;
             self.doc.clear_conduction();
@@ -2327,10 +2466,10 @@ impl CanvasApp {
     }
 
     pub fn toggle_online_mode(&mut self) {
-        if self.online_mode {
-            self.stop_online_monitoring();
+        if self.work_mode == WorkMode::OnlineDebug || self.online_mode {
+            self.set_work_mode(WorkMode::Edit);
         } else {
-            self.start_online_monitoring();
+            self.set_work_mode(WorkMode::OnlineDebug);
         }
     }
 
@@ -2348,20 +2487,23 @@ impl CanvasApp {
             return;
         }
         self.online_target_hw = is_hw;
-        self.save_settings();
-        self.latest_snapshot = None;
-        self.last_telemetry_rx = None;
-        self.doc.clear_conduction();
-
         if is_hw {
-            // Switching to hardware target: pause / halt local simulator
             self.doc.stop_simulation();
+            self.latest_snapshot = None;
+            self.last_telemetry_rx = None;
         }
-
         if self.online_mode {
             self.stop_online_monitoring();
             self.start_online_monitoring();
+            self.work_mode = if is_hw {
+                WorkMode::OnlineDebug
+            } else {
+                WorkMode::Simulator
+            };
+        } else if !is_hw && self.doc.simulator.is_active() {
+            self.work_mode = WorkMode::Simulator;
         }
+        self.save_settings();
     }
 
     pub fn save_settings(&self) {
@@ -2658,15 +2800,16 @@ impl eframe::App for CanvasApp {
                 (i.modifiers.command && i.key_pressed(egui::Key::Y))
                     || (i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::Z))
             });
+            let is_edit_mode = self.work_mode == WorkMode::Edit;
             if new_shortcut {
                 self.request_new_program();
             } else if open_shortcut {
                 self.request_open_program();
             } else if save_shortcut {
                 self.save_or_save_as();
-            } else if undo_shortcut {
+            } else if undo_shortcut && is_edit_mode {
                 self.doc.undo();
-            } else if redo_shortcut {
+            } else if redo_shortcut && is_edit_mode {
                 self.doc.redo();
             }
 
@@ -2698,18 +2841,20 @@ impl eframe::App for CanvasApp {
                         egui::Event::Copy => {
                             self.copy_selected_elements(ui.ctx());
                         }
-                        egui::Event::Cut => {
+                        egui::Event::Cut if is_edit_mode => {
                             self.cut_selected_elements(ui.ctx());
                         }
-                        egui::Event::Paste(text) => {
+                        egui::Event::Paste(text) if is_edit_mode => {
                             self.paste_clipboard_elements(Some(&text));
                         }
                         _ => {}
                     }
                 }
-                if ui.input(|i| {
-                    i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)
-                }) {
+                if is_edit_mode
+                    && ui.input(|i| {
+                        i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)
+                    })
+                {
                     self.doc.delete_selected_element();
                 }
                 if ui.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
@@ -2727,7 +2872,7 @@ impl eframe::App for CanvasApp {
                 if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::A)) {
                     self.doc.select_all_elements();
                 }
-                if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                if is_edit_mode && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     self.open_config_for_selected();
                 }
                 if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -2735,7 +2880,7 @@ impl eframe::App for CanvasApp {
                     self.active_tool = ActiveTool::Select;
                 }
                 let has_sel = !self.doc.selected_element_ids.is_empty() || self.doc.selected_element_id.is_some();
-                if has_sel {
+                if is_edit_mode && has_sel {
                     if ui.input(|i| !i.modifiers.command && !i.modifiers.ctrl && i.key_pressed(egui::Key::P)) {
                         let next_id = self.doc.program.alloc_id();
                         let new_elem = self.active_tool.create_default_element(next_id)
@@ -2885,6 +3030,14 @@ impl eframe::App for CanvasApp {
 
         let mut banner_cmd = None;
         let mut open_upload_dialog = false;
+        let mut request_mode_change: Option<WorkMode> = None;
+
+        // Keep work_mode synchronized if simulator or online_mode was changed externally
+        if self.online_mode && self.online_target_hw {
+            self.work_mode = WorkMode::OnlineDebug;
+        } else if self.doc.simulator.is_active() && self.work_mode == WorkMode::Edit {
+            self.work_mode = WorkMode::Simulator;
+        }
 
         // 7. Central Panel: Interactive Ladder Diagram Canvas
         CentralPanel::default()
@@ -2898,6 +3051,8 @@ impl eframe::App for CanvasApp {
                     ui.disable();
                 }
                 ui.set_clip_rect(ui.max_rect());
+                self.canvas.is_edit_mode = self.work_mode == WorkMode::Edit;
+                self.canvas.is_online_hw_mode = self.work_mode == WorkMode::OnlineDebug;
                 if let Some(elem_id) = self.canvas.show(
                     ui,
                     &mut self.doc,
@@ -2914,8 +3069,61 @@ impl eframe::App for CanvasApp {
                     }
                 }
 
+                // Floating Simulator Mode Guidance Banner (Top-Center of Canvas)
+                if self.work_mode == WorkMode::Simulator {
+                    let max_rect = ui.max_rect();
+                    let banner_pos = egui::pos2(
+                        (max_rect.center().x - 285.0).max(max_rect.min.x + 12.0),
+                        max_rect.min.y + 10.0,
+                    );
+                    let sim_state_label = match self.doc.simulator.state {
+                        SimState::Running => ("● SIMULATOR RUNNING", palette.accent_ok),
+                        SimState::Step => ("⏭ SIMULATOR STEP", palette.accent_warn),
+                        SimState::Stopped => ("⏸ SIMULATOR PAUSED", palette.accent_heading),
+                    };
+                    egui::Area::new(egui::Id::new("simulator_mode_top_banner"))
+                        .order(egui::Order::Foreground)
+                        .fixed_pos(banner_pos)
+                        .interactable(!modal_open)
+                        .show(ui.ctx(), |ui| {
+                            egui::Frame::NONE
+                                .fill(palette.banner_bg.gamma_multiply(0.95))
+                                .stroke(egui::Stroke::new(1.3, sim_state_label.1))
+                                .corner_radius(egui::CornerRadius::same(6))
+                                .inner_margin(egui::Margin::symmetric(10, 5))
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            RichText::new(sim_state_label.0)
+                                                .color(sim_state_label.1)
+                                                .strong()
+                                                .size(11.0),
+                                        );
+                                        ui.separator();
+                                        ui.label(
+                                            RichText::new("💡 Click any Contact on canvas to toggle ON/OFF • Right-click to Force")
+                                                .color(palette.text_primary)
+                                                .size(11.0),
+                                        );
+                                        ui.add_space(6.0);
+                                        if ui
+                                            .small_button(
+                                                RichText::new("✏ Back to Edit")
+                                                    .strong()
+                                                    .color(palette.accent_heading),
+                                            )
+                                            .on_hover_text("Stop simulation and return to Circuit Edit Mode")
+                                            .clicked()
+                                        {
+                                            request_mode_change = Some(WorkMode::Edit);
+                                        }
+                                    });
+                                });
+                        });
+                }
+
                 // Floating Live Online Monitoring Telemetry HUD
-                if self.online_mode {
+                if self.online_mode || self.work_mode == WorkMode::OnlineDebug {
                     let max_rect = ui.max_rect();
                     let hud_w = 304.0;
                     let hud_h = 74.0;
@@ -3023,14 +3231,17 @@ impl eframe::App for CanvasApp {
                         sig_color,
                     );
 
-                    // If HW MCU code mismatch, display prominent warning banner explaining live monitoring is paused
+                    // If HW MCU code mismatch, display prominent warning banner with 1-click Sync / Download
                     if is_hw && !is_matched {
-                        let banner_pos = egui::pos2(max_rect.center().x - 260.0, max_rect.min.y + 14.0);
+                        let banner_pos = egui::pos2(
+                            (max_rect.center().x - 310.0).max(max_rect.min.x + 12.0),
+                            max_rect.min.y + 14.0,
+                        );
 
                         egui::Area::new(egui::Id::new("online_mismatch_banner"))
                             .order(egui::Order::Foreground)
                             .fixed_pos(banner_pos)
-                            .interactable(true)
+                            .interactable(!modal_open)
                             .show(ui.ctx(), |ui| {
                                 egui::Frame::NONE
                                     .fill(egui::Color32::from_rgba_unmultiplied(38, 28, 8, 245))
@@ -3040,15 +3251,29 @@ impl eframe::App for CanvasApp {
                                     .show(ui, |ui| {
                                         ui.horizontal(|ui| {
                                             ui.label(
-                                                RichText::new("⚠ LIVE MONITORING PAUSED (CODE MISMATCH)")
+                                                RichText::new("⚠ CODE MISMATCH (IDE ≠ PLC)")
                                                     .color(palette.accent_warn)
                                                     .strong()
                                                     .size(11.5),
                                             );
-                                            ui.add_space(8.0);
+                                            ui.add_space(6.0);
+                                            let sync_btn = egui::Button::new(
+                                                RichText::new("⚡ Sync / Download Now")
+                                                    .size(11.0)
+                                                    .strong()
+                                                    .color(egui::Color32::WHITE),
+                                            )
+                                            .fill(egui::Color32::from_rgb(39, 174, 96));
+                                            if ui
+                                                .add(sync_btn)
+                                                .on_hover_text("Compile current Ladder Diagram and download immediately to PLC Flash so live monitoring resumes")
+                                                .clicked()
+                                            {
+                                                banner_cmd = Some(my_canvas_core::PlcSerialCommand::DownloadProgram);
+                                            }
                                             if ui
                                                 .button(
-                                                    RichText::new("📥 Read PLC")
+                                                    RichText::new("📥 Read from PLC")
                                                         .size(11.0)
                                                         .strong()
                                                         .color(egui::Color32::WHITE),
@@ -3060,15 +3285,91 @@ impl eframe::App for CanvasApp {
                                             }
                                             if ui
                                                 .button(
-                                                    RichText::new("⬆ Upload to PLC")
+                                                    RichText::new("⚙ Update Dialog...")
                                                         .size(11.0)
-                                                        .strong()
-                                                        .color(egui::Color32::WHITE),
+                                                        .color(palette.text_primary),
                                                 )
-                                                .on_hover_text("Open Update to PLC dialog to download current program")
+                                                .on_hover_text("Open Update to PLC dialog for full options")
                                                 .clicked()
                                             {
                                                 open_upload_dialog = true;
+                                            }
+                                            if ui
+                                                .small_button(
+                                                    RichText::new("✏ Edit")
+                                                        .strong()
+                                                        .color(palette.accent_heading),
+                                                )
+                                                .on_hover_text("Return to Offline Circuit Edit Mode")
+                                                .clicked()
+                                            {
+                                                request_mode_change = Some(WorkMode::Edit);
+                                            }
+                                        });
+                                    });
+                            });
+                    } else if is_hw {
+                        // Online Hardware Connected / Reconnecting Top Guidance Bar
+                        let banner_pos = egui::pos2(
+                            (max_rect.center().x - 290.0).max(max_rect.min.x + 12.0),
+                            max_rect.min.y + 10.0,
+                        );
+                        egui::Area::new(egui::Id::new("online_hw_guidance_banner"))
+                            .order(egui::Order::Foreground)
+                            .fixed_pos(banner_pos)
+                            .interactable(!modal_open)
+                            .show(ui.ctx(), |ui| {
+                                egui::Frame::NONE
+                                    .fill(palette.banner_bg.gamma_multiply(0.95))
+                                    .stroke(egui::Stroke::new(
+                                        1.2,
+                                        if is_hw_conn { palette.accent_ok } else { palette.accent_warn },
+                                    ))
+                                    .corner_radius(egui::CornerRadius::same(6))
+                                    .inner_margin(egui::Margin::symmetric(10, 5))
+                                    .show(ui, |ui| {
+                                        ui.horizontal(|ui| {
+                                            if is_hw_conn {
+                                                ui.label(
+                                                    RichText::new("🔌 ONLINE DEBUG (RP2040)")
+                                                        .color(palette.accent_ok)
+                                                        .strong()
+                                                        .size(11.0),
+                                                );
+                                                ui.separator();
+                                                ui.label(
+                                                    RichText::new("💡 Click any element on canvas to Force ON/OFF on Hardware")
+                                                        .color(palette.text_primary)
+                                                        .size(11.0),
+                                                );
+                                            } else {
+                                                ui.label(
+                                                    RichText::new(format!(
+                                                        "⚠ WAITING FOR RP2040 USB ({})...",
+                                                        self.com_port_display()
+                                                    ))
+                                                    .color(palette.accent_warn)
+                                                    .strong()
+                                                    .size(11.0),
+                                                );
+                                                if ui
+                                                    .small_button(RichText::new("⚙ Port Settings").size(10.5))
+                                                    .clicked()
+                                                {
+                                                    open_upload_dialog = true;
+                                                }
+                                            }
+                                            ui.add_space(6.0);
+                                            if ui
+                                                .small_button(
+                                                    RichText::new("✏ Exit Online")
+                                                        .strong()
+                                                        .color(palette.accent_heading),
+                                                )
+                                                .on_hover_text("Disconnect Online Monitoring and return to Edit Mode")
+                                                .clicked()
+                                            {
+                                                request_mode_change = Some(WorkMode::Edit);
                                             }
                                         });
                                     });
@@ -3118,6 +3419,34 @@ impl eframe::App for CanvasApp {
                 }
             });
 
+        if let Some(ev) = self.canvas.pending_debug_event.take() {
+            match ev {
+                CanvasDebugEvent::ForceBit { addr, val } => {
+                    self.force_bit_by_name(&addr, val);
+                }
+                CanvasDebugEvent::UnforceBit { addr } => {
+                    self.unforce_bit_by_name(&addr);
+                }
+                CanvasDebugEvent::ClearAllForces => {
+                    self.clear_all_forces();
+                }
+                CanvasDebugEvent::SwitchToEditMode { open_elem_id } => {
+                    self.set_work_mode(WorkMode::Edit);
+                    if let Some(elem_id) = open_elem_id {
+                        if let Some(el) = self.doc.element_by_id(elem_id).cloned() {
+                            let r_comment = self.doc.selected_rung_idx
+                                .and_then(|idx| self.doc.program.rungs.get(idx))
+                                .map(|r| r.comment.as_str())
+                                .unwrap_or("");
+                            self.elem_modal.open_for(&el, self.doc.selected_rung_idx, r_comment);
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(new_mode) = request_mode_change {
+            self.set_work_mode(new_mode);
+        }
         if let Some(cmd) = banner_cmd {
             if cmd == my_canvas_core::PlcSerialCommand::UploadProgram {
                 self.request_upload_from_plc();
@@ -4932,5 +5261,41 @@ mod tests {
         assert_eq!(app.doc.program.rungs[0].elements[0].symbol, "RUN_PB");
         app.doc.undo();
         assert_eq!(app.doc.program.rungs[0].elements[0].symbol, "START");
+    }
+
+    #[test]
+    fn test_work_mode_transitions_and_force_helpers() {
+        let mut app = sample_app();
+        assert_eq!(app.work_mode, WorkMode::Edit);
+        assert_eq!(app.doc.simulator.state, SimState::Stopped);
+
+        // 1. Switch to Simulator mode -> auto-starts simulation and switches right panel to I/O Monitor
+        app.set_work_mode(WorkMode::Simulator);
+        assert_eq!(app.work_mode, WorkMode::Simulator);
+        assert!(!app.online_target_hw);
+        assert!(!app.online_mode);
+        assert_eq!(app.doc.simulator.state, SimState::Running);
+        assert_eq!(app.right_panel_tab, 2);
+
+        // 2. Force and unforce bit by name in Simulator mode
+        app.force_bit_by_name("%IX0.0", true);
+        assert_eq!(app.is_bit_forced(0), Some(true));
+        app.unforce_bit_by_name("%IX0.0");
+        assert_eq!(app.is_bit_forced(0), None);
+
+        // 3. Switch to OnlineDebug mode -> stops local simulator, activates online_mode with HW target
+        app.set_work_mode(WorkMode::OnlineDebug);
+        assert_eq!(app.work_mode, WorkMode::OnlineDebug);
+        assert!(app.online_target_hw);
+        assert!(app.online_mode);
+        assert_eq!(app.doc.simulator.state, SimState::Stopped);
+
+        // 4. Switch back to Edit mode -> stops online monitoring and simulation, restores right panel
+        app.set_work_mode(WorkMode::Edit);
+        assert_eq!(app.work_mode, WorkMode::Edit);
+        assert!(!app.online_mode);
+        assert!(!app.online_target_hw);
+        assert_eq!(app.doc.simulator.state, SimState::Stopped);
+        assert_eq!(app.right_panel_tab, 0);
     }
 }

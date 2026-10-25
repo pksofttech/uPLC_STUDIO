@@ -1,6 +1,6 @@
 use egui::{RichText, Ui};
 use my_canvas_core::SchematicStyle;
-use crate::app::CanvasApp;
+use crate::app::{CanvasApp, WorkMode};
 use crate::theme::AppTheme;
 
 pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
@@ -98,15 +98,26 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
 
         // --- EDIT MENU ---
         ui.menu_button("Edit", |ui| {
+            let is_edit_mode = app.work_mode == WorkMode::Edit;
+            if !is_edit_mode {
+                if ui
+                    .button(RichText::new("✏ Switch to Edit Mode to Modify Circuit").strong())
+                    .clicked()
+                {
+                    app.set_work_mode(WorkMode::Edit);
+                    ui.close();
+                }
+                ui.separator();
+            }
             if ui
-                .add_enabled(app.doc.can_undo(), egui::Button::new("Undo (Ctrl+Z)"))
+                .add_enabled(is_edit_mode && app.doc.can_undo(), egui::Button::new("Undo (Ctrl+Z)"))
                 .clicked()
             {
                 app.doc.undo();
                 ui.close();
             }
             if ui
-                .add_enabled(app.doc.can_redo(), egui::Button::new("Redo (Ctrl+Y)"))
+                .add_enabled(is_edit_mode && app.doc.can_redo(), egui::Button::new("Redo (Ctrl+Y)"))
                 .clicked()
             {
                 app.doc.redo();
@@ -114,7 +125,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
             }
             ui.separator();
             let has_sel = !app.doc.selected_ids().is_empty();
-            if ui.add_enabled(has_sel, egui::Button::new("Cut Element (Ctrl+X)")).clicked() {
+            if ui.add_enabled(is_edit_mode && has_sel, egui::Button::new("Cut Element (Ctrl+X)")).clicked() {
                 app.cut_selected_elements(ui.ctx());
                 ui.close();
             }
@@ -123,7 +134,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 ui.close();
             }
             if ui
-                .add_enabled(!app.clipboard.is_empty(), egui::Button::new("Paste Element (Ctrl+V)"))
+                .add_enabled(is_edit_mode && !app.clipboard.is_empty(), egui::Button::new("Paste Element (Ctrl+V)"))
                 .clicked()
             {
                 app.paste_clipboard_elements(None);
@@ -135,7 +146,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 ui.close();
             }
             ui.separator();
-            if ui.button("+ New Network").clicked() {
+            if ui.add_enabled(is_edit_mode, egui::Button::new("+ New Network")).clicked() {
                 app.doc.add_rung();
                 ui.close();
             }
@@ -143,16 +154,16 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 app.copy_selected_network();
                 ui.close();
             }
-            if ui.button("Paste Network Below").clicked() {
+            if ui.add_enabled(is_edit_mode, egui::Button::new("Paste Network Below")).clicked() {
                 app.paste_network_below();
                 ui.close();
             }
             ui.separator();
-            if ui.button("Delete Selected Element (Del)").clicked() {
+            if ui.add_enabled(is_edit_mode, egui::Button::new("Delete Selected Element (Del)")).clicked() {
                 app.doc.delete_selected_element();
                 ui.close();
             }
-            if ui.button("Delete Selected Network").clicked() {
+            if ui.add_enabled(is_edit_mode, egui::Button::new("Delete Selected Network")).clicked() {
                 if let Some(idx) = app.doc.selected_rung_idx {
                     app.doc.delete_rung(idx);
                 }
@@ -296,6 +307,78 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
 
         // --- TOOLS MENU ---
         ui.menu_button("Tools", |ui| {
+            ui.label(RichText::new("Operating Mode:").weak().size(11.0));
+            if ui
+                .selectable_label(
+                    app.work_mode == WorkMode::Edit,
+                    "✏ 1. Edit Mode (Offline Circuit Editor)",
+                )
+                .clicked()
+            {
+                app.set_work_mode(WorkMode::Edit);
+                ui.close();
+            }
+            if ui
+                .selectable_label(
+                    app.work_mode == WorkMode::Simulator,
+                    "💻 2. Simulator Mode (Virtual PLC on PC) [F5]",
+                )
+                .clicked()
+            {
+                app.set_work_mode(WorkMode::Simulator);
+                ui.close();
+            }
+            if ui
+                .selectable_label(
+                    app.work_mode == WorkMode::OnlineDebug,
+                    "🔌 3. Online PLC Debug (RP2040 Hardware USB) [F7 / Ctrl+M]",
+                )
+                .clicked()
+            {
+                app.set_work_mode(WorkMode::OnlineDebug);
+                ui.close();
+            }
+            ui.separator();
+            let is_hw = app.work_mode == WorkMode::OnlineDebug;
+            let is_running = if is_hw {
+                app.online_mode && app.plc_remote_running
+            } else {
+                app.doc.simulator.is_running()
+            };
+            let sim_label = if is_hw {
+                if is_running {
+                    "■ Stop Hardware PLC Execution (F5)"
+                } else {
+                    "▶ Start / RUN Hardware PLC (F5)"
+                }
+            } else if is_running {
+                "⏸ Pause Simulation (F5)"
+            } else {
+                "▶ Run Simulation (F5)"
+            };
+            if ui.button(sim_label).clicked() {
+                app.toggle_run_mode();
+                ui.close();
+            }
+            let step_label = if is_hw {
+                "⏭ Single Scan Step Hardware PLC (F6)"
+            } else {
+                "⏭ Single Scan Step Simulator (F6)"
+            };
+            if ui.button(step_label).clicked() {
+                app.single_step_mode();
+                ui.close();
+            }
+            let reset_label = if is_hw {
+                "↺ Reset / Halt Hardware PLC (Shift+F5)"
+            } else {
+                "↺ Reset Simulation (Shift+F5)"
+            };
+            if ui.button(reset_label).clicked() {
+                app.reset_run_mode();
+                ui.close();
+            }
+            ui.separator();
             if ui.button("🔧 Configure RP2040 Hardware I/O Pins...").clicked() {
                 app.show_update_plc = true;
                 app.update_plc_tab = 2;
@@ -313,68 +396,6 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 app.show_code_export = true;
                 ui.close();
             }
-            ui.separator();
-            let is_hw = app.online_target_hw;
-            let is_running = if is_hw {
-                app.online_mode && app.plc_remote_running
-            } else {
-                app.doc.simulator.is_running()
-            };
-            let sim_label = if is_hw {
-                if is_running {
-                    "■ Stop PLC Execution (F5)"
-                } else if app.online_mode {
-                    "▶ Start / RUN PLC (F5)"
-                } else {
-                    "▶ Connect & RUN PLC (F5)"
-                }
-            } else if is_running {
-                "■ Stop Simulation (F5)"
-            } else {
-                "▶ Start Simulation (F5)"
-            };
-            if ui.button(sim_label).clicked() {
-                app.toggle_run_mode();
-                ui.close();
-            }
-            let step_label = if is_hw {
-                "⏭ Single Scan Step PLC (F6)"
-            } else {
-                "⏭ Single Scan Step (F6)"
-            };
-            if ui.button(step_label).clicked() {
-                app.single_step_mode();
-                ui.close();
-            }
-            let reset_label = if is_hw {
-                "↺ Reset / Halt PLC (Shift+F5)"
-            } else {
-                "↺ Reset Simulation (Shift+F5)"
-            };
-            if ui.button(reset_label).clicked() {
-                app.reset_run_mode();
-                ui.close();
-            }
-            ui.separator();
-            let online_label = if app.online_mode {
-                "🛑 Stop Online Monitoring (Ctrl+M / F7)"
-            } else {
-                "🌐 Start Online Monitoring (Ctrl+M / F7)"
-            };
-            if ui.button(online_label).clicked() {
-                app.toggle_online_mode();
-                ui.close();
-            }
-            ui.menu_button("Online Target Device", |ui| {
-                if ui.selectable_label(app.online_target_hw, "🔌 Hardware (RP2040 Micro-VM)").clicked() {
-                    app.set_online_target_hw(true);
-                    ui.close();
-                }
-                if ui.selectable_label(!app.online_target_hw, "💻 Virtual Simulator").clicked() {
-                    app.set_online_target_hw(false);
-                    ui.close();
-                }
-            });
         });
 
         // --- OPTIONS MENU ---

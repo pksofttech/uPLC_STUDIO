@@ -1,4 +1,4 @@
-use crate::app::CanvasApp;
+use crate::app::{CanvasApp, WorkMode};
 use crate::icons::{modern_tool_button, paint_icon, VectorIcon};
 use crate::theme::{AppTheme, ThemePalette};
 use crate::tools::ActiveTool;
@@ -257,6 +257,8 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
 
                     toolbar_divider(ui, palette);
 
+                    let is_edit_mode = app.work_mode == WorkMode::Edit;
+
                     // Undo
                     let (undo_lbl, undo_w) = if show_file_labels {
                         ("Undo", 54.0)
@@ -269,12 +271,16 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                         undo_lbl,
                         palette.accent_warn,
                         false,
-                        app.doc.can_undo(),
+                        is_edit_mode && app.doc.can_undo(),
                         false,
                         undo_w,
                         palette,
                     )
-                    .on_hover_text("Undo last circuit edit [Ctrl+Z]")
+                    .on_hover_text(if is_edit_mode {
+                        "Undo last circuit edit [Ctrl+Z]"
+                    } else {
+                        "Switch to Edit Mode to undo circuit changes"
+                    })
                     .clicked()
                     {
                         app.doc.undo();
@@ -292,12 +298,16 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                         redo_lbl,
                         palette.accent_heading,
                         false,
-                        app.doc.can_redo(),
+                        is_edit_mode && app.doc.can_redo(),
                         false,
                         redo_w,
                         palette,
                     )
-                    .on_hover_text("Redo circuit edit [Ctrl+Y]")
+                    .on_hover_text(if is_edit_mode {
+                        "Redo circuit edit [Ctrl+Y]"
+                    } else {
+                        "Switch to Edit Mode to redo circuit changes"
+                    })
                     .clicked()
                     {
                         app.doc.redo();
@@ -323,7 +333,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                         sel_w,
                         palette,
                     )
-                    .on_hover_text("Select & Move Tool (Click or drag box to select) [Esc]")
+                    .on_hover_text("Select & Inspect Tool (Click or drag box to select) [Esc]")
                     .clicked()
                     {
                         app.active_tool = ActiveTool::Select;
@@ -359,154 +369,267 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 });
 
                 // =========================================================================
-                // Group 2: Simulation / PLC Execution (Run, Step, Stop, Reset | Speed, LCD)
+                // Group 2: 3-Way Operating Mode Switcher (Edit | Simulator | Online PLC)
                 // =========================================================================
-                let is_hw = app.online_target_hw;
-                let is_hw_conn = !is_hw || app.is_hw_online_connected();
-                let (is_running, is_stopped, is_step) = if is_hw {
-                    let r = is_hw_conn && app.plc_remote_running;
-                    (r, !r, !r)
-                } else {
-                    (
-                        app.doc.simulator.is_running(),
-                        app.doc.simulator.is_stopped(),
-                        app.doc.simulator.is_step(),
-                    )
-                };
-
                 cad_toolbar_group(ui, palette, |ui| {
-                    // Start / RUN Hero Button
-                    let (start_label, start_w) = if is_running {
-                        ("RUN", 54.0)
-                    } else if is_compact {
-                        ("Run", 50.0)
-                    } else {
-                        ("Start", 56.0)
-                    };
+                    let cur_mode = app.work_mode;
 
-                    let run_hover = if is_hw {
-                        if app.online_mode && !is_hw_conn {
-                            "Waiting for RP2040 USB Connection (Auto-reconnecting...)"
-                        } else if is_running {
-                            "Halt / STOP Hardware PLC Execution [F5]"
-                        } else if app.online_mode {
-                            "Start / RUN Hardware PLC Execution [F5]"
-                        } else {
-                            "Connect & Start Hardware PLC Execution [F5]"
-                        }
+                    // 1. Edit Mode Button
+                    let (edit_lbl, edit_w) = if is_compact {
+                        ("✏ Edit", 54.0)
                     } else {
-                        "Start / Continuous Simulation [F5]"
+                        ("✏ Edit Mode", 80.0)
                     };
-
                     if cad_hero_button(
                         ui,
-                        Some(VectorIcon::Play),
-                        start_label,
-                        palette.accent_ok,
-                        is_running,
-                        true,
-                        start_w,
-                        palette,
-                    )
-                    .on_hover_text(run_hover)
-                    .clicked()
-                    {
-                        app.toggle_run_mode();
-                    }
-
-                    // Step Button
-                    let (step_lbl, step_w) = if is_compact {
-                        ("", CAD_ICON_BTN_WIDTH)
-                    } else {
-                        ("Step", 52.0)
-                    };
-                    let step_hover = if is_hw {
-                        "Execute Single Scan Step on Hardware PLC [F6]"
-                    } else {
-                        "Execute Single Scan Step [F6]"
-                    };
-                    if modern_tool_button(
-                        ui,
-                        Some(VectorIcon::Step),
-                        step_lbl,
-                        palette.accent_warn,
-                        is_step,
-                        true,
-                        false,
-                        step_w,
-                        palette,
-                    )
-                    .on_hover_text(step_hover)
-                    .clicked()
-                    {
-                        app.single_step_mode();
-                    }
-
-                    // Stop Button
-                    let (stop_lbl, stop_w) = if is_compact {
-                        ("", CAD_ICON_BTN_WIDTH)
-                    } else {
-                        ("Stop", 52.0)
-                    };
-                    let stop_hover = if is_hw {
-                        "Halt Hardware PLC Scan & Safe Output Shutdown"
-                    } else {
-                        "Stop Simulation & Safe Output Shutdown"
-                    };
-                    let stop_enabled = if is_hw {
-                        app.online_mode && is_running
-                    } else {
-                        !is_stopped
-                    };
-                    if modern_tool_button(
-                        ui,
-                        Some(VectorIcon::Stop),
-                        stop_lbl,
-                        palette.accent_danger,
-                        false,
-                        stop_enabled,
-                        false,
-                        stop_w,
-                        palette,
-                    )
-                    .on_hover_text(stop_hover)
-                    .clicked()
-                    {
-                        app.stop_run_mode();
-                    }
-
-                    // Reset Button
-                    let (reset_lbl, reset_w) = if is_compact {
-                        ("", CAD_ICON_BTN_WIDTH)
-                    } else {
-                        ("Reset", 58.0)
-                    };
-                    let reset_hover = if is_hw {
-                        "Reset / Halt Hardware PLC [Shift+F5]"
-                    } else {
-                        "Reset Simulation & Clear Memory [Shift+F5]"
-                    };
-                    if modern_tool_button(
-                        ui,
-                        Some(VectorIcon::Reset),
-                        reset_lbl,
+                        None,
+                        edit_lbl,
                         palette.accent_heading,
-                        false,
+                        cur_mode == WorkMode::Edit,
                         true,
-                        false,
-                        reset_w,
+                        edit_w,
                         palette,
                     )
-                    .on_hover_text(reset_hover)
+                    .on_hover_text(
+                        "1. Offline Circuit Edit Mode: Add, wire, and configure Ladder elements",
+                    )
                     .clicked()
                     {
-                        app.reset_run_mode();
+                        app.set_work_mode(WorkMode::Edit);
                     }
 
-                    toolbar_divider(ui, palette);
+                    // 2. Simulator Mode Button
+                    let (sim_lbl, sim_w) = if is_compact {
+                        ("💻 Sim", 54.0)
+                    } else {
+                        ("💻 Simulator", 84.0)
+                    };
+                    if cad_hero_button(
+                        ui,
+                        None,
+                        sim_lbl,
+                        palette.accent_ok,
+                        cur_mode == WorkMode::Simulator,
+                        true,
+                        sim_w,
+                        palette,
+                    )
+                    .on_hover_text(
+                        "2. PC Virtual Simulator Mode: Test logic locally on PC & click contacts on canvas to toggle ON/OFF [F5]",
+                    )
+                    .clicked()
+                    {
+                        app.set_work_mode(WorkMode::Simulator);
+                    }
 
-                    // Simulation Speed Multiplier (48px guarantees "x10" + arrow never clips)
-                    ui.add_enabled_ui(!is_hw, |ui| {
+                    // 3. Online PLC Debug Mode Button
+                    let is_hw_conn = app.is_hw_online_connected();
+                    let is_matched = app
+                        .online_program_match_info()
+                        .map_or(true, |(m, _, _, _, _)| m);
+                    let online_accent = if cur_mode == WorkMode::OnlineDebug {
+                        if !is_hw_conn || !is_matched {
+                            palette.accent_warn
+                        } else {
+                            palette.accent_ok
+                        }
+                    } else {
+                        palette.accent_warn
+                    };
+                    let (on_lbl, on_w) = if is_compact {
+                        ("🔌 PLC", 54.0)
+                    } else {
+                        ("🔌 Online PLC", 90.0)
+                    };
+                    if cad_hero_button(
+                        ui,
+                        None,
+                        on_lbl,
+                        online_accent,
+                        cur_mode == WorkMode::OnlineDebug,
+                        true,
+                        on_w,
+                        palette,
+                    )
+                    .on_hover_text(
+                        "3. Hardware Online Debug Mode: Connect to physical RP2040 PLC via USB-CDC for live monitoring & Force I/O [F7 / Ctrl+M]",
+                    )
+                    .clicked()
+                    {
+                        app.set_work_mode(WorkMode::OnlineDebug);
+                    }
+                });
+
+                // =========================================================================
+                // Group 3: Contextual Execution & PLC Controls (Adapts to active WorkMode)
+                // =========================================================================
+                cad_toolbar_group(ui, palette, |ui| match app.work_mode {
+                    WorkMode::Edit => {
+                        // Quick Start Simulation button
+                        let (sim_run_lbl, sim_run_w) = if is_compact {
+                            ("Sim", 52.0)
+                        } else {
+                            ("Simulate", 74.0)
+                        };
+                        if cad_hero_button(
+                            ui,
+                            Some(VectorIcon::Play),
+                            sim_run_lbl,
+                            palette.accent_ok,
+                            false,
+                            true,
+                            sim_run_w,
+                            palette,
+                        )
+                        .on_hover_text("Start Local PC Simulation immediately [F5]")
+                        .clicked()
+                        {
+                            app.set_work_mode(WorkMode::Simulator);
+                        }
+
+                        toolbar_divider(ui, palette);
+
+                        // Update / Download to PLC
+                        let (plc_lbl, plc_w) = if is_compact {
+                            ("Update", 64.0)
+                        } else {
+                            ("Update PLC", 88.0)
+                        };
+                        if modern_tool_button(
+                            ui,
+                            Some(VectorIcon::SerialComm),
+                            plc_lbl,
+                            palette.accent_warn,
+                            app.show_update_plc,
+                            true,
+                            false,
+                            plc_w,
+                            palette,
+                        )
+                        .on_hover_text(
+                            "Compile IL to 32-bit Micro-VM Bytecode & Download to RP2040 PLC Flash via USB",
+                        )
+                        .clicked()
+                        {
+                            app.show_update_plc = !app.show_update_plc;
+                        }
+
+                        // Read / Upload from PLC
+                        if !is_ultra_compact {
+                            let (read_lbl, read_w) = if is_compact {
+                                ("Read", 46.0)
+                            } else {
+                                ("📥 Read PLC", 76.0)
+                            };
+                            if cad_hero_button(
+                                ui,
+                                None,
+                                read_lbl,
+                                palette.accent_heading,
+                                false,
+                                true,
+                                read_w,
+                                palette,
+                            )
+                            .on_hover_text(
+                                "Read compiled bytecode from connected RP2040 PLC and decompile into Ladder Diagram",
+                            )
+                            .clicked()
+                            {
+                                app.request_upload_from_plc();
+                            }
+                        }
+                    }
+
+                    WorkMode::Simulator => {
+                        let is_running = app.doc.simulator.is_running();
+                        let is_step = app.doc.simulator.is_step();
+
+                        // Run / Pause Hero Button
+                        let (run_lbl, run_w) = if is_running {
+                            ("RUN", 54.0)
+                        } else if is_compact {
+                            ("Run", 50.0)
+                        } else {
+                            ("Resume", 64.0)
+                        };
+                        if cad_hero_button(
+                            ui,
+                            Some(if is_running {
+                                VectorIcon::Stop
+                            } else {
+                                VectorIcon::Play
+                            }),
+                            run_lbl,
+                            if is_running {
+                                palette.accent_ok
+                            } else {
+                                palette.accent_heading
+                            },
+                            is_running,
+                            true,
+                            run_w,
+                            palette,
+                        )
+                        .on_hover_text(if is_running {
+                            "Pause Local Simulation [F5]"
+                        } else {
+                            "Run / Resume Continuous Simulation [F5]"
+                        })
+                        .clicked()
+                        {
+                            app.doc.toggle_simulation();
+                        }
+
+                        // Single Scan Step Button
+                        let (step_lbl, step_w) = if is_compact {
+                            ("", CAD_ICON_BTN_WIDTH)
+                        } else {
+                            ("Step", 52.0)
+                        };
+                        if modern_tool_button(
+                            ui,
+                            Some(VectorIcon::Step),
+                            step_lbl,
+                            palette.accent_warn,
+                            is_step,
+                            true,
+                            false,
+                            step_w,
+                            palette,
+                        )
+                        .on_hover_text("Execute Single Scan Step in Simulator [F6]")
+                        .clicked()
+                        {
+                            app.single_step_mode();
+                        }
+
+                        // Reset Simulation Button
+                        let (reset_lbl, reset_w) = if is_compact {
+                            ("", CAD_ICON_BTN_WIDTH)
+                        } else {
+                            ("Reset", 56.0)
+                        };
+                        if modern_tool_button(
+                            ui,
+                            Some(VectorIcon::Reset),
+                            reset_lbl,
+                            palette.accent_danger,
+                            false,
+                            true,
+                            false,
+                            reset_w,
+                            palette,
+                        )
+                        .on_hover_text("Reset Simulation & Clear All Coils/Timers/Counters [Shift+F5]")
+                        .clicked()
+                        {
+                            app.doc.reset_simulation();
+                        }
+
+                        toolbar_divider(ui, palette);
+
+                        // Simulation Speed Multiplier
                         egui::ComboBox::from_id_salt("toolbar_sim_speed_combo")
                             .width(48.0)
                             .selected_text(format!("x{}", app.doc.simulator.speed_multiplier))
@@ -520,18 +643,119 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                                 }
                             })
                             .response
-                            .on_hover_text(if is_hw {
-                                "Simulation speed (Fixed 10ms hardware scan cycle on RP2040)"
-                            } else {
-                                "Virtual simulation speed multiplier"
-                            });
-                    });
+                            .on_hover_text("Virtual simulation speed multiplier");
 
-                    // Digital Hardware Scan Timer / Counter Display (Fixed-size 84x26 LCD Readout)
-                    if !is_ultra_compact {
-                        let (time_text, text_color) = if is_hw {
-                            if app.online_mode && !is_hw_conn {
-                                ("RECONN...".to_string(), palette.accent_warn)
+                        // Simulated Time LCD Readout
+                        if !is_ultra_compact {
+                            let time_text = app.doc.simulator.formatted_sim_time();
+                            let text_color = if is_running {
+                                palette.accent_ok
+                            } else {
+                                palette.accent_warn
+                            };
+                            cad_lcd_readout(ui, &time_text, text_color, palette);
+                        }
+                    }
+
+                    WorkMode::OnlineDebug => {
+                        let is_hw_conn = app.is_hw_online_connected();
+                        let is_running = is_hw_conn && app.plc_remote_running;
+                        let is_matched = app
+                            .online_program_match_info()
+                            .map_or(true, |(m, _, _, _, _)| m);
+
+                        // Hardware PLC RUN / STOP Hero Button
+                        let (run_lbl, run_w) = if !is_hw_conn {
+                            ("WAIT", 52.0)
+                        } else if is_running {
+                            ("RUN", 54.0)
+                        } else {
+                            ("STOP", 54.0)
+                        };
+                        if cad_hero_button(
+                            ui,
+                            Some(if is_running {
+                                VectorIcon::Play
+                            } else {
+                                VectorIcon::Stop
+                            }),
+                            run_lbl,
+                            if !is_hw_conn {
+                                palette.accent_warn
+                            } else if is_running {
+                                palette.accent_ok
+                            } else {
+                                palette.accent_danger
+                            },
+                            is_running,
+                            is_hw_conn,
+                            run_w,
+                            palette,
+                        )
+                        .on_hover_text(if !is_hw_conn {
+                            "Waiting for RP2040 USB-CDC Connection..."
+                        } else if is_running {
+                            "PLC is RUNNING — Click to STOP Hardware PLC Execution [F5]"
+                        } else {
+                            "PLC is STOPPED — Click to RUN Hardware PLC Execution [F5]"
+                        })
+                        .clicked()
+                        {
+                            app.toggle_run_mode();
+                        }
+
+                        // Hardware Step Button
+                        let (step_lbl, step_w) = if is_compact {
+                            ("", CAD_ICON_BTN_WIDTH)
+                        } else {
+                            ("Step", 52.0)
+                        };
+                        if modern_tool_button(
+                            ui,
+                            Some(VectorIcon::Step),
+                            step_lbl,
+                            palette.accent_warn,
+                            false,
+                            is_hw_conn,
+                            false,
+                            step_w,
+                            palette,
+                        )
+                        .on_hover_text("Execute Single Scan Step on Hardware PLC [F6]")
+                        .clicked()
+                        {
+                            app.single_step_mode();
+                        }
+
+                        // Hardware Stop / Reset Button
+                        let (stop_lbl, stop_w) = if is_compact {
+                            ("", CAD_ICON_BTN_WIDTH)
+                        } else {
+                            ("Halt", 50.0)
+                        };
+                        if modern_tool_button(
+                            ui,
+                            Some(VectorIcon::Stop),
+                            stop_lbl,
+                            palette.accent_danger,
+                            false,
+                            is_hw_conn && is_running,
+                            false,
+                            stop_w,
+                            palette,
+                        )
+                        .on_hover_text("Halt Hardware PLC Scan & Safe Output Shutdown")
+                        .clicked()
+                        {
+                            app.stop_run_mode();
+                        }
+
+                        toolbar_divider(ui, palette);
+
+                        // Hardware Scan Counter LCD Readout
+                        if !is_ultra_compact {
+                            let (time_text, text_color) = if !is_hw_conn {
+                                ("WAIT USB".to_string(), palette.accent_warn)
                             } else {
                                 let scans =
                                     app.latest_snapshot.as_ref().map_or(0, |s| s.scan_count);
@@ -543,126 +767,40 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                                         palette.accent_heading
                                     },
                                 )
-                            }
-                        } else {
-                            (
-                                app.doc.simulator.formatted_sim_time(),
-                                if is_running {
-                                    palette.accent_ok
-                                } else {
-                                    palette.accent_heading
-                                },
-                            )
-                        };
-
-                        cad_lcd_readout(ui, &time_text, text_color, palette);
-                    }
-                });
-
-                // =========================================================================
-                // Group 3: Online & PLC Link (Go Online, Target Selector, Update PLC)
-                // =========================================================================
-                cad_toolbar_group(ui, palette, |ui| {
-                    let is_online = app.online_mode;
-                    let (online_btn_text, online_btn_w) = if is_online {
-                        ("ONLINE", 68.0)
-                    } else if is_compact {
-                        ("Online", 64.0)
-                    } else {
-                        ("Go Online", 82.0)
-                    };
-                    let online_btn_color = if is_online {
-                        palette.accent_ok
-                    } else {
-                        palette.accent_heading
-                    };
-
-                    if cad_hero_button(
-                        ui,
-                        Some(VectorIcon::SerialComm),
-                        online_btn_text,
-                        online_btn_color,
-                        is_online,
-                        true,
-                        online_btn_w,
-                        palette,
-                    )
-                    .on_hover_text(if is_online {
-                        "Online Monitoring ACTIVE: Real-time status from PLC / Simulator [Ctrl+M / F7]"
-                    } else {
-                        "Start Online Monitoring: Live debug Process Image in real time [Ctrl+M / F7]"
-                    })
-                    .clicked()
-                    {
-                        app.toggle_online_mode();
-                    }
-
-                    toolbar_divider(ui, palette);
-
-                    // Target selector: Hardware (RP2040) vs Local Simulator
-                    let cur_target_label = if is_compact {
-                        if app.online_target_hw {
-                            "🔌 HW"
-                        } else {
-                            "💻 Sim"
+                            };
+                            cad_lcd_readout(ui, &time_text, text_color, palette);
                         }
-                    } else if app.online_target_hw {
-                        "🔌 RP2040"
-                    } else {
-                        "💻 Simulator"
-                    };
-                    let target_combo_w = if is_compact { 68.0 } else { 96.0 };
-                    egui::ComboBox::from_id_salt("toolbar_online_target_combo")
-                        .width(target_combo_w)
-                        .selected_text(cur_target_label)
-                        .show_ui(ui, |ui| {
-                            if ui
-                                .selectable_label(app.online_target_hw, "🔌 Hardware (RP2040 USB)")
-                                .on_hover_text(
-                                    "Monitor & control physical RP2040 Micro-VM over USB CDC Serial",
-                                )
-                                .clicked()
-                            {
-                                app.set_online_target_hw(true);
-                                ui.close();
-                            }
-                            if ui
-                                .selectable_label(!app.online_target_hw, "💻 Virtual Simulator")
-                                .on_hover_text(
-                                    "Monitor & control internal local PLC software simulation engine",
-                                )
-                                .clicked()
-                            {
-                                app.set_online_target_hw(false);
-                                ui.close();
-                            }
-                        });
 
-                    toolbar_divider(ui, palette);
-
-                    // Update to PLC (Compile IL -> Bytecode & Upload to MCU VM)
-                    let (plc_lbl, plc_w) = if is_compact {
-                        ("Update", 64.0)
-                    } else {
-                        ("Update PLC", 88.0)
-                    };
-                    if modern_tool_button(
-                        ui,
-                        Some(VectorIcon::SerialComm),
-                        plc_lbl,
-                        palette.accent_warn,
-                        app.show_update_plc,
-                        true,
-                        false,
-                        plc_w,
-                        palette,
-                    )
-                    .on_hover_text(
-                        "Compile IL to 32-bit Micro-VM Bytecode & Update to PLC via Serial/USB",
-                    )
-                    .clicked()
-                    {
-                        app.show_update_plc = !app.show_update_plc;
+                        // Sync / Update PLC Button (Highlights when MISMATCH!)
+                        let (plc_lbl, plc_w) = if !is_matched && is_hw_conn {
+                            if is_compact {
+                                ("⚠ Sync", 58.0)
+                            } else {
+                                ("⚡ Sync PLC", 84.0)
+                            }
+                        } else if is_compact {
+                            ("Update", 64.0)
+                        } else {
+                            ("Update PLC", 88.0)
+                        };
+                        if modern_tool_button(
+                            ui,
+                            Some(VectorIcon::SerialComm),
+                            plc_lbl,
+                            palette.accent_warn,
+                            app.show_update_plc || (!is_matched && is_hw_conn),
+                            true,
+                            false,
+                            plc_w,
+                            palette,
+                        )
+                        .on_hover_text(
+                            "Open Update to PLC Dialog (Compile & Download Bytecode, I/O Config, or Flash Firmware)",
+                        )
+                        .clicked()
+                        {
+                            app.show_update_plc = !app.show_update_plc;
+                        }
                     }
                 });
 

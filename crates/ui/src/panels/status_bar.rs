@@ -1,93 +1,93 @@
 use egui::{RichText, Ui};
-use crate::app::CanvasApp;
+use crate::app::{CanvasApp, WorkMode};
 use my_canvas_core::SimState;
 
 pub fn render(ui: &mut Ui, app: &CanvasApp) {
     let palette = app.theme.palette();
 
     ui.horizontal(|ui| {
-        // 1. Hardware Name
-        ui.label(
-            RichText::new(format!("Hardware: {}", app.doc.program.hardware))
-                .color(palette.accent_heading)
-                .strong(),
-        );
-        ui.separator();
-
-        // 2. Online Monitoring / Simulation Status
-        if app.online_mode {
-            let is_hw = app.online_target_hw;
-            let target = if is_hw { "RP2040 MCU" } else { "SIM" };
-            let is_connected = !is_hw || app.is_hw_online_connected();
-
-            if is_hw && !is_connected {
-                ui.label(
-                    RichText::new(format!(
-                        "⚠ ONLINE ({}) DISCONNECTED - AUTO-RECONNECTING...",
-                        target
-                    ))
-                    .color(palette.accent_warn)
-                    .strong(),
-                );
-            } else {
-                match app.online_program_match_info() {
-                    Some((true, _, ide_crc, _, _)) => {
-                        ui.label(
-                            RichText::new(format!(
-                                "🟢 ONLINE ({}) ✔ CODE MATCH [0x{:04X}]",
-                                target, ide_crc
-                            ))
-                            .color(palette.accent_ok)
-                            .strong(),
-                        );
-                    }
-                    Some((false, _, ide_crc, _, plc_crc)) => {
-                        ui.label(
-                            RichText::new(format!(
-                                "⚠ ONLINE ({}) CODE MISMATCH [IDE:0x{:04X} ≠ PLC:0x{:04X}]",
-                                target, ide_crc, plc_crc
-                            ))
+        // 1. Operating Mode & Live Status
+        match app.work_mode {
+            WorkMode::OnlineDebug => {
+                let is_connected = app.is_hw_online_connected();
+                if !is_connected {
+                    ui.label(
+                        RichText::new("⚠ MODE: ONLINE PLC (DISCONNECTED - AUTO-RECONNECTING...)")
                             .color(palette.accent_warn)
                             .strong(),
-                        );
-                    }
-                    None => {
-                        ui.label(
-                            RichText::new(format!("🟢 ONLINE MONITORING ({})", target))
+                    );
+                } else {
+                    match app.online_program_match_info() {
+                        Some((true, _, ide_crc, _, _)) => {
+                            ui.label(
+                                RichText::new(format!(
+                                    "🔌 MODE: ONLINE PLC (RP2040) ✔ CODE MATCH [0x{:04X}]",
+                                    ide_crc
+                                ))
                                 .color(palette.accent_ok)
                                 .strong(),
-                        );
+                            );
+                        }
+                        Some((false, _, ide_crc, _, plc_crc)) => {
+                            ui.label(
+                                RichText::new(format!(
+                                    "⚠ MODE: ONLINE PLC (CODE MISMATCH IDE:0x{:04X} ≠ PLC:0x{:04X})",
+                                    ide_crc, plc_crc
+                                ))
+                                .color(palette.accent_warn)
+                                .strong(),
+                            );
+                        }
+                        None => {
+                            ui.label(
+                                RichText::new("🔌 MODE: ONLINE PLC (RP2040 MONITORING)")
+                                    .color(palette.accent_ok)
+                                    .strong(),
+                            );
+                        }
                     }
                 }
             }
-        } else {
-            match app.doc.simulator.state {
+            WorkMode::Simulator => match app.doc.simulator.state {
                 SimState::Running => {
                     ui.label(
-                        RichText::new("● SIMULATION RUNNING")
+                        RichText::new("💻 MODE: SIMULATOR (● RUNNING)")
                             .color(palette.accent_ok)
                             .strong(),
                     );
                 }
                 SimState::Step => {
                     ui.label(
-                        RichText::new("● SIMULATION STEP")
+                        RichText::new("💻 MODE: SIMULATOR (⏭ SINGLE STEP)")
                             .color(palette.accent_warn)
                             .strong(),
                     );
                 }
                 SimState::Stopped => {
                     ui.label(
-                        RichText::new("■ READY (EDIT MODE)").color(palette.rung_text_dim),
+                        RichText::new("💻 MODE: SIMULATOR (⏸ PAUSED)")
+                            .color(palette.accent_heading)
+                            .strong(),
                     );
                 }
+            },
+            WorkMode::Edit => {
+                ui.label(
+                    RichText::new("✏ MODE: EDIT (OFFLINE CIRCUIT DESIGN)")
+                        .color(palette.accent_heading)
+                        .strong(),
+                );
             }
         }
         ui.separator();
 
-        // 3. COM Port & Target Info
-        let target_str = if app.online_target_hw { "RP2040" } else { "Simulator" };
-        ui.label(format!("Target: {} | Port: {} @ {} bps", target_str, app.com_port_display(), app.baud_rate));
+        // 2. Hardware & Port Info
+        ui.label(format!(
+            "HW: {} | Port: {} @ {} bps",
+            app.doc.program.hardware,
+            app.com_port_display(),
+            app.baud_rate
+        ));
         ui.separator();
 
         let (scan_cnt, cycle_ms) = if app.online_mode && app.online_target_hw {
