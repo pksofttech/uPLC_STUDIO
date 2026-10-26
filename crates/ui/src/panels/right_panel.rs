@@ -1441,8 +1441,12 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette, _sim
             // Active Forces Warning Banner
             if !app.doc.simulator.forced_bits.is_empty() {
                 egui::Frame::new()
-                    .fill(Color32::from_rgba_unmultiplied(230, 126, 34, 30))
-                    .stroke(Stroke::new(1.0, Color32::from_rgb(230, 126, 34)))
+                    .fill(if palette.is_light() {
+                        Color32::from_rgb(254, 243, 199)
+                    } else {
+                        Color32::from_rgba_unmultiplied(230, 126, 34, 30)
+                    })
+                    .stroke(Stroke::new(1.0, palette.accent_warn))
                     .corner_radius(CornerRadius::same(6))
                     .inner_margin(egui::Margin::symmetric(8, 6))
                     .show(ui, |ui| {
@@ -1454,7 +1458,7 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette, _sim
                                 ))
                                 .strong()
                                 .size(11.0)
-                                .color(Color32::from_rgb(230, 126, 34)),
+                                .color(palette.accent_warn),
                             );
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 let rel_btn = egui::Button::new(
@@ -1941,12 +1945,20 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette, _sim
 
                         let (col, txt) = if let Some(f_val) = m_forced {
                             (
-                                Color32::from_rgb(230, 126, 34),
+                                if m_on {
+                                    Color32::WHITE
+                                } else {
+                                    palette.accent_warn
+                                },
                                 format!("M{}:{}⚡F:{}", i, u8::from(m_on), if f_val { 1 } else { 0 }),
                             )
                         } else {
                             (
-                                if m_on { palette.accent_ok } else { palette.rung_text_dim },
+                                if m_on {
+                                    Color32::WHITE
+                                } else {
+                                    palette.rung_text_dim
+                                },
                                 format!("M{}:{}", i, u8::from(m_on)),
                             )
                         };

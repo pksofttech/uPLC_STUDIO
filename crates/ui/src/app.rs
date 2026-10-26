@@ -1136,6 +1136,11 @@ impl CanvasApp {
                 .min_col_width(36.0)
                 .spacing([12.0, 5.0])
                 .show(ui, |ui| {
+                    let out_header_col = if palette.is_light() {
+                        palette.accent_heading
+                    } else {
+                        egui::Color32::from_rgb(52, 152, 219)
+                    };
                     ui.label(RichText::new("Input").strong().color(palette.accent_ok));
                     ui.label(RichText::new("IEC Addr").strong().color(palette.accent_ok));
                     ui.label(RichText::new("RP2040 GPIO Pin").strong().color(palette.accent_ok));
@@ -1143,17 +1148,17 @@ impl CanvasApp {
                     ui.label(
                         RichText::new("Output")
                             .strong()
-                            .color(egui::Color32::from_rgb(52, 152, 219)),
+                            .color(out_header_col),
                     );
                     ui.label(
                         RichText::new("IEC Addr")
                             .strong()
-                            .color(egui::Color32::from_rgb(52, 152, 219)),
+                            .color(out_header_col),
                     );
                     ui.label(
                         RichText::new("RP2040 GPIO Pin")
                             .strong()
-                            .color(egui::Color32::from_rgb(52, 152, 219)),
+                            .color(out_header_col),
                     );
                     ui.end_row();
 
@@ -3244,7 +3249,11 @@ impl eframe::App for CanvasApp {
                             .interactable(!modal_open)
                             .show(ui.ctx(), |ui| {
                                 egui::Frame::NONE
-                                    .fill(egui::Color32::from_rgba_unmultiplied(38, 28, 8, 245))
+                                    .fill(if palette.is_light() {
+                                        egui::Color32::from_rgb(254, 243, 199)
+                                    } else {
+                                        egui::Color32::from_rgba_unmultiplied(38, 28, 8, 245)
+                                    })
                                     .stroke(egui::Stroke::new(1.2, palette.accent_warn))
                                     .corner_radius(egui::CornerRadius::same(6))
                                     .inner_margin(egui::Margin::symmetric(12, 6))
@@ -3263,7 +3272,8 @@ impl eframe::App for CanvasApp {
                                                     .strong()
                                                     .color(egui::Color32::WHITE),
                                             )
-                                            .fill(egui::Color32::from_rgb(39, 174, 96));
+                                            .fill(egui::Color32::from_rgb(39, 174, 96))
+                                            .corner_radius(egui::CornerRadius::same(5));
                                             if ui
                                                 .add(sync_btn)
                                                 .on_hover_text("Compile current Ladder Diagram and download immediately to PLC Flash so live monitoring resumes")
@@ -3271,13 +3281,16 @@ impl eframe::App for CanvasApp {
                                             {
                                                 banner_cmd = Some(my_canvas_core::PlcSerialCommand::DownloadProgram);
                                             }
+                                            let read_btn = egui::Button::new(
+                                                RichText::new("📥 Read from PLC")
+                                                    .size(11.0)
+                                                    .strong()
+                                                    .color(egui::Color32::WHITE),
+                                            )
+                                            .fill(egui::Color32::from_rgb(41, 128, 185))
+                                            .corner_radius(egui::CornerRadius::same(5));
                                             if ui
-                                                .button(
-                                                    RichText::new("📥 Read from PLC")
-                                                        .size(11.0)
-                                                        .strong()
-                                                        .color(egui::Color32::WHITE),
-                                                )
+                                                .add(read_btn)
                                                 .on_hover_text("Read bytecode from connected PLC and decompile into Ladder Diagram")
                                                 .clicked()
                                             {
@@ -3391,12 +3404,14 @@ impl eframe::App for CanvasApp {
                                         .interactable(false)
                                         .show(ui.ctx(), |ui| {
                                             egui::Frame::NONE
-                                                .fill(egui::Color32::from_rgba_unmultiplied(
-                                                    48, 26, 6, 245,
-                                                ))
+                                                .fill(if palette.is_light() {
+                                                    egui::Color32::from_rgb(254, 243, 199)
+                                                } else {
+                                                    egui::Color32::from_rgba_unmultiplied(48, 26, 6, 245)
+                                                })
                                                 .stroke(egui::Stroke::new(
                                                     1.2,
-                                                    egui::Color32::from_rgb(245, 158, 11),
+                                                    palette.accent_warn,
                                                 ))
                                                 .corner_radius(egui::CornerRadius::same(6))
                                                 .inner_margin(egui::Margin::symmetric(12, 6))
@@ -3406,7 +3421,11 @@ impl eframe::App for CanvasApp {
                                                             "⚠ FIRMWARE FEATURE LEVEL v{} (< v2): Program uses Phase 2 opcodes (PID/SCALE/LIMIT/BITWISE/SHIFT/UART)",
                                                             snap.fw_feature_level.max(1)
                                                         ))
-                                                        .color(egui::Color32::from_rgb(251, 191, 36))
+                                                        .color(if palette.is_light() {
+                                                            palette.accent_warn
+                                                        } else {
+                                                            egui::Color32::from_rgb(251, 191, 36)
+                                                        })
                                                         .strong()
                                                         .size(11.0),
                                                     );
@@ -4116,18 +4135,30 @@ impl eframe::App for CanvasApp {
                                             if self.plc_remote_running {
                                                 (
                                                     "● PLC RUNNING",
-                                                    egui::Color32::from_rgba_unmultiplied(
-                                                        39, 174, 96, 45,
-                                                    ),
-                                                    egui::Color32::from_rgb(46, 204, 113),
+                                                    if palette.is_light() {
+                                                        egui::Color32::from_rgba_unmultiplied(39, 174, 96, 32)
+                                                    } else {
+                                                        egui::Color32::from_rgba_unmultiplied(39, 174, 96, 45)
+                                                    },
+                                                    if palette.is_light() {
+                                                        palette.accent_ok
+                                                    } else {
+                                                        egui::Color32::from_rgb(46, 204, 113)
+                                                    },
                                                 )
                                             } else {
                                                 (
                                                     "■ PLC STOPPED",
-                                                    egui::Color32::from_rgba_unmultiplied(
-                                                        231, 76, 60, 45,
-                                                    ),
-                                                    egui::Color32::from_rgb(241, 96, 80),
+                                                    if palette.is_light() {
+                                                        egui::Color32::from_rgba_unmultiplied(231, 76, 60, 32)
+                                                    } else {
+                                                        egui::Color32::from_rgba_unmultiplied(231, 76, 60, 45)
+                                                    },
+                                                    if palette.is_light() {
+                                                        palette.accent_danger
+                                                    } else {
+                                                        egui::Color32::from_rgb(241, 96, 80)
+                                                    },
                                                 )
                                             };
                                         egui::Frame::NONE
@@ -4183,7 +4214,11 @@ impl eframe::App for CanvasApp {
                             (
                                 "FINGERPRINT (CRC16 / CRC8)",
                                 format!("0x{:04X} | Frame 0x{:02X}", prog_crc16, crc8),
-                                egui::Color32::from_rgb(52, 152, 219),
+                                if palette.is_light() {
+                                    palette.accent_heading
+                                } else {
+                                    egui::Color32::from_rgb(52, 152, 219)
+                                },
                             ),
                             (
                                 "MAPPED I/O & MEM",
@@ -4394,13 +4429,21 @@ impl eframe::App for CanvasApp {
                         (
                             egui::Color32::from_rgba_unmultiplied(231, 76, 60, 28),
                             egui::Color32::from_rgb(231, 76, 60),
-                            egui::Color32::from_rgb(255, 118, 105),
+                            if palette.is_light() {
+                                palette.accent_danger
+                            } else {
+                                egui::Color32::from_rgb(255, 118, 105)
+                            },
                         )
                     } else {
                         (
                             egui::Color32::from_rgba_unmultiplied(39, 174, 96, 28),
                             egui::Color32::from_rgb(39, 174, 96),
-                            egui::Color32::from_rgb(46, 204, 113),
+                            if palette.is_light() {
+                                palette.accent_ok
+                            } else {
+                                egui::Color32::from_rgb(46, 204, 113)
+                            },
                         )
                     };
 
@@ -4445,7 +4488,11 @@ impl eframe::App for CanvasApp {
                                         RichText::new(format!("✖ Compile Error: {}", err))
                                             .monospace()
                                             .size(11.0)
-                                            .color(egui::Color32::from_rgb(255, 118, 105)),
+                                            .color(if palette.is_light() {
+                                                palette.accent_danger
+                                            } else {
+                                                egui::Color32::from_rgb(255, 118, 105)
+                                            }),
                                     );
                                 }
                                 for warn in &compile_report.warnings {
@@ -4453,7 +4500,11 @@ impl eframe::App for CanvasApp {
                                         RichText::new(format!("⚠ Compile Warning: {}", warn))
                                             .monospace()
                                             .size(11.0)
-                                            .color(egui::Color32::from_rgb(251, 191, 36)),
+                                            .color(if palette.is_light() {
+                                                palette.accent_warn
+                                            } else {
+                                                egui::Color32::from_rgb(251, 191, 36)
+                                            }),
                                     );
                                 }
                             });
@@ -4487,7 +4538,11 @@ impl eframe::App for CanvasApp {
                                         ))
                                         .strong()
                                         .size(11.0)
-                                        .color(egui::Color32::from_rgb(251, 191, 36)),
+                                        .color(if palette.is_light() {
+                                            palette.accent_warn
+                                        } else {
+                                            egui::Color32::from_rgb(251, 191, 36)
+                                        }),
                                     );
                                 });
                         }

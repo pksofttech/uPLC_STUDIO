@@ -1,15 +1,10 @@
 [workspace]
 resolver = "2"
-members = [
-    "crates/*",
-    "apps/*",
-]
-exclude = [
-    "firmware/rp2040-embassy",
-]
+members = ["crates/*", "apps/*"]
+exclude = ["firmware/rp2040-embassy"]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
@@ -34,4 +29,3 @@ self_update = { version = "0.41", default-features = false, features = [
     "compression-zip-deflate",
     "rustls",
 ] }
-

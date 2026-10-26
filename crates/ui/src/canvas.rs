@@ -4455,7 +4455,15 @@ impl CanvasViewport {
                     Align2::CENTER_CENTER,
                     &elem.name,
                     self.font_mono(13.0),
-                    if is_selected { Color32::WHITE } else { palette.rung_text_num },
+                    if is_selected {
+                        if palette.is_light() {
+                            palette.accent_heading
+                        } else {
+                            Color32::WHITE
+                        }
+                    } else {
+                        palette.rung_text_num
+                    },
                 );
 
                 // Bottom: Slave ID, Func, Buffer
