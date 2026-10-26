@@ -13,21 +13,21 @@
       <img src="https://img.shields.io/badge/🌐_Live_Website_&_Interactive_Demo-pksofttech.github.io-000000?style=for-the-badge" alt="Official Website" />
     </a>
     <a href="https://github.com/pksofttech/uPLC_STUDIO/releases/latest">
-      <img src="https://img.shields.io/badge/⬇_Download_Releases-v0.1.0_(Pre--Release)-10b981?style=for-the-badge" alt="Download Release" />
+      <img src="https://img.shields.io/badge/⬇_Download_Releases-v0.1.1_(Pre--Release)-10b981?style=for-the-badge" alt="Download Release" />
     </a>
   </p>
 </div>
 
 ---
 
-## 📦 ดาวน์โหลดเวอร์ชันพร้อมใช้งาน (Pre-Built Downloads — `v0.1.0`)
+## 📦 ดาวน์โหลดเวอร์ชันพร้อมใช้งาน (Pre-Built Downloads — `v0.1.1`)
 
 🌐 **หน้าเว็บไซต์หลัก & ทดลองจำลองวงจรออนไลน์**: **[https://pksofttech.github.io/uPLC_STUDIO](https://pksofttech.github.io/uPLC_STUDIO)**
 
 | แพลตฟอร์ม (Platform) | ลิงก์ดาวน์โหลดตรง (Direct Download) | รายละเอียด (Contents) |
 | :--- | :--- | :--- |
-| 🪟 **Windows 10 / 11 (64-bit)** | [**⬇ ดาวน์โหลด `.zip` สำหรับ Windows**](https://github.com/pksofttech/uPLC_STUDIO/releases/latest/download/laduino-plc-v0.1.0-x86_64-pc-windows-msvc.zip) | `laduino-plc.exe` + เฟิร์มแวร์ `.uf2` + 14 ตัวอย่างวงจร `.il` |
-| 🐧 **Linux (x86_64)** | [**⬇ ดาวน์โหลด `.tar.gz` สำหรับ Linux**](https://github.com/pksofttech/uPLC_STUDIO/releases/latest/download/laduino-plc-v0.1.0-x86_64-unknown-linux-gnu.tar.gz) | ไบนารี `laduino-plc` + เฟิร์มแวร์ `.uf2` + 14 ตัวอย่างวงจร `.il` |
+| 🪟 **Windows 10 / 11 (64-bit)** | [**⬇ ดาวน์โหลด `.zip` สำหรับ Windows**](https://github.com/pksofttech/uPLC_STUDIO/releases/latest/download/laduino-plc-v0.1.1-x86_64-pc-windows-msvc.zip) | `laduino-plc.exe` + เฟิร์มแวร์ `.uf2` + 14 ตัวอย่างวงจร `.il` |
+| 🐧 **Linux (x86_64)** | [**⬇ ดาวน์โหลด `.tar.gz` สำหรับ Linux**](https://github.com/pksofttech/uPLC_STUDIO/releases/latest/download/laduino-plc-v0.1.1-x86_64-unknown-linux-gnu.tar.gz) | ไบนารี `laduino-plc` + เฟิร์มแวร์ `.uf2` + 14 ตัวอย่างวงจร `.il` |
 | 🍓 **RP2040 Micro-VM (`.uf2`)** | [**⚡ ดาวน์โหลดเฟิร์มแวร์ `.uf2`**](https://github.com/pksofttech/uPLC_STUDIO/releases/latest/download/uplc-rp2040-embassy.uf2) | เฟิร์มแวร์สำหรับลากวางลงไดรฟ์ `RPI-RP2` (USB BOOTSEL) |
 
 ---

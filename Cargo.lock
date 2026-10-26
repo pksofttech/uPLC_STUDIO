@@ -1649,7 +1649,7 @@ dependencies = [
 
 [[package]]
 name = "laduino-plc"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "eframe",
  "egui",
@@ -1829,7 +1829,7 @@ dependencies = [
 
 [[package]]
 name = "my-canvas-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1838,7 +1838,7 @@ dependencies = [
 
 [[package]]
 name = "my-canvas-ui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "eframe",
  "egui",
@@ -3689,7 +3689,7 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "uplc-vm"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "url"

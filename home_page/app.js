@@ -5,13 +5,13 @@
  * ============================================================================
  */
 const SITE_CONFIG = {
-  version: "v0.1.0",
+  version: "v0.1.1",
   githubRepoUrl: "https://github.com/pksofttech/uPLC_STUDIO",
   releasesUrl: "#download",
   windowsDownloadUrl:
-    "https://github.com/pksofttech/uPLC_STUDIO/releases/latest/download/laduino-plc-v0.1.0-x86_64-pc-windows-msvc.zip",
+    "https://github.com/pksofttech/uPLC_STUDIO/releases/latest/download/laduino-plc-v0.1.1-x86_64-pc-windows-msvc.zip",
   linuxDownloadUrl:
-    "https://github.com/pksofttech/uPLC_STUDIO/releases/latest/download/laduino-plc-v0.1.0-x86_64-unknown-linux-gnu.tar.gz",
+    "https://github.com/pksofttech/uPLC_STUDIO/releases/latest/download/laduino-plc-v0.1.1-x86_64-unknown-linux-gnu.tar.gz",
   firmwareUf2Url:
     "https://github.com/pksofttech/uPLC_STUDIO/releases/latest/download/uplc-rp2040-embassy.uf2",
 
