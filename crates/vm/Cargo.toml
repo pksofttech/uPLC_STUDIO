@@ -6,3 +6,8 @@ license.workspace = true
 description = "no_std Accumulator-based IEC 61131-3 IL Micro-VM for RP2040 & Embedded MCUs"
 
 [dependencies]
+
+[features]
+default = []
+# Small-RAM MCUs (e.g. STM32F103C6T6, 10 KB SRAM): limit program memory to 256 instructions (1 KB)
+compact = []

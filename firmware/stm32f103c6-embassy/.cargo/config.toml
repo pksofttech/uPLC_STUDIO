@@ -1,0 +1,22 @@
+# Upload & run via ST-Link V2 (SWD: SWDIO=PA13, SWCLK=PA14, GND, 3.3V)
+#   cargo run --release      -> flash + RTT (defmt) log viewer
+#   ./flash.sh               -> flash only (probe-rs download)
+#
+# Clone chips (CKS32F103 / APM32F103 / GD32F103) may need `--connect-under-reset`
+# or `--allow-erase-all` added to the runner below.
+[target.'cfg(all(target_arch = "arm", target_os = "none"))']
+runner = "probe-rs run --chip STM32F103C6Tx --protocol swd --speed 1800"
+rustflags = [
+    "-C", "linker=flip-link",
+    "-C", "link-arg=--nmagic",
+    "-C", "link-arg=-Tlink.x",
+    "-C", "link-arg=-Tdefmt.x",
+]
+
+[build]
+target = "thumbv7m-none-eabi"
+
+[env]
+DEFMT_LOG = "info"
+# Default RTT up-buffer is 1 KB — too much for 10 KB SRAM
+DEFMT_RTT_BUFFER_SIZE = "256"

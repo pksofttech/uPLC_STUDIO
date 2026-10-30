@@ -19,7 +19,12 @@
 //!   - `0xC0..=0xDF`: Timer Current Values `T0..T31` (ms)
 //!   - `0xE0..=0xFF`: Counter Current Values `C0..C31`
 
+/// Maximum number of 32-bit instructions in program memory
+/// (`512` by default, `256` with the `compact` feature for 10 KB SRAM parts like STM32F103C6T6).
+#[cfg(not(feature = "compact"))]
 pub const MAX_INSTRUCTIONS: usize = 512;
+#[cfg(feature = "compact")]
+pub const MAX_INSTRUCTIONS: usize = 256;
 pub const MAX_STACK_DEPTH: usize = 16;
 pub const PACKET_SOF: u8 = 0xAA;
 
@@ -603,7 +608,7 @@ impl MicroVm {
         }
         let count = payload.len() / 4;
         if count > MAX_INSTRUCTIONS {
-            return Err("Program exceeds MAX_INSTRUCTIONS (512)");
+            return Err("Program exceeds MAX_INSTRUCTIONS");
         }
 
         for (i, chunk) in payload.chunks_exact(4).enumerate() {
@@ -706,6 +711,9 @@ impl MicroVm {
                 0x0A => {
                     if acc && mc_active {
                         self.bit_mem[addr] = 0; // R (Reset Unlatch)
+                        if addr >= 0xC0 {
+                            self.word_mem[addr] = 0;
+                        }
                     }
                 }
                 0x0B => acc = (bit_val && !prev_bit_val) && mc_active,  // LDP
@@ -853,25 +861,22 @@ impl MicroVm {
                     let prev_cu = self.ctu_prev[c_idx] != 0;
                     if acc && mc_active && !prev_cu {
                         self.word_mem[addr] = self.word_mem[addr].saturating_add(1);
-                        if self.word_mem[addr] >= ins.imm as i32 {
-                            self.bit_mem[addr] = 1;
-                        }
                     }
+                    self.bit_mem[addr] = u8::from(self.word_mem[addr] >= ins.imm as i32);
                     self.ctu_prev[c_idx] = u8::from(acc && mc_active);
                     self.acc_word = self.word_mem[addr];
                     acc = self.bit_mem[addr] != 0;
                 }
                 0x24 => {
                     // CTD (Counter Down)
-                    let c_idx = addr.saturating_sub(0xE0) & 0x1F;
-                    let prev_cd = self.ctu_prev[c_idx] != 0;
+                    let prev_cd = self.edge_prev[addr] != 0;
                     if acc && mc_active && !prev_cd {
-                        self.word_mem[addr] = self.word_mem[addr].saturating_sub(1);
-                        if self.word_mem[addr] <= 0 {
-                            self.bit_mem[addr] = 1;
-                        }
+                        self.word_mem[addr] = (self.word_mem[addr] - 1).max(0);
+                        self.bit_mem[addr] = u8::from(self.word_mem[addr] <= 0);
+                    } else if self.word_mem[addr] > 0 && self.word_mem[addr] < ins.imm as i32 {
+                        self.bit_mem[addr] = 0;
                     }
-                    self.ctu_prev[c_idx] = u8::from(acc && mc_active);
+                    self.edge_prev[addr] = u8::from(acc && mc_active);
                     self.acc_word = self.word_mem[addr];
                     acc = self.bit_mem[addr] != 0;
                 }

@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/*", "apps/*"]
-exclude = ["firmware/rp2040-embassy"]
+exclude = ["firmware/rp2040-embassy", "firmware/stm32f103c6-embassy"]
 
 [workspace.package]
 version = "0.1.2"

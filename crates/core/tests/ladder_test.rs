@@ -577,6 +577,9 @@ fn test_load_all_example_il_files() {
         "11_drum_rhythm_demo",
         "12_pid_scale_process",
         "13_bitwise_shift_uart",
+        "14_counter_up_down_demo",
+        "15_ctud_parking_lot_demo",
+        "16_toggle_relay_demo",
     ];
 
     for base in files {
@@ -2674,5 +2677,404 @@ fn test_multiline_network_comment_il_roundtrip() {
     reloaded.load_from_il_str(&il_str).expect("Should parse multiline network comment IL");
     assert_eq!(reloaded.program.rungs[0].comment, multi_comment);
 }
+
+#[test]
+fn test_counter_demo_simulator_and_micro_vm() {
+    use my_canvas_core::bytecode::BytecodeCompiler;
+    use my_canvas_core::PlcSimulator;
+    use uplc_vm::MicroVm;
+
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let il_path = manifest_dir
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("example/14_counter_up_down_demo.il");
+    let il = std::fs::read_to_string(&il_path).expect("Failed to read 14_counter_up_down_demo.il");
+
+    let mut prog = IlParser::parse(&il).expect("Failed to parse 14_counter_up_down_demo.il");
+    let (bc, report) = BytecodeCompiler::compile_program_with_report(&prog);
+    assert!(report.errors.is_empty(), "Compile errors: {:?}", report.errors);
+
+    let mut sim = PlcSimulator::new();
+    let mut vm = MicroVm::new();
+    vm.load_bytecode(&bc.to_raw_bytes()).expect("VM load_bytecode failed");
+
+    let run_step = |sim: &mut PlcSimulator, vm: &mut MicroVm, prog: &mut LadderProgram, ix0: bool, ix1: bool, ix2: bool| {
+        for (bit, val) in [(0, ix0), (1, ix1), (2, ix2)] {
+            sim.set_input(&format!("%IX0.{}", bit), val);
+            vm.set_digital_input(bit, val);
+        }
+        sim.step_scan(prog, 10);
+        vm.step_scan(10);
+
+        for q in 0..4 {
+            assert_eq!(
+                sim.get_var_value(&format!("%QX0.{}", q)),
+                vm.get_digital_output(q),
+                "Output %QX0.{} mismatch",
+                q
+            );
+        }
+        assert_eq!(sim.read_word("C0"), vm.word_mem[0xE0], "C0 CV mismatch");
+        assert_eq!(sim.read_word("C1"), vm.word_mem[0xE1], "C1 CV mismatch");
+    };
+
+    // Step 1: Press RESET_PB (%IX0.2) to reset C0 = 0 and load C1 = 5
+    run_step(&mut sim, &mut vm, &mut prog, false, false, true);
+    run_step(&mut sim, &mut vm, &mut prog, false, false, false);
+    assert_eq!(sim.read_word("C0"), 0);
+    assert_eq!(sim.read_word("C1"), 5);
+
+    // Step 2: Pulse PULSE_UP (%IX0.0) 4 times -> C0 = 4, Warning Lamp %QX0.1 = ON, Done %QX0.0 = OFF
+    for _ in 0..4 {
+        run_step(&mut sim, &mut vm, &mut prog, true, false, false);
+        run_step(&mut sim, &mut vm, &mut prog, false, false, false);
+    }
+    assert_eq!(sim.read_word("C0"), 4);
+    assert!(sim.get_var_value("%QX0.1"));  // WARN_80_LAMP (C0 >= 4)
+    assert!(!sim.get_var_value("%QX0.0")); // UP_DONE_LAMP (C0 < 5)
+    assert!(sim.get_var_value("%QX0.3"));  // ACTIVE_LAMP (C0 > 0)
+
+    // Step 3: 5th pulse on PULSE_UP -> C0 = 5, Done Lamp %QX0.0 stays ON even after pulse goes FALSE
+    run_step(&mut sim, &mut vm, &mut prog, true, false, false);
+    run_step(&mut sim, &mut vm, &mut prog, false, false, false);
+    assert_eq!(sim.read_word("C0"), 5);
+    assert!(sim.get_var_value("%QX0.0"));  // UP_DONE_LAMP ON!
+    assert!(!sim.get_var_value("%QX0.1")); // WARN_80_LAMP turns OFF because %QX0.0 is ON
+
+    // Step 4: Pulse PULSE_DN (%IX0.1) 5 times -> C1 counts down 5 -> 0, %QX0.2 turns ON at 0
+    for expected in (0..5).rev() {
+        run_step(&mut sim, &mut vm, &mut prog, false, true, false);
+        run_step(&mut sim, &mut vm, &mut prog, false, false, false);
+        assert_eq!(sim.read_word("C1"), expected);
+    }
+    assert!(sim.get_var_value("%QX0.2")); // DN_ZERO_LAMP ON at C1 == 0
+
+    // Step 5: Press RESET_PB (%IX0.2) -> C0 resets to 0, C1 reloads to 5, Done lamps turn OFF
+    run_step(&mut sim, &mut vm, &mut prog, false, false, true);
+    run_step(&mut sim, &mut vm, &mut prog, false, false, false);
+    assert_eq!(sim.read_word("C0"), 0);
+    assert_eq!(sim.read_word("C1"), 5);
+    assert!(!sim.get_var_value("%QX0.0"));
+    assert!(!sim.get_var_value("%QX0.2"));
+}
+
+#[test]
+fn test_ctud_parking_lot_demo_simulator_and_micro_vm() {
+    use my_canvas_core::bytecode::BytecodeCompiler;
+    use my_canvas_core::PlcSimulator;
+    use uplc_vm::MicroVm;
+
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let il_path = manifest_dir
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("example/15_ctud_parking_lot_demo.il");
+    let il = std::fs::read_to_string(&il_path).expect("Failed to read 15_ctud_parking_lot_demo.il");
+
+    let mut prog = IlParser::parse(&il).expect("Failed to parse 15_ctud_parking_lot_demo.il");
+    assert_eq!(prog.rungs[0].elements[2].element_type, TypeTag::Ctud);
+    assert_eq!(prog.rungs[1].elements[1].element_type, TypeTag::Ctd);
+
+    let (bc, report) = BytecodeCompiler::compile_program_with_report(&prog);
+    assert!(report.errors.is_empty(), "Compile errors: {:?}", report.errors);
+
+    let mut sim = PlcSimulator::new();
+    let mut vm = MicroVm::new();
+    vm.load_bytecode(&bc.to_raw_bytes()).expect("VM load_bytecode failed");
+
+    let run_step = |sim: &mut PlcSimulator, vm: &mut MicroVm, prog: &mut LadderProgram, car_in: bool, car_out: bool, reset: bool| {
+        for (bit, val) in [(0, car_in), (1, car_out), (2, reset)] {
+            sim.set_input(&format!("%IX0.{}", bit), val);
+            vm.set_digital_input(bit, val);
+        }
+        sim.step_scan(prog, 10);
+        vm.step_scan(10);
+
+        for q in 0..5 {
+            assert_eq!(
+                sim.get_var_value(&format!("%QX0.{}", q)),
+                vm.get_digital_output(q),
+                "Output %QX0.{} mismatch (C0={})",
+                q,
+                sim.read_word("C0")
+            );
+        }
+        assert_eq!(sim.read_word("C0"), vm.word_mem[0xE0], "CTUD C0 CV mismatch");
+    };
+
+    // Initial scan: C0 = 0, Green = ON (%QX0.0), Lot Empty = ON (%QX0.3), Red Full = OFF (%QX0.2)
+    run_step(&mut sim, &mut vm, &mut prog, false, false, false);
+    assert_eq!(sim.read_word("C0"), 0);
+    assert!(sim.get_var_value("%QX0.0"));  // GREEN_OPEN
+    assert!(sim.get_var_value("%QX0.3"));  // LOT_EMPTY
+    assert!(!sim.get_var_value("%QX0.2")); // RED_FULL
+
+    // 4 cars enter -> C0 = 4, Yellow Warning (%QX0.1) = ON, Red Full (%QX0.2) = OFF
+    for expected in 1..=4 {
+        run_step(&mut sim, &mut vm, &mut prog, true, false, false);
+        run_step(&mut sim, &mut vm, &mut prog, false, false, false);
+        assert_eq!(sim.read_word("C0"), expected);
+    }
+    assert!(sim.get_var_value("%QX0.0"));  // GREEN_OPEN
+    assert!(sim.get_var_value("%QX0.1"));  // YELLOW_WARN (C0 == 4)
+    assert!(!sim.get_var_value("%QX0.2")); // RED_FULL
+
+    // 5th car enters -> C0 = 5, Red Full (%QX0.2) = ON, Green (%QX0.0) = OFF, Yellow (%QX0.1) = OFF
+    run_step(&mut sim, &mut vm, &mut prog, true, false, false);
+    run_step(&mut sim, &mut vm, &mut prog, false, false, false);
+    assert_eq!(sim.read_word("C0"), 5);
+    assert!(sim.get_var_value("%QX0.2"));  // RED_FULL ON
+    assert!(!sim.get_var_value("%QX0.0")); // GREEN_OPEN OFF
+    assert!(!sim.get_var_value("%QX0.1")); // YELLOW_WARN OFF
+    assert!(prog.rungs[0].elements[2].is_done);
+
+    // 6th car tries to enter while Full (%QX0.2 is ON) -> blocked by ANDN %QX0.2, C0 stays 5
+    run_step(&mut sim, &mut vm, &mut prog, true, false, false);
+    run_step(&mut sim, &mut vm, &mut prog, false, false, false);
+    assert_eq!(sim.read_word("C0"), 5);
+
+    // 1 car exits (%IX0.1) -> C0 drops from 5 to 4, Red Full turns OFF, Green & Yellow turn ON!
+    run_step(&mut sim, &mut vm, &mut prog, false, true, false);
+    run_step(&mut sim, &mut vm, &mut prog, false, false, false);
+    assert_eq!(sim.read_word("C0"), 4);
+    assert!(!sim.get_var_value("%QX0.2")); // RED_FULL OFF
+    assert!(sim.get_var_value("%QX0.0"));  // GREEN_OPEN ON
+    assert!(sim.get_var_value("%QX0.1"));  // YELLOW_WARN ON
+    assert!(!prog.rungs[0].elements[2].is_done);
+
+    // 2 more cars exit -> C0 = 2, Master Reset (%IX0.2) clears C0 back to 0
+    for _ in 0..2 {
+        run_step(&mut sim, &mut vm, &mut prog, false, true, false);
+        run_step(&mut sim, &mut vm, &mut prog, false, false, false);
+    }
+    assert_eq!(sim.read_word("C0"), 2);
+
+    run_step(&mut sim, &mut vm, &mut prog, false, false, true);
+    run_step(&mut sim, &mut vm, &mut prog, false, false, false);
+    assert_eq!(sim.read_word("C0"), 0);
+    assert!(sim.get_var_value("%QX0.3")); // LOT_EMPTY ON
+}
+
+#[test]
+fn test_toggle_relay_demo_simulator_and_micro_vm() {
+    use my_canvas_core::bytecode::BytecodeCompiler;
+    use my_canvas_core::PlcSimulator;
+    use uplc_vm::MicroVm;
+
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let il_path = manifest_dir
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("example/16_toggle_relay_demo.il");
+    let il = std::fs::read_to_string(&il_path).expect("Failed to read 16_toggle_relay_demo.il");
+
+    let mut prog = IlParser::parse(&il).expect("Failed to parse 16_toggle_relay_demo.il");
+    // Verify Network 02 has a 2-path XOR parallel branch with 2 contacts in each path
+    assert_eq!(prog.rungs[1].elements[0].element_type, TypeTag::Branch);
+    assert_eq!(prog.rungs[1].elements[0].branch_paths.len(), 2);
+    assert_eq!(prog.rungs[1].elements[0].branch_paths[0].len(), 2);
+    assert_eq!(prog.rungs[1].elements[0].branch_paths[1].len(), 2);
+
+    let (bc, report) = BytecodeCompiler::compile_program_with_report(&prog);
+    assert!(report.errors.is_empty(), "Compile errors: {:?}", report.errors);
+
+    let mut sim = PlcSimulator::new();
+    let mut vm = MicroVm::new();
+    vm.load_bytecode(&bc.to_raw_bytes()).expect("VM load_bytecode failed");
+
+    let run_step = |sim: &mut PlcSimulator, vm: &mut MicroVm, prog: &mut LadderProgram, pb_a: bool, pb_b: bool, master_off: bool| {
+        for (bit, val) in [(0, pb_a), (1, pb_b), (2, master_off)] {
+            sim.set_input(&format!("%IX0.{}", bit), val);
+            vm.set_digital_input(bit, val);
+        }
+        sim.step_scan(prog, 10);
+        vm.step_scan(10);
+
+        for q in 0..3 {
+            assert_eq!(
+                sim.get_var_value(&format!("%QX0.{}", q)),
+                vm.get_digital_output(q),
+                "Output %QX0.{} mismatch",
+                q
+            );
+        }
+        assert_eq!(sim.read_word("C0"), vm.word_mem[0xE0], "Toggle C0 CV mismatch");
+    };
+
+    // Initial scan: all OFF
+    run_step(&mut sim, &mut vm, &mut prog, false, false, false);
+    assert!(!sim.get_var_value("%QX0.0"));
+    assert!(!sim.get_var_value("%QX0.1"));
+    assert!(!sim.get_var_value("%QX0.2"));
+
+    // Press 1 on PB_TOGGLE_A (%IX0.0) -> RELAY_CH1 (%QX0.0) toggles ON and stays ON when button is held or released!
+    run_step(&mut sim, &mut vm, &mut prog, true, false, false);
+    assert!(sim.get_var_value("%QX0.0"));
+    run_step(&mut sim, &mut vm, &mut prog, true, false, false); // Held down -> still ON!
+    assert!(sim.get_var_value("%QX0.0"));
+    run_step(&mut sim, &mut vm, &mut prog, false, false, false); // Released -> still ON!
+    assert!(sim.get_var_value("%QX0.0"));
+
+    // Press 2 on PB_TOGGLE_A (%IX0.0) -> RELAY_CH1 (%QX0.0) toggles OFF!
+    run_step(&mut sim, &mut vm, &mut prog, true, false, false);
+    assert!(!sim.get_var_value("%QX0.0"));
+    run_step(&mut sim, &mut vm, &mut prog, false, false, false);
+    assert!(!sim.get_var_value("%QX0.0"));
+
+    // Press 1 on PB_TOGGLE_B (%IX0.1) -> C0 = 1 -> RELAY_CH2 (%QX0.1) toggles ON!
+    run_step(&mut sim, &mut vm, &mut prog, false, true, false);
+    run_step(&mut sim, &mut vm, &mut prog, false, false, false);
+    assert_eq!(sim.read_word("C0"), 1);
+    assert!(sim.get_var_value("%QX0.1"));
+
+    // Also toggle PB_TOGGLE_A ON -> Both Ch1 & Ch2 are ON -> BOTH_ON_LAMP (%QX0.2) turns ON!
+    run_step(&mut sim, &mut vm, &mut prog, true, false, false);
+    run_step(&mut sim, &mut vm, &mut prog, false, false, false);
+    assert!(sim.get_var_value("%QX0.0"));
+    assert!(sim.get_var_value("%QX0.1"));
+    assert!(sim.get_var_value("%QX0.2"));
+
+    // Press 2 on PB_TOGGLE_B (%IX0.1) -> C0 hits 2 and immediately resets to 0 -> RELAY_CH2 (%QX0.1) toggles OFF!
+    run_step(&mut sim, &mut vm, &mut prog, false, true, false);
+    run_step(&mut sim, &mut vm, &mut prog, false, false, false);
+    assert_eq!(sim.read_word("C0"), 0);
+    assert!(!sim.get_var_value("%QX0.1"));
+    assert!(!sim.get_var_value("%QX0.2"));
+    assert!(sim.get_var_value("%QX0.0")); // Ch1 still ON
+
+    // Press MASTER_OFF (%IX0.2) -> clears Ch1 and Ch2!
+    run_step(&mut sim, &mut vm, &mut prog, false, false, true);
+    run_step(&mut sim, &mut vm, &mut prog, false, false, false);
+    assert!(!sim.get_var_value("%QX0.0"));
+    assert!(!sim.get_var_value("%QX0.1"));
+    assert!(!sim.get_var_value("%QX0.2"));
+}
+
+#[test]
+fn test_timers_ton_tof_tp_and_counters_simulator_matches_micro_vm() {
+    use my_canvas_core::bytecode::BytecodeCompiler;
+    use my_canvas_core::PlcSimulator;
+    use uplc_vm::MicroVm;
+
+    let il = r#"
+PROGRAM MainProgram
+VAR
+    T0 : TON; (* Preset: 30ms *)
+    T1 : TOF; (* Preset: 30ms *)
+    T2 : TP;  (* Preset: 30ms *)
+    C0 : CTU; (* Preset: 3 *)
+    C1 : CTD; (* Preset: 3 *)
+END_VAR
+
+(* Network 01: TON T0 (30ms) -> %QX0.0 *)
+    LD   %IX0.0
+    CAL  T0(IN := TRUE, PT := T#30ms)
+    ST   %QX0.0
+
+(* Network 02: TOF T1 (30ms) -> %QX0.1 *)
+    LD   %IX0.1
+    CAL  T1(IN := TRUE, PT := T#30ms)
+    ST   %QX0.1
+
+(* Network 03: TP T2 (30ms) -> %QX0.2 *)
+    LD   %IX0.2
+    CAL  T2(IN := TRUE, PT := T#30ms)
+    ST   %QX0.2
+
+(* Network 04: CTU C0 (PV=3) -> %QX0.3 *)
+    LD   %IX0.3
+    CAL  C0(CU := TRUE, PV := 3)
+    ST   %QX0.3
+
+(* Network 05: CTD C1 (PV=3) -> %QX0.4 *)
+    LD   %IX0.4
+    CAL  C1(CD := TRUE, PV := 3)
+    ST   %QX0.4
+
+(* Network 06: Reset all timers & counters on %IX0.5 *)
+    LD   %IX0.5
+    R    T0
+    R    T1
+    R    T2
+    R    C0
+    R    C1
+    MOVE C1 3
+
+END_PROGRAM
+"#;
+
+    let mut prog = IlParser::parse(il).expect("Failed to parse timer/counter differential IL");
+    let (bc, report) = BytecodeCompiler::compile_program_with_report(&prog);
+    assert!(report.errors.is_empty(), "Compile errors: {:?}", report.errors);
+
+    let mut sim = PlcSimulator::new();
+    let mut vm = MicroVm::new();
+    vm.load_bytecode(&bc.to_raw_bytes()).expect("VM load_bytecode failed");
+
+    // Step sequence: (ix0_ton, ix1_tof, ix2_tp, ix3_ctu, ix4_ctd, ix5_rst)
+    let script: &[(bool, bool, bool, bool, bool, bool)] = &[
+        // Scan 0: Initialize / Reset all & load C1 = 3
+        (false, false, false, false, false, true),
+        (false, false, false, false, false, false),
+        // Test TON (30ms = 3 scans of 10ms), TOF (turns ON immediately), TP (30ms pulse)
+        (true, true, true, true, false, false),   // 10ms: TON=10, TOF=0(ON), TP=10(ON), C0=1
+        (true, false, false, false, true, false), // 20ms: TON=20, TOF=10(ON), TP=20(ON), C1=2
+        (true, false, false, true, false, false), // 30ms: TON=30(ON), TOF=20(ON), TP=30(OFF), C0=2
+        (true, false, false, false, true, false), // 40ms: TON=30(ON), TOF=30(OFF), TP=0(OFF), C1=1
+        (false, false, false, true, false, false),// 50ms: TON=0(OFF), TOF=30(OFF), C0=3(ON)
+        (false, false, false, false, true, false),// 60ms: C1=0(ON)
+        // Reset everything via %IX0.5
+        (false, false, false, false, false, true),
+        (false, false, false, false, false, false),
+    ];
+
+    for (step_idx, &(ix0, ix1, ix2, ix3, ix4, ix5)) in script.iter().enumerate() {
+        for (bit, val) in [(0, ix0), (1, ix1), (2, ix2), (3, ix3), (4, ix4), (5, ix5)] {
+            sim.set_input(&format!("%IX0.{}", bit), val);
+            vm.set_digital_input(bit, val);
+        }
+        sim.step_scan(&mut prog, 10);
+        vm.step_scan(10);
+
+        for q in 0..5 {
+            assert_eq!(
+                sim.get_var_value(&format!("%QX0.{}", q)),
+                vm.get_digital_output(q),
+                "Step {}: Output %QX0.{} mismatch",
+                step_idx,
+                q
+            );
+        }
+        for t in 0..3 {
+            assert_eq!(
+                sim.read_word(&format!("T{}", t)),
+                vm.word_mem[0xC0 + t],
+                "Step {}: Timer T{} ET mismatch",
+                step_idx,
+                t
+            );
+        }
+        for c in 0..2 {
+            assert_eq!(
+                sim.read_word(&format!("C{}", c)),
+                vm.word_mem[0xE0 + c],
+                "Step {}: Counter C{} CV mismatch",
+                step_idx,
+                c
+            );
+        }
+    }
+}
+
+
+
+
 
 

@@ -375,10 +375,16 @@ impl PlcSimulator {
             Some(WordKey::Timer(n)) => {
                 let e = self.timers.entry(format!("T{}", n)).or_insert((0, false));
                 e.0 = val.max(0) as u32;
+                if val <= 0 {
+                    e.1 = false;
+                }
             }
             Some(WordKey::Counter(n)) => {
                 let e = self.counters.entry(format!("C{}", n)).or_insert((0, false, false));
                 e.0 = val;
+                if val <= 0 {
+                    e.1 = false;
+                }
             }
             Some(k) => {
                 for a in word_aliases(k) {
@@ -629,6 +635,27 @@ impl PlcSimulator {
                     self.markers.insert(upper, val);
                 }
                 _ => {}
+            }
+            return;
+        }
+
+        if let Some(WordKey::Counter(n)) = classify_word(&upper) {
+            let e = self.counters.entry(format!("C{}", n)).or_insert((0, false, false));
+            if !val {
+                e.0 = 0;
+                e.1 = false;
+            } else {
+                e.1 = true;
+            }
+            return;
+        }
+        if let Some(WordKey::Timer(n)) = classify_word(&upper) {
+            let e = self.timers.entry(format!("T{}", n)).or_insert((0, false));
+            if !val {
+                e.0 = 0;
+                e.1 = false;
+            } else {
+                e.1 = true;
             }
             return;
         }
@@ -891,6 +918,31 @@ impl PlcSimulator {
             rung_idx += 1;
         }
 
+        // Sync counter/timer display state in case a later rung modified or reset them (e.g. R C0 / MOVE C0 0)
+        for rung in &mut program.rungs {
+            for elem in &mut rung.elements {
+                match elem.element_type {
+                    TypeTag::Ctu | TypeTag::Ctd | TypeTag::Ctud => {
+                        if let Some(&(cv, done, _)) = self.counters.get(&elem.name.to_uppercase()) {
+                            elem.current_accum = cv;
+                            elem.is_done = match elem.element_type {
+                                TypeTag::Ctu | TypeTag::Ctud => cv >= elem.preset_value && done,
+                                TypeTag::Ctd => cv <= 0 && done,
+                                _ => done,
+                            };
+                        }
+                    }
+                    TypeTag::Ton | TypeTag::Tof | TypeTag::Tp => {
+                        if let Some(&(cv, done)) = self.timers.get(&elem.name.to_uppercase()) {
+                            elem.current_accum = cv as i32;
+                            elem.is_done = done;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         // Re-assert forced outputs and markers after ladder logic scan
         if !self.forced_bits.is_empty() {
             let out_forces: Vec<(u8, bool)> = self
@@ -975,13 +1027,17 @@ impl PlcSimulator {
             TypeTag::Tof => {
                 let entry = self.timers.entry(elem.name.to_uppercase()).or_insert((0, false));
                 if power_in {
-                    entry.0 = elem.preset_value.max(0) as u32;
+                    entry.0 = 0;
                     entry.1 = true;
-                } else if entry.0 > 0 {
-                    entry.0 = entry.0.saturating_sub(dt_ms);
-                    entry.1 = entry.0 > 0;
-                } else {
-                    entry.1 = false;
+                } else if entry.1 {
+                    let next_cv = entry.0.saturating_add(dt_ms);
+                    let pt = elem.preset_value.max(0) as u32;
+                    if next_cv >= pt {
+                        entry.0 = pt;
+                        entry.1 = false;
+                    } else {
+                        entry.0 = next_cv;
+                    }
                 }
                 elem.current_accum = entry.0 as i32;
                 elem.is_done = entry.1;
@@ -1014,32 +1070,34 @@ impl PlcSimulator {
                 entry.1
             }
             TypeTag::Ctu | TypeTag::Ctud => {
+                let last_edge = *self.edge_states.get(&elem.id).unwrap_or(&false);
+                self.edge_states.insert(elem.id, power_in);
                 let entry = self.counters.entry(elem.name.to_uppercase()).or_insert((0, false, false));
-                let last_edge = entry.2;
                 entry.2 = power_in;
                 if power_in && !last_edge {
                     entry.0 += 1;
-                    if entry.0 >= elem.preset_value {
-                        entry.1 = true;
-                    }
                 }
+                entry.1 = entry.0 >= elem.preset_value;
                 elem.current_accum = entry.0;
                 elem.is_done = entry.1;
                 self.acc_word = elem.current_accum;
-                power_in && entry.1
+                entry.1
             }
             TypeTag::Ctd => {
-                let entry = self.counters.entry(elem.name.to_uppercase()).or_insert((elem.preset_value, false, false));
-                let last_edge = entry.2;
+                let last_edge = *self.edge_states.get(&elem.id).unwrap_or(&false);
+                self.edge_states.insert(elem.id, power_in);
+                let entry = self.counters.entry(elem.name.to_uppercase()).or_insert((0, false, false));
                 entry.2 = power_in;
                 if power_in && !last_edge {
                     entry.0 = (entry.0 - 1).max(0);
                     entry.1 = entry.0 <= 0;
+                } else if entry.0 > 0 && entry.0 < elem.preset_value {
+                    entry.1 = false;
                 }
                 elem.current_accum = entry.0;
                 elem.is_done = entry.1;
                 self.acc_word = elem.current_accum;
-                power_in && entry.1
+                entry.1
             }
             TypeTag::Branch => {
                 if elem.branch_paths.is_empty() {
@@ -1551,6 +1609,31 @@ impl PlcSimulator {
             rung.is_energized = power_flow;
             rung_idx += 1;
         }
+
+        // Sync counter/timer display state in case a later rung modified or reset them (e.g. R C0 / MOVE C0 0)
+        for rung in &mut program.rungs {
+            for elem in &mut rung.elements {
+                match elem.element_type {
+                    TypeTag::Ctu | TypeTag::Ctd | TypeTag::Ctud => {
+                        if let Some(&(cv, done, _)) = self.counters.get(&elem.name.to_uppercase()) {
+                            elem.current_accum = cv;
+                            elem.is_done = match elem.element_type {
+                                TypeTag::Ctu | TypeTag::Ctud => cv >= elem.preset_value && done,
+                                TypeTag::Ctd => cv <= 0 && done,
+                                _ => done,
+                            };
+                        }
+                    }
+                    TypeTag::Ton | TypeTag::Tof | TypeTag::Tp => {
+                        if let Some(&(cv, done)) = self.timers.get(&elem.name.to_uppercase()) {
+                            elem.current_accum = cv as i32;
+                            elem.is_done = done;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
 
     fn eval_element_read_only(&mut self, elem: &mut LadderElement, power_in: bool) -> bool {
@@ -1589,7 +1672,7 @@ impl PlcSimulator {
                     elem.current_accum = entry.0;
                     elem.is_done = entry.1;
                 }
-                power_in && elem.is_done
+                elem.is_done
             }
             TypeTag::Branch => {
                 if elem.branch_paths.is_empty() {

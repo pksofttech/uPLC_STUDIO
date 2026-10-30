@@ -56,6 +56,12 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     ("08 - RP2040 Demo LED Blink (GP25)", "example/08_rp2040_demo_led_blink.il"),
                     ("09 - Modbus RTU Master (RS-485)", "example/09_modbus_rtu_master.il"),
                     ("10 - RP2040 Automatic I/O Test", "example/10_auto_io_test.il"),
+                    ("11 - Drum Rhythm Sequencer Demo", "example/11_drum_rhythm_demo.il"),
+                    ("12 - PID & Linear Scaling Process", "example/12_pid_scale_process.il"),
+                    ("13 - Bitwise, Shift Register & UART", "example/13_bitwise_shift_uart.il"),
+                    ("14 - Counter CTU/CTD, Compare & Reset Demo", "example/14_counter_up_down_demo.il"),
+                    ("15 - CTUD Up/Down Parking Lot Demo", "example/15_ctud_parking_lot_demo.il"),
+                    ("16 - Toggle Relay (Push-On / Push-Off) Demo", "example/16_toggle_relay_demo.il"),
                 ];
                 for (label, path_str) in examples {
                     if ui.button(label).clicked() {

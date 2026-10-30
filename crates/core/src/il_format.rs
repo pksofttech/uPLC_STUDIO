@@ -856,6 +856,15 @@ impl IlParser {
                                 if let Some(last) = target_elements.last_mut() {
                                     if last.element_type == TypeTag::Branch {
                                         last.branch_paths.push(child_elements);
+                                    } else if target_elements.len() > 1
+                                        && target_elements.iter().all(|e| e.element_type == TypeTag::Contact)
+                                    {
+                                        let first_path = std::mem::take(target_elements);
+                                        next_id += 1;
+                                        target_elements.push(LadderElement::new_branch(
+                                            next_id,
+                                            vec![first_path, child_elements],
+                                        ));
                                     } else {
                                         let prev = target_elements.pop().unwrap();
                                         next_id += 1;
@@ -879,12 +888,43 @@ impl IlParser {
                 continue;
             }
 
-            if clean_line.starts_with("OR(") {
-                let rest = clean_line.strip_prefix("OR(").unwrap_or("").trim();
+            let or_paren_mode = if clean_line.starts_with("ORN(") {
+                Some((
+                    ContactMode::NormallyClosed,
+                    clean_line.strip_prefix("ORN(").unwrap_or("").trim(),
+                ))
+            } else if clean_line.starts_with("ORP(") {
+                Some((
+                    ContactMode::PositiveTransition,
+                    clean_line.strip_prefix("ORP(").unwrap_or("").trim(),
+                ))
+            } else if clean_line.starts_with("ORF(") {
+                Some((
+                    ContactMode::NegativeTransition,
+                    clean_line.strip_prefix("ORF(").unwrap_or("").trim(),
+                ))
+            } else if clean_line.starts_with("OR(") {
+                Some((
+                    ContactMode::NormallyOpen,
+                    clean_line.strip_prefix("OR(").unwrap_or("").trim(),
+                ))
+            } else {
+                None
+            };
+            if let Some((mode, rest)) = or_paren_mode {
                 let mut frame_elements = Vec::new();
                 if !rest.is_empty() && rest != ")" {
                     if let Some(el) = Self::parse_il_instruction(rest, &mut next_id, &fb_presets) {
                         frame_elements.push(el);
+                    } else {
+                        next_id += 1;
+                        let clean_name = Self::strip_member_suffix(rest.trim_matches(';'));
+                        frame_elements.push(LadderElement::new_contact(
+                            next_id,
+                            clean_name,
+                            clean_name,
+                            mode,
+                        ));
                     }
                 }
                 paren_stack.push(ParenFrame {
@@ -1581,7 +1621,13 @@ impl IlParser {
 
                 // Only add physical Input (%I) / Output (%Q) ports to hardware io_mappings (not %M internal markers/words)
                 if !addr_upper.starts_with("%M") {
-                    let is_input = addr_upper.starts_with("%I") || name.starts_with('X') || name.starts_with('I') || name.starts_with('A');
+                    let is_input = if addr_upper.starts_with("%I") {
+                        true
+                    } else if addr_upper.starts_with("%Q") {
+                        false
+                    } else {
+                        name.starts_with('X') || name.starts_with('I') || name.starts_with("AI")
+                    };
                     io_mappings.push(IOPortMapping {
                         plc_address: name.to_string(),
                         iec_address: addr.to_string(),
