@@ -21,7 +21,8 @@ pub fn render(ui: &mut Ui, app: &CanvasApp) {
                         Some((true, _, ide_crc, _, _)) => {
                             ui.label(
                                 RichText::new(format!(
-                                    "🔌 MODE: ONLINE PLC (RP2040) ✔ CODE MATCH [0x{:04X}]",
+                                    "🔌 MODE: ONLINE PLC ({}) ✔ CODE MATCH [0x{:04X}]",
+                                    app.plc_target().mcu_name(),
                                     ide_crc
                                 ))
                                 .color(palette.accent_ok)
@@ -40,7 +41,7 @@ pub fn render(ui: &mut Ui, app: &CanvasApp) {
                         }
                         None => {
                             ui.label(
-                                RichText::new("🔌 MODE: ONLINE PLC (RP2040 MONITORING)")
+                                RichText::new(format!("🔌 MODE: ONLINE PLC ({} MONITORING)", app.plc_target().mcu_name()))
                                     .color(palette.accent_ok)
                                     .strong(),
                             );

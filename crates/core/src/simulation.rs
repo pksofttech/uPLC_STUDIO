@@ -1443,6 +1443,28 @@ impl PlcSimulator {
     }
 
     /// Apply an Online Monitoring Status Snapshot (from RP2040 Micro-VM or Simulator) into memory
+    /// Convert a raw 12-bit on-chip temperature sensor ADC reading (AI3 / `%IW3`, 3.3 V reference)
+    /// into 0.1 °C units. The raw value is clamped to `0..=4095` and computed in `i64` (overflow-safe).
+    /// - RP2040:  `T = 27 - (Vbe - 0.706 V) / 1.721 mV`
+    /// - STM32F1: `T = 25 + (1.43 V - Vsense) / 4.3 mV`
+    pub fn cpu_temp_c01_from_raw(raw: i32, stm32f1: bool) -> i32 {
+        let raw = i64::from(raw.clamp(0, 4095));
+        let uv = raw * 3_300_000 / 4096;
+        let t = if stm32f1 {
+            250 + (1_430_000 - uv) / 430
+        } else {
+            270 - (uv - 706_000) / 1721
+        };
+        t as i32
+    }
+
+    /// Publish `%SD6` (CPU temperature, 0.1 °C) under all its register aliases
+    pub fn set_cpu_temp_registers(&mut self, temp_c01: i32) {
+        for key in ["%SD6", "SD6", "D8006", "D134"] {
+            self.registers.insert(key.to_string(), temp_c01);
+        }
+    }
+
     pub fn apply_online_snapshot(&mut self, snapshot: &PlcStatusSnapshot) {
         self.scan_count = snapshot.scan_count as u64;
         self.remote_running = snapshot.running;
@@ -1537,14 +1559,10 @@ impl PlcSimulator {
         self.registers.insert("D8005".to_string(), scan_high);
         self.registers.insert("D133".to_string(), scan_high);
 
-        // %SD6: RP2040 CPU Junction Temperature in 0.1 °C units derived from AI3 (%IW3)
-        let raw3 = snapshot.data_reg[3];
-        let vbe_uv = (raw3 as u32 * 3_300_000) / 4096;
-        let temp_c01 = 270i32 - (((vbe_uv as i32) - 706_000) / 1721);
-        self.registers.insert("%SD6".to_string(), temp_c01);
-        self.registers.insert("SD6".to_string(), temp_c01);
-        self.registers.insert("D8006".to_string(), temp_c01);
-        self.registers.insert("D134".to_string(), temp_c01);
+        // %SD6: CPU Junction Temperature in 0.1 °C units derived from AI3 (%IW3)
+        // (RP2040 formula by default; `LadderDocument` re-applies the STM32 formula for STM32 targets)
+        let temp_c01 = Self::cpu_temp_c01_from_raw(snapshot.data_reg[3], false);
+        self.set_cpu_temp_registers(temp_c01);
 
         // %SD7: RETAIN Flash save count encoded in bit 1 of bit_mem[0xA0..0xB0]
         let mut sd7: u16 = 0;
@@ -1753,5 +1771,23 @@ impl PlcSimulator {
 
         elem.is_energized = conducts;
         conducts
+    }
+}
+
+#[cfg(test)]
+mod cpu_temp_tests {
+    use super::PlcSimulator;
+
+    #[test]
+    fn cpu_temp_conversion_is_overflow_safe() {
+        // Full-scale / out-of-range inputs must not panic (previously `raw as u32 * 3_300_000` overflowed)
+        for raw in [i32::MIN, -1, 0, 1750, 4095, 4096, i32::MAX] {
+            let _ = PlcSimulator::cpu_temp_c01_from_raw(raw, false);
+            let _ = PlcSimulator::cpu_temp_c01_from_raw(raw, true);
+        }
+        // STM32F1: Vsense = 1.43 V (raw ≈ 1775) -> 25.0 °C
+        assert!((PlcSimulator::cpu_temp_c01_from_raw(1775, true) - 250).abs() <= 2);
+        // RP2040: Vbe = 0.706 V (raw ≈ 876) -> 27.0 °C
+        assert!((PlcSimulator::cpu_temp_c01_from_raw(876, false) - 270).abs() <= 2);
     }
 }

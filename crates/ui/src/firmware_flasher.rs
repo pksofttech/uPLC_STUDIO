@@ -28,6 +28,12 @@ pub struct FirmwareFlasher {
     pub console_log: String,
     last_drive_scan: Option<Instant>,
     rx: Option<Receiver<FlashWorkerMsg>>,
+    /// STM32F103C6T6 firmware image (`.elf` / `.bin` / `.hex`) flashed with ST-Link V2
+    pub stm32_firmware_path: String,
+    /// Result of the last `probe-rs list` scan (`Some(description)` = ST-Link found)
+    pub stlink_probe: Option<String>,
+    /// Whether an ST-Link scan has been performed since the window was opened
+    pub stlink_scanned: bool,
 }
 
 impl Default for FirmwareFlasher {
@@ -46,6 +52,11 @@ impl Default for FirmwareFlasher {
             console_log: String::new(),
             last_drive_scan: None,
             rx: None,
+            stm32_firmware_path: Self::find_stm32_firmware_path()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default(),
+            stlink_probe: None,
+            stlink_scanned: false,
         }
     }
 }
@@ -453,9 +464,300 @@ impl FirmwareFlasher {
     }
 }
 
+/// probe-rs chip name of the STM32F103C6T6 target
+pub const STM32F103C6_PROBE_RS_CHIP: &str = "STM32F103C6Tx";
+
+impl FirmwareFlasher {
+    /// Find the STM32F103C6T6 firmware: bundled `firmware/uplc-stm32f103c6.{elf,bin,hex}` next to the
+    /// executable, or the release ELF built in `firmware/stm32f103c6-embassy`.
+    pub fn find_stm32_firmware_path() -> Option<PathBuf> {
+        const BUNDLED: [&str; 4] = [
+            "firmware/uplc-stm32f103c6.elf",
+            "firmware/uplc-stm32f103c6.bin",
+            "firmware/uplc-stm32f103c6.hex",
+            "uplc-stm32f103c6.elf",
+        ];
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                if let Some(p) = BUNDLED.iter().map(|rel| dir.join(rel)).find(|p| p.exists()) {
+                    return Some(p);
+                }
+            }
+        }
+        if let Some(p) = BUNDLED.iter().map(Path::new).find(|p| p.exists()) {
+            return std::fs::canonicalize(p).ok().or_else(|| Some(p.to_path_buf()));
+        }
+        let elf = Path::new("firmware/stm32f103c6-embassy/target/thumbv7m-none-eabi/release/uplc-stm32f103c6-embassy");
+        if elf.exists() {
+            return std::fs::canonicalize(elf).ok().or_else(|| Some(elf.to_path_buf()));
+        }
+        None
+    }
+
+    /// Run `probe-rs list` and return the first ST-Link probe line (or `None`).
+    pub fn detect_stlink_probe() -> Option<String> {
+        let out = Command::new("probe-rs").arg("list").output().ok()?;
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .find(|l| l.to_ascii_lowercase().contains("stlink") || l.to_ascii_lowercase().contains("st-link"))
+            .map(|l| l.trim().trim_start_matches(|c: char| c == '[' || c.is_ascii_digit() || c == ']' || c == ':').trim().to_string())
+    }
+
+    /// Build the `probe-rs download` argument list for a firmware file (`.bin` needs a base address).
+    pub fn probe_rs_download_args(fw_path: &Path) -> Vec<String> {
+        let mut args = vec![
+            "download".to_string(),
+            "--chip".to_string(),
+            STM32F103C6_PROBE_RS_CHIP.to_string(),
+            "--protocol".to_string(),
+            "swd".to_string(),
+        ];
+        match fw_path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref() {
+            Some("bin") => args.extend(["--binary-format", "bin", "--base-address", "0x08000000"].map(String::from)),
+            Some("hex") => args.extend(["--binary-format", "hex"].map(String::from)),
+            _ => {}
+        }
+        args.push(fw_path.display().to_string());
+        args
+    }
+
+    /// Flash the STM32F103C6T6 firmware with an ST-Link V2 (`probe-rs`, falling back to `st-flash` for `.bin`).
+    ///
+    /// `probe-rs download` only erases the pages it programs, so the saved ladder program
+    /// (pages 30..31) and RETAIN memory (page 29) are preserved.
+    pub fn start_flash_stlink(&mut self, ctx: egui::Context) {
+        let fw_path = PathBuf::from(self.stm32_firmware_path.trim());
+        if !fw_path.exists() {
+            self.status_is_error = true;
+            self.status_summary = format!("✖ Firmware file not found: {}", fw_path.display());
+            return;
+        }
+        let (tx, rx): (Sender<FlashWorkerMsg>, Receiver<FlashWorkerMsg>) = mpsc::channel();
+        self.rx = Some(rx);
+        self.is_busy = true;
+        self.status_is_error = false;
+        self.status_summary = "🔥 Flashing STM32F103C6T6 via ST-Link V2 (SWD)...".to_string();
+        self.console_log.clear();
+
+        std::thread::spawn(move || {
+            let log = |line: String| {
+                let _ = tx.send(FlashWorkerMsg::LogLine(line));
+                ctx.request_repaint();
+            };
+            let run = |bin: &str, args: &[String]| -> Option<bool> {
+                log(format!("$ {} {}", bin, args.join(" ")));
+                let output = Command::new(bin).args(args).output().ok()?;
+                let out = String::from_utf8_lossy(&output.stdout);
+                let err = String::from_utf8_lossy(&output.stderr);
+                for l in out.lines().chain(err.lines()).filter(|l| !l.trim().is_empty()) {
+                    log(l.to_string());
+                }
+                Some(output.status.success())
+            };
+
+            let finish = |success: bool, summary: String| {
+                let _ = tx.send(FlashWorkerMsg::Finished { success, summary, generated_fw_path: None });
+                ctx.request_repaint();
+            };
+
+            match run("probe-rs", &Self::probe_rs_download_args(&fw_path)) {
+                Some(true) => {
+                    let reset_args: Vec<String> = ["reset", "--chip", STM32F103C6_PROBE_RS_CHIP, "--protocol", "swd"]
+                        .map(String::from)
+                        .to_vec();
+                    let _ = run("probe-rs", &reset_args);
+                    finish(true, "✔ STM32F103C6T6 flashed via ST-Link V2 — MCU reset, PLC program preserved".to_string());
+                    return;
+                }
+                Some(false) => log("⚠ probe-rs download failed".to_string()),
+                None => log("⚠ probe-rs not found (install: cargo install probe-rs-tools)".to_string()),
+            }
+
+            let is_bin = fw_path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("bin"));
+            if is_bin {
+                let args: Vec<String> = vec![
+                    "--reset".into(),
+                    "write".into(),
+                    fw_path.display().to_string(),
+                    "0x08000000".into(),
+                ];
+                if run("st-flash", &args) == Some(true) {
+                    finish(true, "✔ STM32F103C6T6 flashed via st-flash".to_string());
+                    return;
+                }
+            }
+            finish(
+                false,
+                "✖ ST-Link flash failed — check SWD wiring (SWDIO=PA13, SWCLK=PA14, GND, 3.3V); for clone chips hold RESET while flashing"
+                    .to_string(),
+            );
+        });
+    }
+}
+
+/// Render the ST-Link V2 firmware window used when the project target is STM32F103C6T6.
+fn render_stm32_stlink_dialog(ctx: &egui::Context, app: &mut CanvasApp) {
+    if !app.firmware_flasher.stlink_scanned {
+        app.firmware_flasher.stlink_probe = FirmwareFlasher::detect_stlink_probe();
+        app.firmware_flasher.stlink_scanned = true;
+        if app.firmware_flasher.console_log.is_empty() && !app.firmware_flasher.is_busy {
+            app.firmware_flasher.status_summary = "Ready — Connect ST-Link V2 to the board SWD header.".to_string();
+        }
+    }
+
+    let palette = app.theme.palette();
+    let mut open_win = app.firmware_flasher.show_window;
+    let mut close_win = false;
+    let mut trigger_flash = false;
+    let busy = app.firmware_flasher.is_busy;
+
+    Window::new("🔥 MCU Firmware Manager — STM32F103C6T6 (ST-Link V2)")
+        .order(egui::Order::Foreground)
+        .open(&mut open_win)
+        .min_size([560.0, 420.0])
+        .max_width(640.0)
+        .collapsible(false)
+        .resizable(true)
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            ui.group(|ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("🔌 Debug Probe").size(13.0).strong().color(palette.accent_heading));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add_enabled(!busy, egui::Button::new("🔄 Detect ST-Link").small()).clicked() {
+                            app.firmware_flasher.stlink_probe = FirmwareFlasher::detect_stlink_probe();
+                        }
+                    });
+                });
+                match &app.firmware_flasher.stlink_probe {
+                    Some(p) => ui.label(RichText::new(format!("🟢 {}", p)).monospace().size(11.5).strong().color(palette.accent_ok)),
+                    None => ui.label(
+                        RichText::new("⚪ No ST-Link found (needs `probe-rs` in PATH and udev rules on Linux)")
+                            .size(11.5)
+                            .color(palette.rung_text_dim),
+                    ),
+                };
+                ui.label(
+                    RichText::new("Wiring: SWDIO → PA13 • SWCLK → PA14 • GND → GND • 3.3V → 3.3V (BOOT0 = 0)")
+                        .size(10.5)
+                        .color(palette.rung_text_dim),
+                );
+            });
+
+            ui.add_space(6.0);
+            ui.group(|ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("📦 Firmware (.elf / .bin / .hex)").size(12.5).strong().color(palette.accent_heading));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("📂 Browse...").clicked() {
+                            if let Some(file) = rfd::FileDialog::new()
+                                .add_filter("STM32 Firmware (*.elf, *.bin, *.hex, *)", &["elf", "bin", "hex"])
+                                .pick_file()
+                            {
+                                app.firmware_flasher.stm32_firmware_path = file.display().to_string();
+                            }
+                        }
+                        if ui.small_button("📦 Use Bundled Firmware").clicked() {
+                            if let Some(p) = FirmwareFlasher::find_stm32_firmware_path() {
+                                app.firmware_flasher.stm32_firmware_path = p.display().to_string();
+                            }
+                        }
+                    });
+                });
+                ui.add(
+                    egui::TextEdit::singleline(&mut app.firmware_flasher.stm32_firmware_path)
+                        .font(egui::TextStyle::Monospace)
+                        .hint_text("Path to uplc-stm32f103c6.elf / .bin ...")
+                        .desired_width(ui.available_width()),
+                );
+                ui.label(
+                    RichText::new("ℹ Only firmware pages are rewritten — Ladder program (0x0800_7800) & RETAIN (0x0800_7400) are preserved.")
+                        .size(10.5)
+                        .color(palette.rung_text_dim),
+                );
+            });
+
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if busy {
+                    ui.spinner();
+                }
+                ui.label(
+                    RichText::new(&app.firmware_flasher.status_summary)
+                        .size(11.5)
+                        .strong()
+                        .color(if app.firmware_flasher.status_is_error { palette.accent_danger } else { palette.text_primary }),
+                );
+            });
+            egui::ScrollArea::vertical()
+                .id_salt("fw_stlink_console_scroll")
+                .max_height(150.0)
+                .stick_to_bottom(true)
+                .show(ui, |ui| {
+                    let mut log_view = if app.firmware_flasher.console_log.is_empty() {
+                        "Steps:\n1. Wire ST-Link V2 to the SWD pins (PA13/PA14/GND/3.3V).\n\
+                         2. Click '🔄 Detect ST-Link'.\n3. Click '🔥 Flash via ST-Link V2'.\n\
+                         4. Connect a USB-TTL adapter to PA9/PA10 and select its port @ 115200 in Options."
+                            .to_string()
+                    } else {
+                        app.firmware_flasher.console_log.clone()
+                    };
+                    ui.add(
+                        egui::TextEdit::multiline(&mut log_view)
+                            .font(egui::TextStyle::Monospace)
+                            .desired_width(ui.available_width())
+                            .desired_rows(6)
+                            .interactive(false),
+                    );
+                });
+
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                let has_fw = !app.firmware_flasher.stm32_firmware_path.trim().is_empty();
+                let flash_btn = egui::Button::new(
+                    RichText::new("🔥 Flash via ST-Link V2").size(12.5).strong().color(Color32::WHITE),
+                )
+                .fill(Color32::from_rgb(24, 130, 90))
+                .corner_radius(CornerRadius::same(6))
+                .min_size(egui::vec2(210.0, 32.0));
+                if ui.add_enabled(!busy && has_fw, flash_btn).clicked() {
+                    trigger_flash = true;
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let close_btn = egui::Button::new(RichText::new("Close").size(12.0))
+                        .corner_radius(CornerRadius::same(6))
+                        .min_size(egui::vec2(76.0, 32.0));
+                    if ui.add_enabled(!busy, close_btn).clicked() {
+                        close_win = true;
+                    }
+                });
+            });
+        });
+
+    if trigger_flash {
+        app.firmware_flasher.start_flash_stlink(ctx.clone());
+    }
+    if (!open_win || close_win) && !app.firmware_flasher.is_busy {
+        app.firmware_flasher.show_window = false;
+        app.firmware_flasher.stlink_scanned = false;
+    }
+}
+
 /// Render the USB MCU Firmware Flasher modal window.
 pub fn render_firmware_flasher_dialog(ctx: &egui::Context, app: &mut CanvasApp) {
     if !app.firmware_flasher.show_window {
+        return;
+    }
+
+    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !app.firmware_flasher.is_busy {
+        app.firmware_flasher.show_window = false;
+        app.firmware_flasher.stlink_scanned = false;
+        return;
+    }
+    if app.plc_target() == crate::target::PlcTarget::Stm32f103c6 {
+        render_stm32_stlink_dialog(ctx, app);
         return;
     }
 

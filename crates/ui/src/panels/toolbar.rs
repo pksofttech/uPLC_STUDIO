@@ -451,9 +451,11 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                         on_w,
                         palette,
                     )
-                    .on_hover_text(
-                        "3. Hardware Online Debug Mode: Connect to physical RP2040 PLC via USB-CDC for live monitoring & Force I/O [F7 / Ctrl+M]",
-                    )
+                    .on_hover_text(format!(
+                        "3. Hardware Online Debug Mode: Connect to physical {} PLC ({}) for live monitoring & Force I/O [F7 / Ctrl+M]",
+                        app.plc_target().mcu_name(),
+                        app.plc_target().link_description()
+                    ))
                     .clicked()
                     {
                         app.set_work_mode(WorkMode::OnlineDebug);
@@ -506,9 +508,10 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                             plc_w,
                             palette,
                         )
-                        .on_hover_text(
-                            "Compile IL to 32-bit Micro-VM Bytecode & Download to RP2040 PLC Flash via USB",
-                        )
+                        .on_hover_text(format!(
+                            "Compile IL to 32-bit Micro-VM Bytecode & Download to {} PLC Flash",
+                            app.plc_target().mcu_name()
+                        ))
                         .clicked()
                         {
                             app.show_update_plc = !app.show_update_plc;
@@ -531,9 +534,10 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                                 read_w,
                                 palette,
                             )
-                            .on_hover_text(
-                                "Read compiled bytecode from connected RP2040 PLC and decompile into Ladder Diagram",
-                            )
+                            .on_hover_text(format!(
+                                "Read compiled bytecode from connected {} PLC and decompile into Ladder Diagram",
+                                app.plc_target().mcu_name()
+                            ))
                             .clicked()
                             {
                                 app.request_upload_from_plc();
@@ -659,6 +663,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
 
                     WorkMode::OnlineDebug => {
                         let is_hw_conn = app.is_hw_online_connected();
+                        let waiting_hover = format!("Waiting for {} connection ({})...", app.plc_target().mcu_name(), app.plc_target().link_description());
                         let is_running = is_hw_conn && app.plc_remote_running;
                         let is_matched = app
                             .online_program_match_info()
@@ -693,7 +698,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                             palette,
                         )
                         .on_hover_text(if !is_hw_conn {
-                            "Waiting for RP2040 USB-CDC Connection..."
+                            waiting_hover.as_str()
                         } else if is_running {
                             "PLC is RUNNING — Click to STOP Hardware PLC Execution [F5]"
                         } else {

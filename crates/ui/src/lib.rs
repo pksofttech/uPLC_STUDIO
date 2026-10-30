@@ -4,6 +4,7 @@ pub mod firmware_flasher;
 pub mod icons;
 pub mod panels;
 pub mod serial;
+pub mod target;
 pub mod theme;
 pub mod tools;
 pub mod updater;

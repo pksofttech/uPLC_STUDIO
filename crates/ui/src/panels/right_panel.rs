@@ -1771,12 +1771,24 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette, _sim
                 });
                 ui.separator();
 
-                const ANALOG_CHANNELS: &[(&str, &str, &str)] = &[
+                const RP2040_ANALOG_CHANNELS: &[(&str, &str, &str)] = &[
                     ("%IW0", "AI0", "GP26 (ADC0)"),
                     ("%IW1", "AI1", "GP27 (ADC1)"),
                     ("%IW2", "AI2", "GP28 (ADC2)"),
                     ("%IW3", "AI3", "RP2040 Temp Sensor"),
                 ];
+                const STM32_ANALOG_CHANNELS: &[(&str, &str, &str)] = &[
+                    ("%IW0", "AI0", "PA0 (ADC1_IN0)"),
+                    ("%IW1", "AI1", "PA4 (ADC1_IN4)"),
+                    ("%IW2", "AI2", "PA5 (ADC1_IN5)"),
+                    ("%IW3", "AI3", "STM32 Temp Sensor"),
+                ];
+                #[allow(non_snake_case)]
+                let ANALOG_CHANNELS = if app.plc_target() == crate::target::PlcTarget::Stm32f103c6 {
+                    STM32_ANALOG_CHANNELS
+                } else {
+                    RP2040_ANALOG_CHANNELS
+                };
 
                 egui::Grid::new("analog_inputs_grid")
                     .striped(true)
@@ -2434,7 +2446,7 @@ const SPECIAL_REGISTERS: &[SpecialRegisterDef] = &[
         legacy: "D8006",
         name: "CPU Temperature",
         category_id: 3,
-        desc: "RP2040 on-chip junction temperature in 0.1 °C units (e.g. 265 = 26.5 °C)",
+        desc: "MCU on-chip junction temperature in 0.1 °C units (e.g. 265 = 26.5 °C)",
         is_bit: false,
         default_hint: "0.1 °C (D134)",
     },
@@ -2453,7 +2465,7 @@ const SPECIAL_REGISTERS: &[SpecialRegisterDef] = &[
         legacy: "M64..M95",
         name: "Latch Bit Relays",
         category_id: 5,
-        desc: "32 RETAIN Bit Relays preserved in RP2040 Flash across power outages",
+        desc: "32 RETAIN Bit Relays preserved in MCU Flash across power outages",
         is_bit: true,
         default_hint: "Flash Retentive",
     },
@@ -2462,7 +2474,7 @@ const SPECIAL_REGISTERS: &[SpecialRegisterDef] = &[
         legacy: "D96..D127",
         name: "Latch Word Registers",
         category_id: 5,
-        desc: "32 RETAIN Word Registers preserved in RP2040 Flash across power outages",
+        desc: "32 RETAIN Word Registers preserved in MCU Flash across power outages",
         is_bit: false,
         default_hint: "Flash Retentive",
     },
@@ -2559,7 +2571,7 @@ fn render_special_registers(
                 });
 
                 ui.label(
-                    RichText::new("RP2040 System Markers (%SM) & Special Registers (%SD)")
+                    RichText::new(format!("{} System Markers (%SM) & Special Registers (%SD)", app.plc_target().mcu_name()))
                         .small()
                         .color(palette.rung_text_dim),
                 );
@@ -2812,7 +2824,7 @@ fn render_special_registers(
                 ui.group(|ui| {
                     ui.set_width(ui.available_width());
                     ui.label(
-                        RichText::new("RP2040 Memory Map Sections:")
+                        RichText::new(format!("{} Memory Map Sections:", app.plc_target().mcu_name()))
                             .small()
                             .strong()
                             .color(palette.text_primary),

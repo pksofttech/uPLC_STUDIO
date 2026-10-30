@@ -363,6 +363,11 @@ impl Document {
     /// Update process image from an Online Monitoring Status Snapshot and re-evaluate ladder conduction
     pub fn apply_online_snapshot(&mut self, snapshot: &PlcStatusSnapshot) {
         self.simulator.apply_online_snapshot(snapshot);
+        // STM32F103C6T6 Micro-VM: AI3 is the STM32F1 temp sensor (different formula than RP2040)
+        if self.program.hardware.to_ascii_lowercase().contains("stm32f103") {
+            let t = crate::simulation::PlcSimulator::cpu_temp_c01_from_raw(snapshot.data_reg[3], true);
+            self.simulator.set_cpu_temp_registers(t);
+        }
         if snapshot.running {
             self.simulator.evaluate_conduction_only(&mut self.program);
         } else {

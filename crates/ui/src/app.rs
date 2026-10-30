@@ -674,6 +674,34 @@ impl CanvasApp {
         }
 
         let packet = custom_packet.unwrap_or_else(|| bc.to_serial_packet(cmd));
+        let target = self.plc_target();
+
+        // Refuse to download programs larger than the target firmware's program memory
+        if cmd == my_canvas_core::PlcSerialCommand::DownloadProgram
+            && bc.instructions.len() > target.max_instructions()
+        {
+            self.update_plc_is_error = true;
+            self.update_plc_status = format!(
+                "✖ Program too large for {}: {} instructions (limit {}). Simplify the ladder or select another target.",
+                target.mcu_name(),
+                bc.instructions.len(),
+                target.max_instructions()
+            );
+            return;
+        }
+        if !target.supports_runtime_io_config()
+            && matches!(
+                cmd,
+                my_canvas_core::PlcSerialCommand::GetIoConfig | my_canvas_core::PlcSerialCommand::SetIoConfig
+            )
+        {
+            self.update_plc_is_error = true;
+            self.update_plc_status = format!(
+                "✖ {} uses a fixed pin map compiled into the firmware — runtime I/O config (0x0B/0x0C) is not supported",
+                target.mcu_name()
+            );
+            return;
+        }
 
         // Fast-path: If Hardware Online Monitoring is active and this is a Run/Stop/Step command, route through cmd channel
         if self.online_mode && self.online_target_hw {
@@ -711,7 +739,11 @@ impl CanvasApp {
                                 self.plc_remote_running = false;
                                 self.stop_online_monitoring();
                                 self.update_plc_status =
-                                    "⚡ Rebooting RP2040 into USB BOOTSEL (RPI-RP2) mode...".to_string();
+                                    if target.supports_usb_bootsel() {
+                                        "⚡ Rebooting RP2040 into USB BOOTSEL (RPI-RP2) mode...".to_string()
+                                    } else {
+                                        format!("⚡ Reboot (0x0A) sent — {}", target.bootsel_status())
+                                    };
                             }
                             _ => {}
                         }
@@ -758,12 +790,15 @@ impl CanvasApp {
                             self.plc_remote_running = true;
                             let (_, prog_crc) = bc.program_signature();
                             self.update_plc_status = format!(
-                                "✔ Uploaded {} Bytes ({} inst, CRC16=0x{:04X}) to {} @ {} baud — Burned to Flash (0x1FE000) & PLC RUNNING",
+                                "✔ Uploaded {} Bytes ({} / {} inst, CRC16=0x{:04X}) to {} {} @ {} baud — Burned to {} & PLC RUNNING",
                                 packet.len(),
                                 bc.instructions.len(),
+                                target.max_instructions(),
                                 prog_crc,
+                                target.mcu_name(),
                                 port_path,
-                                self.baud_rate
+                                self.baud_rate,
+                                target.program_flash_location()
                             );
                         }
                         my_canvas_core::PlcSerialCommand::RunStopControl => {
@@ -809,8 +844,9 @@ impl CanvasApp {
                         my_canvas_core::PlcSerialCommand::EnterBootsel => {
                             self.plc_remote_running = false;
                             self.update_plc_status = format!(
-                                "⚡ Reboot to BOOTSEL (0x0A) sent to {} — RP2040 is mounting as RPI-RP2 drive",
-                                port_path
+                                "⚡ Reboot to BOOTSEL (0x0A) sent to {} — {}",
+                                port_path,
+                                target.bootsel_status()
                             );
                         }
                         my_canvas_core::PlcSerialCommand::GetIoConfig => {
@@ -886,6 +922,11 @@ impl CanvasApp {
         }
     }
 
+    /// Micro-VM firmware family of the current project (`Hardware` menu)
+    pub fn plc_target(&self) -> crate::target::PlcTarget {
+        crate::target::PlcTarget::from_hardware(&self.doc.program.hardware)
+    }
+
     /// Format an RP2040 GPIO pin index (`0..=29` or `0xFF`) for display
     pub fn format_rp2040_pin(pin: u8) -> String {
         if pin < 30 && !matches!(pin, 0 | 1 | 26 | 27 | 28) {
@@ -895,12 +936,26 @@ impl CanvasApp {
         }
     }
 
+    /// `true` if an I/O mapping description was auto-generated (safe to rename on target change)
+    fn is_auto_io_description(desc: &str) -> bool {
+        matches!(
+            desc,
+            "RP2040 Digital Input" | "RP2040 Digital Output" | "STM32F103C6T6 Digital Input" | "STM32F103C6T6 Digital Output"
+        )
+    }
+
     /// Sync `self.doc.program.io_mappings` (`X0..X7`, `Y0..Y7`) with `self.hw_io_config`
+    /// (or with the fixed pin map of the selected target, e.g. STM32F103C6T6)
     pub fn sync_doc_io_mappings_from_hw_config(&mut self) {
+        let target = self.plc_target();
+        let mcu = target.mcu_name();
         for i in 0..8 {
             let plc_addr = format!("X{}", i);
             let iec_addr = format!("%IX0.{}", i);
-            let hw_pin = Self::format_rp2040_pin(self.hw_io_config.input_pins[i]);
+            let fixed = target.fixed_input_pin(i);
+            let hw_pin = fixed
+                .map(str::to_string)
+                .unwrap_or_else(|| Self::format_rp2040_pin(self.hw_io_config.input_pins[i]));
             if let Some(existing) = self
                 .doc
                 .program
@@ -909,13 +964,16 @@ impl CanvasApp {
                 .find(|m| m.is_input && (m.plc_address == plc_addr || m.iec_address == iec_addr))
             {
                 existing.hw_pin = hw_pin;
-            } else if self.hw_io_config.input_pins[i] != my_canvas_core::PIN_UNASSIGNED {
+                if Self::is_auto_io_description(&existing.description) {
+                    existing.description = format!("{} Digital Input", mcu);
+                }
+            } else if fixed.is_some() || self.hw_io_config.input_pins[i] != my_canvas_core::PIN_UNASSIGNED {
                 self.doc.program.io_mappings.push(IOPortMapping {
                     plc_address: plc_addr,
                     iec_address: iec_addr,
                     symbol: format!("IN_{}", i),
                     hw_pin,
-                    description: "RP2040 Digital Input".to_string(),
+                    description: format!("{} Digital Input", mcu),
                     is_input: true,
                 });
             }
@@ -923,7 +981,10 @@ impl CanvasApp {
         for i in 0..8 {
             let plc_addr = format!("Y{}", i);
             let iec_addr = format!("%QX0.{}", i);
-            let hw_pin = Self::format_rp2040_pin(self.hw_io_config.output_pins[i]);
+            let fixed = target.fixed_output_pin(i);
+            let hw_pin = fixed
+                .map(str::to_string)
+                .unwrap_or_else(|| Self::format_rp2040_pin(self.hw_io_config.output_pins[i]));
             if let Some(existing) = self
                 .doc
                 .program
@@ -932,13 +993,16 @@ impl CanvasApp {
                 .find(|m| !m.is_input && (m.plc_address == plc_addr || m.iec_address == iec_addr))
             {
                 existing.hw_pin = hw_pin;
-            } else if self.hw_io_config.output_pins[i] != my_canvas_core::PIN_UNASSIGNED {
+                if Self::is_auto_io_description(&existing.description) {
+                    existing.description = format!("{} Digital Output", mcu);
+                }
+            } else if fixed.is_some() || self.hw_io_config.output_pins[i] != my_canvas_core::PIN_UNASSIGNED {
                 self.doc.program.io_mappings.push(IOPortMapping {
                     plc_address: plc_addr,
                     iec_address: iec_addr,
                     symbol: format!("OUT_{}", i),
                     hw_pin,
-                    description: "RP2040 Digital Output".to_string(),
+                    description: format!("{} Digital Output", mcu),
                     is_input: false,
                 });
             }
@@ -1039,9 +1103,106 @@ impl CanvasApp {
         self.transmit_custom_packet_to_plc(my_canvas_core::PlcSerialCommand::SetIoConfig, pkt);
     }
 
+    /// Read-only pin map for targets whose I/O mapping is fixed in firmware (STM32F103C6T6)
+    pub fn render_fixed_target_io_info_ui(&mut self, ui: &mut Ui, id_prefix: &str) {
+        use crate::target::{STM32F103C6_ANALOG_PINS, STM32F103C6_INPUT_PINS, STM32F103C6_OUTPUT_PINS};
+        let palette = self.theme.palette();
+        let target = self.plc_target();
+
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(8.0, 6.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    RichText::new(format!("🔧 {} Fixed I/O Pin Map", target.mcu_name()))
+                        .color(palette.accent_heading)
+                        .strong()
+                        .size(12.5),
+                );
+                ui.separator();
+                ui.label(
+                    RichText::new(format!(
+                        "Program capacity: {} instructions • {}",
+                        target.max_instructions(),
+                        target.program_flash_location()
+                    ))
+                    .size(11.0)
+                    .color(palette.accent_ok),
+                );
+            });
+            ui.label(
+                RichText::new(
+                    "Pins are compiled into the firmware (firmware/stm32f103c6-embassy/src/config.rs). \
+                     Runtime pin mapping (CMD 0x0B / 0x0C) is not supported on this target.",
+                )
+                .size(10.5)
+                .color(palette.symbol_subtext),
+            );
+
+            egui::Grid::new(format!("{}_fixed_io_grid", id_prefix))
+                .striped(true)
+                .num_columns(7)
+                .min_col_width(36.0)
+                .spacing([12.0, 5.0])
+                .show(ui, |ui| {
+                    ui.label(RichText::new("Input").strong().color(palette.accent_ok));
+                    ui.label(RichText::new("IEC Addr").strong().color(palette.accent_ok));
+                    ui.label(RichText::new("MCU Pin").strong().color(palette.accent_ok));
+                    ui.label(RichText::new("│").weak());
+                    ui.label(RichText::new("Output").strong().color(palette.accent_heading));
+                    ui.label(RichText::new("IEC Addr").strong().color(palette.accent_heading));
+                    ui.label(RichText::new("MCU Pin").strong().color(palette.accent_heading));
+                    ui.end_row();
+                    for i in 0..8 {
+                        ui.monospace(format!("X{}", i));
+                        ui.monospace(format!("%IX0.{}", i));
+                        ui.monospace(STM32F103C6_INPUT_PINS[i]);
+                        ui.label(RichText::new("│").weak());
+                        ui.monospace(format!("Y{}", i));
+                        ui.monospace(format!("%QX0.{}", i));
+                        ui.monospace(STM32F103C6_OUTPUT_PINS[i]);
+                        ui.end_row();
+                    }
+                });
+
+            ui.separator();
+            egui::Grid::new(format!("{}_fixed_periph_grid", id_prefix))
+                .num_columns(2)
+                .spacing([12.0, 4.0])
+                .show(ui, |ui| {
+                    for (iec, pin) in STM32F103C6_ANALOG_PINS {
+                        ui.monospace(iec);
+                        ui.label(pin);
+                        ui.end_row();
+                    }
+                    let rows = [
+                        ("Inputs", "Pull-up, active-low (switch to GND = ON)"),
+                        ("Status LED", "PC13 (active-low) — RUN 1 Hz / STOP beacon / ERROR strobe"),
+                        ("uPLC Studio link", target.link_description()),
+                        ("RS-485 Modbus RTU", "USART2 PA2=TX / PA3=RX, PA1=DE/RE, 9600 8N1"),
+                        ("Firmware upload", "ST-Link V2 (SWD: PA13=SWDIO, PA14=SWCLK) — ./flash.sh"),
+                        ("Not available", "User UART (UART_SEND/UART_RECV), USB BOOTSEL"),
+                    ];
+                    for (k, v) in rows {
+                        ui.label(RichText::new(k).strong());
+                        ui.label(RichText::new(v).size(11.0));
+                        ui.end_row();
+                    }
+                });
+            ui.label(
+                RichText::new("⚠ Do not wire the USB-TTL DTR/RTS lines to NRST — uPLC Studio asserts DTR when opening the port.")
+                    .size(10.5)
+                    .color(palette.symbol_subtext),
+            );
+        });
+    }
+
     /// Render the interactive RP2040 Hardware I/O Pin Mapping configuration table & Flash controls.
     /// Returns `true` if any setting was modified.
     pub fn render_rp2040_io_pin_config_ui(&mut self, ui: &mut Ui, id_prefix: &str) -> bool {
+        if !self.plc_target().supports_runtime_io_config() {
+            self.render_fixed_target_io_info_ui(ui, id_prefix);
+            return false;
+        }
         let palette = self.theme.palette();
         let mut changed = false;
 
@@ -2758,7 +2919,8 @@ impl eframe::App for CanvasApp {
                     self.doc.set_online_mode(false);
                     self.doc.clear_conduction();
                     self.online_status_text = format!(
-                        "⚠ Waiting for RP2040 ({}) - Auto-reconnecting...",
+                        "⚠ Waiting for {} ({}) - Auto-reconnecting...",
+                        self.plc_target().mcu_name(),
                         self.com_port_display()
                     );
                 }
@@ -3168,7 +3330,7 @@ impl eframe::App for CanvasApp {
                     let acc_b = is_hw_conn && snap.map_or(false, |s| s.acc_bool);
                     let acc_w = if is_hw_conn { snap.map_or(0, |s| s.acc_word) } else { 0 };
 
-                    let target_str = if is_hw { "RP2040 MCU" } else { "Simulator" };
+                    let target_str = if is_hw { format!("{} MCU", self.plc_target().mcu_name()) } else { "Simulator".to_string() };
                     let (title_str, run_str, run_color) = if is_hw && !is_hw_conn {
                         (
                             format!("⚠ RECONNECTING: {}", target_str),
@@ -3344,7 +3506,7 @@ impl eframe::App for CanvasApp {
                                         ui.horizontal(|ui| {
                                             if is_hw_conn {
                                                 ui.label(
-                                                    RichText::new("🔌 ONLINE DEBUG (RP2040)")
+                                                    RichText::new(format!("🔌 ONLINE DEBUG ({})", self.plc_target().mcu_name()))
                                                         .color(palette.accent_ok)
                                                         .strong()
                                                         .size(11.0),
@@ -3358,7 +3520,8 @@ impl eframe::App for CanvasApp {
                                             } else {
                                                 ui.label(
                                                     RichText::new(format!(
-                                                        "⚠ WAITING FOR RP2040 USB ({})...",
+                                                        "⚠ WAITING FOR {} ({})...",
+                                                        self.plc_target().mcu_name(),
                                                         self.com_port_display()
                                                     ))
                                                     .color(palette.accent_warn)
@@ -4009,6 +4172,7 @@ impl eframe::App for CanvasApp {
             let crc8 = packet.last().copied().unwrap_or(0);
             let port_exists = serial::configured_port_available(&self.com_port);
             let req_feature_level = bc.required_feature_level();
+            let target_max_inst = self.plc_target().max_instructions();
 
             Window::new("⚡ Update to PLC — Micro-VM Serial Loader & Controller")
                 .order(egui::Order::Foreground)
@@ -4183,7 +4347,7 @@ impl eframe::App for CanvasApp {
                                             .inner_margin(egui::Margin::symmetric(8, 4))
                                             .show(ui, |ui| {
                                                 ui.label(
-                                                    RichText::new("🎯 RP2040 Micro-VM")
+                                                    RichText::new(format!("🎯 {} Micro-VM", self.plc_target().mcu_name()))
                                                         .size(11.0)
                                                         .color(palette.symbol_subtext),
                                                 );
@@ -4200,11 +4364,16 @@ impl eframe::App for CanvasApp {
                             (
                                 "PROGRAM SIZE",
                                 format!(
-                                    "{} Inst ({} B)",
+                                    "{} / {} Inst ({} B)",
                                     bc.instructions.len(),
+                                    target_max_inst,
                                     bc.payload_size_bytes()
                                 ),
-                                palette.accent_ok,
+                                if bc.instructions.len() > target_max_inst {
+                                    egui::Color32::from_rgb(231, 76, 60)
+                                } else {
+                                    palette.accent_ok
+                                },
                             ),
                             (
                                 "SERIAL FRAME",
@@ -4275,7 +4444,7 @@ impl eframe::App for CanvasApp {
                         }
 
                         let tab2_btn = egui::Button::new(
-                            RichText::new("🔧 3. RP2040 Hardware I/O Pins")
+                            RichText::new(format!("🔧 3. {} Hardware I/O Pins", self.plc_target().mcu_name()))
                                 .strong()
                                 .size(11.5),
                         )

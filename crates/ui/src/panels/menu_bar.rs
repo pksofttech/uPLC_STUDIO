@@ -273,7 +273,8 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
             ui.label(RichText::new("Target IEC 61131-3 Hardware Platform:").weak().size(11.0));
             ui.separator();
             let targets = [
-                "RP2040 Micro-VM (Custom Firmware)",
+                crate::target::RP2040_TARGET_NAME,
+                crate::target::STM32F103C6_TARGET_NAME,
                 "IEC 61131-3 Standard PLC",
                 "OpenPLC Runtime (Linux / Windows)",
                 "OpenPLC MicroPLC (IEC 61131-3)",
@@ -287,6 +288,8 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 let is_cur = app.doc.program.hardware == target;
                 if ui.selectable_label(is_cur, target).clicked() {
                     app.doc.program.hardware = target.to_string();
+                    // Refresh X/Y hardware pin labels for the new target (RP2040 GPn vs STM32 Pxn)
+                    app.sync_doc_io_mappings_from_hw_config();
                     app.save_settings();
                     ui.close();
                 }
@@ -296,7 +299,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 ui.label(RichText::new(format!("Current: {}", app.doc.program.hardware)).italics().size(11.0));
             }
             ui.separator();
-            if ui.button("🔧 Configure RP2040 Hardware I/O Pins...").clicked() {
+            if ui.button(io_pins_menu_label(app)).clicked() {
                 app.show_update_plc = true;
                 app.update_plc_tab = 2;
                 ui.close();
@@ -305,7 +308,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 app.show_update_plc = true;
                 ui.close();
             }
-            if ui.button("🔥 Flash MCU Firmware (USB)...").clicked() {
+            if ui.button(flash_menu_label(app)).clicked() {
                 app.firmware_flasher.show_window = true;
                 ui.close();
             }
@@ -337,7 +340,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
             if ui
                 .selectable_label(
                     app.work_mode == WorkMode::OnlineDebug,
-                    "🔌 3. Online PLC Debug (RP2040 Hardware USB) [F7 / Ctrl+M]",
+                    format!("🔌 3. Online PLC Debug ({} Hardware) [F7 / Ctrl+M]", app.plc_target().mcu_name()),
                 )
                 .clicked()
             {
@@ -385,7 +388,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 ui.close();
             }
             ui.separator();
-            if ui.button("🔧 Configure RP2040 Hardware I/O Pins...").clicked() {
+            if ui.button(io_pins_menu_label(app)).clicked() {
                 app.show_update_plc = true;
                 app.update_plc_tab = 2;
                 ui.close();
@@ -394,7 +397,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 app.show_update_plc = true;
                 ui.close();
             }
-            if ui.button("🔥 Flash MCU Firmware (USB)...").clicked() {
+            if ui.button(flash_menu_label(app)).clicked() {
                 app.firmware_flasher.show_window = true;
                 ui.close();
             }
@@ -466,4 +469,23 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
             }
         }
     });
+}
+
+/// Hardware-menu label for the I/O pin configuration entry (target dependent)
+fn io_pins_menu_label(app: &crate::app::CanvasApp) -> String {
+    let target = app.plc_target();
+    if target.supports_runtime_io_config() {
+        "🔧 Configure RP2040 Hardware I/O Pins...".to_string()
+    } else {
+        format!("🔧 {} I/O Pin Map...", target.mcu_name())
+    }
+}
+
+/// Hardware-menu label for the firmware flasher entry (USB UF2 for RP2040, ST-Link for STM32)
+fn flash_menu_label(app: &crate::app::CanvasApp) -> &'static str {
+    if app.plc_target().supports_usb_bootsel() {
+        "🔥 Flash MCU Firmware (USB)..."
+    } else {
+        "🔥 Flash MCU Firmware (ST-Link V2)..."
+    }
 }
