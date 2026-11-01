@@ -272,18 +272,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
         ui.menu_button("Hardware", |ui| {
             ui.label(RichText::new("Target IEC 61131-3 Hardware Platform:").weak().size(11.0));
             ui.separator();
-            let targets = [
-                crate::target::RP2040_TARGET_NAME,
-                crate::target::STM32F103C6_TARGET_NAME,
-                "IEC 61131-3 Standard PLC",
-                "OpenPLC Runtime (Linux / Windows)",
-                "OpenPLC MicroPLC (IEC 61131-3)",
-                "OpenPLC Raspberry Pi",
-                "OpenPLC ESP32 (IEC 61131-3)",
-                "OpenPLC STM32 (IEC 61131-3)",
-                "Generic Modbus RTU / TCP Device",
-                "Simulation / Virtual PLC",
-            ];
+            let targets = crate::target::HARDWARE_TARGETS;
             for target in targets {
                 let is_cur = app.doc.program.hardware == target;
                 if ui.selectable_label(is_cur, target).clicked() {

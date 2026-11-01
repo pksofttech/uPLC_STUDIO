@@ -3981,10 +3981,34 @@ impl eframe::App for CanvasApp {
                         .spacing([12.0, 8.0])
                         .show(ui, |ui| {
                             ui.label("Target Hardware:");
-                            if ui
-                                .text_edit_singleline(&mut self.doc.program.hardware)
-                                .changed()
-                            {
+                            let mut hw_changed = false;
+                            egui::ComboBox::from_id_salt("opt_target_hardware")
+                                .width(300.0)
+                                .selected_text(self.doc.program.hardware.clone())
+                                .show_ui(ui, |ui| {
+                                    for target in crate::target::HARDWARE_TARGETS {
+                                        if ui
+                                            .selectable_label(self.doc.program.hardware == target, target)
+                                            .clicked()
+                                            && self.doc.program.hardware != target
+                                        {
+                                            self.doc.program.hardware = target.to_string();
+                                            hw_changed = true;
+                                        }
+                                    }
+                                    // Keep a custom / legacy value from an older project file selectable
+                                    if !crate::target::HARDWARE_TARGETS.contains(&self.doc.program.hardware.as_str()) {
+                                        ui.separator();
+                                        ui.label(
+                                            RichText::new(format!("Current: {}", self.doc.program.hardware))
+                                                .italics()
+                                                .size(11.0),
+                                        );
+                                    }
+                                });
+                            if hw_changed {
+                                // Refresh X/Y pin labels (RP2040 GPn vs STM32 Pxn)
+                                self.sync_doc_io_mappings_from_hw_config();
                                 settings_changed = true;
                             }
                             ui.end_row();

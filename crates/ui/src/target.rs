@@ -10,10 +10,19 @@ pub const STM32F103C6_TARGET_NAME: &str = "STM32F103C6T6 Micro-VM (USART1 / ST-L
 /// Hardware-menu name of the RP2040 Micro-VM firmware (`firmware/rp2040-embassy`)
 pub const RP2040_TARGET_NAME: &str = "RP2040 Micro-VM (Custom Firmware)";
 
+/// All selectable hardware targets (Hardware menu & Options → Target Hardware dropdown)
+pub const HARDWARE_TARGETS: [&str; 3] = [
+    RP2040_TARGET_NAME,
+    STM32F103C6_TARGET_NAME,
+    "Simulation / Virtual PLC",
+];
+
 /// Fixed (compile-time) STM32F103C6T6 digital input pins `X0..X7` (see firmware `src/config.rs`)
-pub const STM32F103C6_INPUT_PINS: [&str; 8] = ["PB0", "PB1", "PB10", "PB11", "PB5", "PB6", "PB7", "PA6"];
+pub const STM32F103C6_INPUT_PINS: [&str; 8] =
+    ["PB0", "PB1", "PB10", "PB11", "PB5", "PB6", "PB7", "PA6"];
 /// Fixed (compile-time) STM32F103C6T6 digital output pins `Y0..Y7`
-pub const STM32F103C6_OUTPUT_PINS: [&str; 8] = ["PB12", "PB13", "PB14", "PB15", "PA8", "PB8", "PB9", "PA7"];
+pub const STM32F103C6_OUTPUT_PINS: [&str; 8] =
+    ["PB12", "PB13", "PB14", "PB15", "PA8", "PB8", "PB9", "PA7"];
 /// STM32F103C6T6 analog inputs `AI0..AI3` (`%IW0..%IW3`)
 pub const STM32F103C6_ANALOG_PINS: [(&str, &str); 4] = [
     ("%IW0", "PA0 (ADC1_IN0)"),
@@ -36,7 +45,9 @@ impl PlcTarget {
     /// Micro-VM (including the legacy "OpenPLC STM32" entry) falls back to RP2040 behaviour.
     pub fn from_hardware(hardware: &str) -> Self {
         let lower = hardware.to_ascii_lowercase();
-        if lower.contains("stm32f103c6") || (lower.contains("stm32f103") && lower.contains("micro-vm")) {
+        if lower.contains("stm32f103c6")
+            || (lower.contains("stm32f103") && lower.contains("micro-vm"))
+        {
             Self::Stm32f103c6
         } else {
             Self::Rp2040
@@ -71,7 +82,9 @@ impl PlcTarget {
     pub const fn link_description(self) -> &'static str {
         match self {
             Self::Rp2040 => "Native USB-CDC (/dev/ttyACM* / COMx)",
-            Self::Stm32f103c6 => "USART1 PA9=TX / PA10=RX via 3.3V USB-TTL (CH340 / CP2102 / FT232), 115200 8N1",
+            Self::Stm32f103c6 => {
+                "USART1 PA9=TX / PA10=RX via 3.3V USB-TTL (CH340 / CP2102 / FT232), 115200 8N1"
+            }
         }
     }
 
@@ -121,10 +134,22 @@ mod tests {
 
     #[test]
     fn classify_targets() {
-        assert_eq!(PlcTarget::from_hardware(STM32F103C6_TARGET_NAME), PlcTarget::Stm32f103c6);
-        assert_eq!(PlcTarget::from_hardware("stm32f103c6t6"), PlcTarget::Stm32f103c6);
-        assert_eq!(PlcTarget::from_hardware(RP2040_TARGET_NAME), PlcTarget::Rp2040);
-        assert_eq!(PlcTarget::from_hardware("OpenPLC STM32 (IEC 61131-3)"), PlcTarget::Rp2040);
+        assert_eq!(
+            PlcTarget::from_hardware(STM32F103C6_TARGET_NAME),
+            PlcTarget::Stm32f103c6
+        );
+        assert_eq!(
+            PlcTarget::from_hardware("stm32f103c6t6"),
+            PlcTarget::Stm32f103c6
+        );
+        assert_eq!(
+            PlcTarget::from_hardware(RP2040_TARGET_NAME),
+            PlcTarget::Rp2040
+        );
+        assert_eq!(
+            PlcTarget::from_hardware("OpenPLC STM32 (IEC 61131-3)"),
+            PlcTarget::Rp2040
+        );
         assert_eq!(PlcTarget::from_hardware("Arduino NANO"), PlcTarget::Rp2040);
     }
 
