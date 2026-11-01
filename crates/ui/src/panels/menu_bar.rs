@@ -333,7 +333,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 )
                 .clicked()
             {
-                app.set_work_mode(WorkMode::OnlineDebug);
+                app.request_work_mode(WorkMode::OnlineDebug);
                 ui.close();
             }
             ui.separator();

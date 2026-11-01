@@ -458,7 +458,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     ))
                     .clicked()
                     {
-                        app.set_work_mode(WorkMode::OnlineDebug);
+                        app.request_work_mode(WorkMode::OnlineDebug);
                     }
                 });
 
@@ -549,60 +549,85 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                         let is_running = app.doc.simulator.is_running();
                         let is_step = app.doc.simulator.is_step();
 
-                        // Run / Pause Hero Button
-                        let (run_lbl, run_w) = if is_running {
-                            ("RUN", 54.0)
-                        } else if is_compact {
-                            ("Run", 50.0)
+                        // Distinct RUN Button (Green)
+                        let (run_lbl, run_w) = if is_compact {
+                            ("RUN", 52.0)
                         } else {
-                            ("Resume", 64.0)
+                            ("RUN", 58.0)
                         };
                         if cad_hero_button(
                             ui,
-                            Some(if is_running {
-                                VectorIcon::Stop
-                            } else {
-                                VectorIcon::Play
-                            }),
+                            Some(VectorIcon::Play),
                             run_lbl,
-                            if is_running {
-                                palette.accent_ok
-                            } else {
-                                palette.accent_heading
-                            },
+                            palette.accent_ok,
                             is_running,
                             true,
                             run_w,
                             palette,
                         )
                         .on_hover_text(if is_running {
-                            "Pause Local Simulation [F5]"
+                            "Simulator is RUNNING [F5]"
                         } else {
-                            "Run / Resume Continuous Simulation [F5]"
+                            "Start / Resume Continuous Simulation [F5]"
                         })
                         .clicked()
                         {
-                            app.doc.toggle_simulation();
+                            if !is_running {
+                                app.doc.toggle_simulation();
+                            }
                         }
 
-                        // Single Scan Step Button
+                        // Distinct STOP Button (Red)
+                        let (stop_lbl, stop_w) = if is_compact {
+                            ("STOP", 54.0)
+                        } else {
+                            ("STOP", 60.0)
+                        };
+                        if cad_hero_button(
+                            ui,
+                            Some(VectorIcon::Stop),
+                            stop_lbl,
+                            palette.accent_danger,
+                            !is_running,
+                            true,
+                            stop_w,
+                            palette,
+                        )
+                        .on_hover_text(if !is_running {
+                            "Simulator is STOPPED / PAUSED"
+                        } else {
+                            "Pause / Stop Continuous Simulation [F5]"
+                        })
+                        .clicked()
+                        {
+                            if is_running {
+                                app.doc.toggle_simulation();
+                            }
+                        }
+
+                        // Single Scan Step Button (Only enabled when not running continuously)
                         let (step_lbl, step_w) = if is_compact {
                             ("", CAD_ICON_BTN_WIDTH)
                         } else {
                             ("Step", 52.0)
                         };
+                        let can_step_sim = !is_running;
                         if modern_tool_button(
                             ui,
                             Some(VectorIcon::Step),
                             step_lbl,
                             palette.accent_warn,
                             is_step,
-                            true,
+                            can_step_sim,
                             false,
                             step_w,
                             palette,
                         )
-                        .on_hover_text("Execute Single Scan Step in Simulator [F6]")
+                        .on_hover_text(if is_running {
+                            "Pause/Stop simulation first to execute single scan steps [F6]"
+                        } else {
+                            "Execute Single Scan Step in Simulator [F6]"
+                        })
                         .clicked()
                         {
                             app.single_step_mode();
@@ -669,30 +694,19 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                             .online_program_match_info()
                             .map_or(true, |(m, _, _, _, _)| m);
 
-                        // Hardware PLC RUN / STOP Hero Button
-                        let (run_lbl, run_w) = if !is_hw_conn {
-                            ("WAIT", 52.0)
-                        } else if is_running {
-                            ("RUN", 54.0)
+                        // Distinct Hardware RUN Button (Green)
+                        let (run_lbl, run_w) = if is_compact {
+                            ("RUN", 52.0)
                         } else {
-                            ("STOP", 54.0)
+                            ("RUN", 58.0)
                         };
+                        let run_active = is_hw_conn && is_running;
                         if cad_hero_button(
                             ui,
-                            Some(if is_running {
-                                VectorIcon::Play
-                            } else {
-                                VectorIcon::Stop
-                            }),
+                            Some(VectorIcon::Play),
                             run_lbl,
-                            if !is_hw_conn {
-                                palette.accent_warn
-                            } else if is_running {
-                                palette.accent_ok
-                            } else {
-                                palette.accent_danger
-                            },
-                            is_running,
+                            palette.accent_ok,
+                            run_active,
                             is_hw_conn,
                             run_w,
                             palette,
@@ -700,59 +714,76 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                         .on_hover_text(if !is_hw_conn {
                             waiting_hover.as_str()
                         } else if is_running {
-                            "PLC is RUNNING — Click to STOP Hardware PLC Execution [F5]"
+                            "PLC is currently RUNNING"
                         } else {
-                            "PLC is STOPPED — Click to RUN Hardware PLC Execution [F5]"
+                            "Start Hardware PLC Scan Execution [F5]"
                         })
                         .clicked()
                         {
-                            app.toggle_run_mode();
+                            if !is_running {
+                                app.toggle_run_mode();
+                            }
                         }
 
-                        // Hardware Step Button
+                        // Distinct Hardware STOP Button (Red)
+                        let (stop_lbl, stop_w) = if is_compact {
+                            ("STOP", 54.0)
+                        } else {
+                            ("STOP", 60.0)
+                        };
+                        let stop_active = is_hw_conn && !is_running;
+                        if cad_hero_button(
+                            ui,
+                            Some(VectorIcon::Stop),
+                            stop_lbl,
+                            palette.accent_danger,
+                            stop_active,
+                            is_hw_conn,
+                            stop_w,
+                            palette,
+                        )
+                        .on_hover_text(if !is_hw_conn {
+                            waiting_hover.as_str()
+                        } else if !is_running {
+                            "PLC is currently STOPPED (Safe Outputs)"
+                        } else {
+                            "Stop / Halt Hardware PLC Scan & Safe Output Shutdown [F5]"
+                        })
+                        .clicked()
+                        {
+                            if is_running {
+                                app.stop_run_mode();
+                            }
+                        }
+
+                        // Hardware Step Button (Only enabled when connected and STOPPED / not running)
                         let (step_lbl, step_w) = if is_compact {
                             ("", CAD_ICON_BTN_WIDTH)
                         } else {
                             ("Step", 52.0)
                         };
+                        let can_step_hw = is_hw_conn && !is_running;
                         if modern_tool_button(
                             ui,
                             Some(VectorIcon::Step),
                             step_lbl,
                             palette.accent_warn,
                             false,
-                            is_hw_conn,
+                            can_step_hw,
                             false,
                             step_w,
                             palette,
                         )
-                        .on_hover_text("Execute Single Scan Step on Hardware PLC [F6]")
+                        .on_hover_text(if !is_hw_conn {
+                            waiting_hover.as_str()
+                        } else if is_running {
+                            "Stop/Halt hardware PLC first to execute single scan steps [F6]"
+                        } else {
+                            "Execute Single Scan Step on Hardware PLC [F6]"
+                        })
                         .clicked()
                         {
                             app.single_step_mode();
-                        }
-
-                        // Hardware Stop / Reset Button
-                        let (stop_lbl, stop_w) = if is_compact {
-                            ("", CAD_ICON_BTN_WIDTH)
-                        } else {
-                            ("Halt", 50.0)
-                        };
-                        if modern_tool_button(
-                            ui,
-                            Some(VectorIcon::Stop),
-                            stop_lbl,
-                            palette.accent_danger,
-                            false,
-                            is_hw_conn && is_running,
-                            false,
-                            stop_w,
-                            palette,
-                        )
-                        .on_hover_text("Halt Hardware PLC Scan & Safe Output Shutdown")
-                        .clicked()
-                        {
-                            app.stop_run_mode();
                         }
 
                         toolbar_divider(ui, palette);

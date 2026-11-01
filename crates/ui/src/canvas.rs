@@ -691,6 +691,26 @@ impl CanvasViewport {
         let mut rung_y_spans: Vec<(usize, f32, f32)> = Vec::new();
         let mut cur_y = margin_top;
 
+        // Collect all element IDs sharing the same address/variable as the selected element (Cross-Reference)
+        let ref_element_ids: Vec<u64> = if let Some(sel_id) = doc.selected_element_id {
+            if let Some(sel_el) = doc.element_by_id(sel_id) {
+                let name = sel_el.name.trim();
+                if !name.is_empty() {
+                    doc.find_address_usages(name)
+                        .into_iter()
+                        .filter(|(_, uid, _)| *uid != sel_id)
+                        .map(|(_, uid, _)| uid)
+                        .collect()
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+
         // --- Render Rungs ---
         for (r_idx, rung) in doc.program.rungs.iter().enumerate() {
             let is_rung_selected = doc.selected_rung_idx == Some(r_idx);
@@ -907,6 +927,7 @@ impl CanvasViewport {
                         cell_h,
                         doc.selected_element_id,
                         &doc.selected_element_ids,
+                        &ref_element_ids,
                         active_marquee_rect,
                         sim_active,
                         power_in,
@@ -2448,6 +2469,7 @@ impl CanvasViewport {
         cell_h: f32,
         selected_id: Option<u64>,
         selected_ids: &[u64],
+        ref_ids: &[u64],
         active_marquee_rect: Option<Rect>,
         sim_active: bool,
         power_in: bool,
@@ -2512,6 +2534,7 @@ impl CanvasViewport {
                         cell_h,
                         selected_id,
                         selected_ids,
+                        ref_ids,
                         active_marquee_rect,
                         sim_active,
                         sub_power,
@@ -2634,6 +2657,7 @@ impl CanvasViewport {
                 .map_or(false, |mr| mr.intersects(rect_screen.shrink(6.0 * self.zoom)));
             let is_selected =
                 selected_id == Some(elem.id) || selected_ids.contains(&elem.id) || in_marquee;
+            let is_cross_ref = !is_selected && ref_ids.contains(&elem.id);
             let is_hovered = hover_pos.map_or(false, |hp| rect_screen.contains(hp));
             if is_hovered {
                 *any_interactive_hovered = true;
@@ -2745,6 +2769,7 @@ impl CanvasViewport {
                 rect_screen,
                 elem,
                 is_selected,
+                is_cross_ref,
                 is_hovered,
                 sim_active,
                 power_in,
@@ -2765,6 +2790,7 @@ impl CanvasViewport {
         rect_screen: Rect,
         elem: &LadderElement,
         is_selected: bool,
+        is_cross_ref: bool,
         is_hovered: bool,
         sim_active: bool,
         power_in: bool,
@@ -2809,6 +2835,40 @@ impl CanvasViewport {
             // Bottom-right
             painter.line_segment([pos2(sel_box.max.x - brk, sel_box.max.y), sel_box.max], bs);
             painter.line_segment([pos2(sel_box.max.x, sel_box.max.y - brk), sel_box.max], bs);
+        } else if is_cross_ref {
+            // Automatic Cross-Reference Highlight (Shows all other elements sharing this address)
+            let ref_box = rect_screen.shrink(2.0 * self.zoom);
+            let highlight_color = Color32::from_rgb(0, 190, 255); // Vibrant Cyan/Neon Blue
+            painter.rect_filled(
+                ref_box,
+                6.0 * self.zoom,
+                Color32::from_rgba_unmultiplied(0, 190, 255, 45), // Clear luminous glow fill
+            );
+            painter.rect_stroke(
+                ref_box,
+                6.0 * self.zoom,
+                Stroke::new(2.4 * self.zoom, highlight_color), // Thick distinct border
+                StrokeKind::Inside,
+            );
+            // Distinct "🔗 REF" badge at top-right
+            let badge_w = 34.0 * self.zoom;
+            let badge_h = 13.0 * self.zoom;
+            let badge_rect = Rect::from_min_size(
+                pos2(ref_box.max.x - badge_w - 2.0 * self.zoom, ref_box.min.y + 2.0 * self.zoom),
+                vec2(badge_w, badge_h),
+            );
+            painter.rect_filled(
+                badge_rect,
+                3.0 * self.zoom,
+                highlight_color,
+            );
+            painter.text(
+                badge_rect.center(),
+                Align2::CENTER_CENTER,
+                "🔗 REF",
+                FontId::monospace(8.0 * self.zoom),
+                Color32::BLACK,
+            );
         } else if is_hovered {
             let hov_box = rect_screen.shrink(3.5 * self.zoom);
             painter.rect_filled(

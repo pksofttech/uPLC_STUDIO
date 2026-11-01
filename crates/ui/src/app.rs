@@ -401,6 +401,8 @@ pub struct CanvasApp {
     pub current_window_title: String,
     pub about_logo_texture: Option<egui::TextureHandle>,
     pub confirm_retain_action: Option<my_canvas_core::PlcSerialCommand>,
+    pub show_online_safety_dialog: bool,
+    pub online_safety_acknowledged: bool,
     pub uart_tx_history: Vec<u8>,
     pub uart_rx_input: String,
     pub uart_rx_mode: u8,
@@ -493,6 +495,8 @@ impl Default for CanvasApp {
             current_window_title: String::new(),
             about_logo_texture: None,
             confirm_retain_action: None,
+            show_online_safety_dialog: false,
+            online_safety_acknowledged: false,
             uart_tx_history: Vec::new(),
             uart_rx_input: String::new(),
             uart_rx_mode: 0,
@@ -2247,6 +2251,97 @@ impl CanvasApp {
         }
     }
 
+    /// Render Industrial Safety Confirmation Dialog before switching to live Online Hardware Debug mode.
+    pub fn render_online_safety_modal(&mut self, ctx: &egui::Context) {
+        let palette = self.theme.palette();
+        let target_name = self.plc_target().mcu_name();
+        let port_display = self.com_port_display();
+
+        let mut do_continue = false;
+        let mut do_cancel = false;
+
+        egui::Window::new("⚠ Live Hardware Connection Safety Warning")
+            .order(egui::Order::Foreground)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .fixed_size([500.0, 220.0])
+            .show(ctx, |ui| {
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("⚡").size(32.0).color(palette.accent_warn));
+                    ui.add_space(8.0);
+                    ui.vertical(|ui| {
+                        ui.label(
+                            RichText::new("CAUTION: ENTERING LIVE HARDWARE ONLINE MODE")
+                                .strong()
+                                .size(14.0)
+                                .color(palette.accent_warn),
+                        );
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new(format!(
+                                "You are about to connect to a physical {} PLC controller on {}.",
+                                target_name, port_display
+                            ))
+                            .size(12.0)
+                            .color(palette.text_primary),
+                        );
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new("• Physical actuators, valves, motors, or machinery may respond immediately to PLC RUN/STOP commands.")
+                                .size(11.0)
+                                .color(palette.symbol_subtext),
+                        );
+                        ui.label(
+                            RichText::new("• Force I/O operations will override program logic and drive hardware output pins directly.")
+                                .size(11.0)
+                                .color(palette.symbol_subtext),
+                        );
+                        ui.label(
+                            RichText::new("• Verify that all personnel are in a safe area and that Emergency Stop (E-Stop) controls are accessible.")
+                                .size(11.0)
+                                .color(palette.symbol_subtext),
+                        );
+                    });
+                });
+
+                ui.add_space(16.0);
+                ui.separator();
+                ui.add_space(10.0);
+
+                ui.horizontal(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Cancel (Stay in Edit)").clicked()
+                            || ui.input(|i| i.key_pressed(egui::Key::Escape))
+                        {
+                            do_cancel = true;
+                        }
+
+                        let proceed_btn = egui::Button::new(
+                            RichText::new("🔌 Proceed to Online Mode")
+                                .strong()
+                                .color(Color32::WHITE),
+                        )
+                        .fill(egui::Color32::from_rgb(217, 119, 6)); // Amber/Warning orange
+                        if ui.add(proceed_btn).clicked()
+                            || ui.input(|i| i.key_pressed(egui::Key::Enter))
+                        {
+                            do_continue = true;
+                        }
+                    });
+                });
+            });
+
+        if do_continue {
+            self.show_online_safety_dialog = false;
+            self.online_safety_acknowledged = true;
+            self.set_work_mode(WorkMode::OnlineDebug);
+        } else if do_cancel {
+            self.show_online_safety_dialog = false;
+        }
+    }
+
     pub fn start_online_monitoring(&mut self) {
         if self.online_mode {
             return;
@@ -2429,6 +2524,16 @@ impl CanvasApp {
             && self
                 .last_telemetry_rx
                 .map_or(false, |t| t.elapsed() < Duration::from_millis(1000))
+    }
+
+    /// Request switching to a new work mode. If switching to `OnlineDebug` and safety has not been acknowledged,
+    /// opens the Safety Warning Confirmation Dialog first.
+    pub fn request_work_mode(&mut self, mode: WorkMode) {
+        if mode == WorkMode::OnlineDebug && !self.online_safety_acknowledged {
+            self.show_online_safety_dialog = true;
+            return;
+        }
+        self.set_work_mode(mode);
     }
 
     /// Switch between the 3 primary IDE modes (`Edit`, `Simulator`, `OnlineDebug`).
@@ -2635,7 +2740,7 @@ impl CanvasApp {
         if self.work_mode == WorkMode::OnlineDebug || self.online_mode {
             self.set_work_mode(WorkMode::Edit);
         } else {
-            self.set_work_mode(WorkMode::OnlineDebug);
+            self.request_work_mode(WorkMode::OnlineDebug);
         }
     }
 
@@ -2942,6 +3047,7 @@ impl eframe::App for CanvasApp {
             || self.show_io_config
             || self.show_code_export
             || self.show_update_plc
+            || self.show_online_safety_dialog
             || self.updater.show_window
             || self.firmware_flasher.show_window
             || self.pending_action.is_some();
@@ -3294,7 +3400,7 @@ impl eframe::App for CanvasApp {
                     let max_rect = ui.max_rect();
                     let hud_w = 304.0;
                     let hud_h = 74.0;
-                    let hud_pos = egui::pos2(max_rect.max.x - hud_w - 18.0, max_rect.min.y + 14.0);
+                    let hud_pos = egui::pos2(max_rect.min.x + 18.0, max_rect.max.y - hud_h - 18.0);
                     let hud_rect = egui::Rect::from_min_size(hud_pos, egui::vec2(hud_w, hud_h));
 
                     let match_info = self.online_program_match_info();
@@ -4974,6 +5080,10 @@ impl eframe::App for CanvasApp {
 
         if self.pending_action.is_some() {
             self.render_unsaved_changes_modal(ui.ctx());
+        }
+
+        if self.show_online_safety_dialog {
+            self.render_online_safety_modal(ui.ctx());
         }
 
         // Software Update & Release Manager modal
