@@ -5,13 +5,13 @@
  * ============================================================================
  */
 const SITE_CONFIG = {
-  version: "v0.1.1",
+  version: "v0.1.4",
   githubRepoUrl: "https://github.com/pksofttech/uPLC_STUDIO",
   releasesUrl: "#download",
   windowsDownloadUrl:
-    "https://github.com/pksofttech/uPLC_STUDIO/releases/latest/download/laduino-plc-v0.1.1-x86_64-pc-windows-msvc.zip",
+    "https://github.com/pksofttech/uPLC_STUDIO/releases/latest/download/laduino-plc-v0.1.4-x86_64-pc-windows-msvc.zip",
   linuxDownloadUrl:
-    "https://github.com/pksofttech/uPLC_STUDIO/releases/latest/download/laduino-plc-v0.1.1-x86_64-unknown-linux-gnu.tar.gz",
+    "https://github.com/pksofttech/uPLC_STUDIO/releases/latest/download/laduino-plc-v0.1.4-x86_64-unknown-linux-gnu.tar.gz",
   firmwareUf2Url:
     "https://github.com/pksofttech/uPLC_STUDIO/releases/latest/download/uplc-rp2040-embassy.uf2",
 
@@ -1100,7 +1100,28 @@ function initVisitorAnalytics() {
         let fwCount = 0;
         let totalCount = 0;
 
-        if (Array.isArray(releases)) {
+        if (Array.isArray(releases) && releases.length > 0) {
+          const latest = releases[0];
+          if (latest.tag_name) {
+            const verBadge = document.getElementById("site-version-badge");
+            if (verBadge) verBadge.textContent = latest.tag_name;
+          }
+          (latest.assets || []).forEach((asset) => {
+            const name = (asset.name || "").toLowerCase();
+            const url = asset.browser_download_url;
+            if (!url) return;
+            if (name.includes("windows-msvc") && name.endsWith(".zip")) {
+              const winLink = document.getElementById("dl-win-link");
+              if (winLink) winLink.setAttribute("href", url);
+            } else if (name.includes("linux") && name.endsWith(".tar.gz")) {
+              const linLink = document.getElementById("dl-lin-link");
+              if (linLink) linLink.setAttribute("href", url);
+            } else if (name.endsWith(".uf2")) {
+              const fwLink = document.getElementById("dl-fw-link");
+              if (fwLink) fwLink.setAttribute("href", url);
+            }
+          });
+
           releases.forEach((rel) => {
             (rel.assets || []).forEach((asset) => {
               const name = (asset.name || "").toLowerCase();
