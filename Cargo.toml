@@ -4,7 +4,7 @@ members = ["crates/*", "apps/*"]
 exclude = ["firmware/rp2040-embassy", "firmware/stm32f103c6-embassy"]
 
 [workspace.package]
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 

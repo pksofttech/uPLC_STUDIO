@@ -1,6 +1,6 @@
 [package]
 name = "uplc-stm32f103c6-embassy"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "STM32F103C6T6 (32KB Flash / 10KB RAM) Embassy Async PLC Runtime & Micro-VM Firmware for uPLC Studio (USART1 PA9/PA10 link, ST-Link V2 upload)"
