@@ -436,6 +436,14 @@ pub struct MicroVm {
     pub uart_tx_prev: [bool; MAX_UART_INSTANCES],
     /// Previous EN state per edge slot for edge-triggered function blocks (Shift / ShiftReg)
     pub fb_edge_prev: [u8; MAX_FB_EDGE_SLOTS],
+    /// Active Modbus RTU Slave ID configured by `OP_MB_SLAVE` (`0` = disabled)
+    pub mb_slave_id: u8,
+    /// Active Modbus RTU Slave baudrate code configured by `OP_MB_SLAVE` (`0=9600 .. 4=115200`)
+    pub mb_slave_baud_code: u8,
+    /// 1-scan pulse set by firmware when a valid Modbus RTU Slave request was processed
+    pub mb_slave_rx_pulse: bool,
+    /// Configured PWM max period per `%QW0..%QW15` channel (used by firmware to scale hardware PWM)
+    pub pwm_max_period: [u16; 16],
     /// Runtime-configurable Hardware I/O Pin Mapping (`X0..X7`, `Y0..Y7`, `status_led`, `flags`)
     pub io_config: HardwareIoConfig,
 }
@@ -485,6 +493,10 @@ impl MicroVm {
             uart_tx_req: [false; MAX_UART_INSTANCES],
             uart_tx_prev: [false; MAX_UART_INSTANCES],
             fb_edge_prev: [0; MAX_FB_EDGE_SLOTS],
+            mb_slave_id: 0,
+            mb_slave_baud_code: 0,
+            mb_slave_rx_pulse: false,
+            pwm_max_period: [1000; 16],
             io_config: HardwareIoConfig::default_rp2040(),
         }
     }
@@ -564,6 +576,41 @@ impl MicroVm {
         self.uart_tx_req = [false; MAX_UART_INSTANCES];
         self.uart_tx_prev = [false; MAX_UART_INSTANCES];
         self.fb_edge_prev = [0; MAX_FB_EDGE_SLOTS];
+        self.mb_slave_id = 0;
+        self.mb_slave_baud_code = 0;
+        self.mb_slave_rx_pulse = false;
+        self.pwm_max_period = [1000; 16];
+    }
+
+    /// Return the active Modbus RTU Slave baudrate in bps (`9600`..`115200`).
+    pub const fn mb_slave_baud_rate(&self) -> u32 {
+        match self.mb_slave_baud_code {
+            1 => 19_200,
+            2 => 38_400,
+            3 => 57_600,
+            4 => 115_200,
+            _ => 9_600,
+        }
+    }
+
+    /// Process an incoming Modbus RTU Slave request against this VM's `word_mem` and `bit_mem`.
+    /// Returns the number of bytes written to `out_buf` (`0` if ignored or broadcast).
+    pub fn process_modbus_slave_frame(
+        &mut self,
+        req: &[u8],
+        out_buf: &mut [u8],
+    ) -> Result<usize, &'static str> {
+        let len = modbus::process_rtu_slave_request(
+            self.mb_slave_id,
+            req,
+            &mut self.word_mem,
+            &mut self.bit_mem,
+            out_buf,
+        )?;
+        if len > 0 {
+            self.mb_slave_rx_pulse = true;
+        }
+        Ok(len)
     }
 
     /// Decode one `OPND` word `[0x6F, kind, imm_lo, imm_hi]` into its current value:
@@ -1155,6 +1202,90 @@ impl MicroVm {
                         }
                     }
                     acc = got;
+                }
+                OP_MB_SLAVE => {
+                    // MB_SLAVE slave_id, imm = baud_code; pass power_flow through
+                    if acc && mc_active {
+                        self.mb_slave_id = ins.addr;
+                        self.mb_slave_baud_code = (ins.imm & 0xFF) as u8;
+                    } else {
+                        self.mb_slave_id = 0;
+                        acc = false;
+                    }
+                    self.mb_slave_rx_pulse = false;
+                }
+                OP_PWM => {
+                    // PWM ch (0..15 -> %QW0..%QW15), imm = max_period; OPND[0] = duty
+                    let duty = self.opnd_at(pc + 1, max_pc);
+                    let max_val = (ins.imm as i32).max(1);
+                    let ch = addr & 0x0F;
+                    let q_addr = 0x10 + ch;
+                    self.pwm_max_period[ch] = max_val as u16;
+                    if acc && mc_active {
+                        let clamped = duty.clamp(0, max_val);
+                        self.word_mem[q_addr] = clamped;
+                        self.acc_word = clamped;
+                        acc = true;
+                    } else {
+                        self.word_mem[q_addr] = 0;
+                        acc = false;
+                    }
+                    pc += 1;
+                }
+                OP_SEL => {
+                    // SEL dst_word; OPND[0] = IN0 (when EN=0), OPND[1] = IN1 (when EN=1)
+                    if mc_active {
+                        let in0 = self.opnd_at(pc + 1, max_pc);
+                        let in1 = self.opnd_at(pc + 2, max_pc);
+                        let out = if acc { in1 } else { in0 };
+                        self.word_mem[addr] = out;
+                        self.acc_word = out;
+                    }
+                    pc += 2;
+                }
+                OP_IN_RANGE => {
+                    // IN_RANGE: OPND[0] = IN, OPND[1] = MIN, OPND[2] = MAX
+                    if acc && mc_active {
+                        let val = self.opnd_at(pc + 1, max_pc);
+                        let mn = self.opnd_at(pc + 2, max_pc);
+                        let mx = self.opnd_at(pc + 3, max_pc);
+                        acc = val >= mn && val <= mx;
+                    } else {
+                        acc = false;
+                    }
+                    pc += 3;
+                }
+                OP_ALT => {
+                    // ALT bit_addr, imm = edge_slot: toggle bit on rising edge
+                    let slot = (ins.imm as usize) % MAX_FB_EDGE_SLOTS;
+                    let en = acc && mc_active;
+                    let prev = self.fb_edge_prev[slot] != 0;
+                    self.fb_edge_prev[slot] = u8::from(en);
+                    if en && !prev {
+                        self.bit_mem[addr] ^= 1;
+                    }
+                    acc = self.bit_mem[addr] != 0;
+                }
+                OP_INC_DEC => {
+                    // INC/DEC word_addr, imm = edge_slot | (is_dec << 15)
+                    let slot = (ins.imm as usize) & 0xFF;
+                    let is_dec = (ins.imm & SHIFT_EDGE_FLAG) != 0;
+                    let en = acc && mc_active;
+                    let prev = self.fb_edge_prev[slot] != 0;
+                    self.fb_edge_prev[slot] = u8::from(en);
+                    if en && !prev {
+                        let cur = self.word_mem[addr];
+                        let next = if is_dec { cur.saturating_sub(1) } else { cur.saturating_add(1) };
+                        self.word_mem[addr] = next;
+                        self.acc_word = next;
+                    }
+                    acc = en;
+                }
+                OP_RET => {
+                    // RET: conditional early return from scan
+                    if acc && mc_active {
+                        break;
+                    }
                 }
                 OP_OPND => {} // Operand word (consumed by the preceding header opcode)
 
@@ -2058,6 +2189,110 @@ mod tests {
         assert_eq!(vm.io_config.output_pins[6], 19);
         assert!(!vm.io_config.input_active_low());
         assert!(!vm.io_config.input_pull_up());
+    }
+
+    #[test]
+    fn test_vm_mb_slave_pwm_sel_in_range_alt_inc_dec_ret() {
+        let mut vm = MicroVm::new();
+        let mut bc = [0u8; 128];
+        let mut len = 0usize;
+        let mut push = |op: u8, addr: u8, imm: u16| {
+            bc[len] = op;
+            bc[len + 1] = addr;
+            bc[len + 2] = (imm & 0xFF) as u8;
+            bc[len + 3] = (imm >> 8) as u8;
+            len += 4;
+        };
+
+        // 1. LD %IX0.0 -> MB_SLAVE ID=5, baud_code=4 (115200)
+        push(0x01, 0x00, 0);
+        push(OP_MB_SLAVE, 5, 4);
+
+        // 2. LD %IX0.1 -> PWM ch=0 (%QW0), max_period=1000, OPND=%MW0 (0x20)
+        push(0x01, 0x01, 0);
+        push(OP_PWM, 0, 1000);
+        push(OP_OPND, OPND_KIND_WORD, 0x20);
+
+        // 3. LD %IX0.2 -> SEL %MW1 (0x21), IN0=10, IN1=25
+        push(0x01, 0x02, 0);
+        push(OP_SEL, 0x21, 0);
+        push(OP_OPND, OPND_KIND_CONST, 10);
+        push(OP_OPND, OPND_KIND_CONST, 25);
+
+        // 4. LD %IX0.0 -> IN_RANGE (%MW2 in 5..=15) -> ST %QX0.0 (0x20)
+        push(0x01, 0x00, 0);
+        push(OP_IN_RANGE, 0, 0);
+        push(OP_OPND, OPND_KIND_WORD, 0x22);
+        push(OP_OPND, OPND_KIND_CONST, 5);
+        push(OP_OPND, OPND_KIND_CONST, 15);
+        push(0x07, 0x20, 0);
+
+        // 5. LD %IX0.3 -> ALT %MX0.0 (0x40), slot=0
+        push(0x01, 0x03, 0);
+        push(OP_ALT, 0x40, 0);
+
+        // 6. LD %IX0.4 -> INC %MW3 (0x23), slot=1
+        push(0x01, 0x04, 0);
+        push(OP_INC_DEC, 0x23, 1);
+
+        // 7. LD %IX0.5 -> DEC %MW3 (0x23), slot=2 | SHIFT_EDGE_FLAG
+        push(0x01, 0x05, 0);
+        push(OP_INC_DEC, 0x23, 2 | SHIFT_EDGE_FLAG);
+
+        // 8. LD %IX0.6 -> RET
+        push(0x01, 0x06, 0);
+        push(OP_RET, 0, 0);
+
+        // 9. LD %IX0.0 -> ST %QX0.1 (0x21) (skipped when RET fires)
+        push(0x01, 0x00, 0);
+        push(0x07, 0x21, 0);
+        push(0xFF, 0, 0);
+
+        vm.load_bytecode(&bc[..len]).expect("load bytecode");
+        vm.word_mem[0x20] = 1500; // %MW0 > max_period (clamped to 1000)
+        vm.word_mem[0x22] = 10;   // %MW2 inside [5, 15]
+        vm.bit_mem[0x00] = 1;
+        vm.bit_mem[0x01] = 1;
+        vm.bit_mem[0x02] = 1;
+        vm.bit_mem[0x03] = 1;
+        vm.bit_mem[0x04] = 1;
+        vm.bit_mem[0x05] = 0;
+        vm.bit_mem[0x06] = 0;
+
+        // Scan 1
+        vm.step_scan(20);
+        assert_eq!(vm.mb_slave_id, 5);
+        assert_eq!(vm.mb_slave_baud_rate(), 115_200);
+        assert_eq!(vm.pwm_max_period[0], 1000);
+        assert_eq!(vm.word_mem[0x10], 1000);
+        assert_eq!(vm.word_mem[0x21], 25);
+        assert_eq!(vm.bit_mem[0x20], 1);
+        assert_eq!(vm.bit_mem[0x40], 1);
+        assert_eq!(vm.word_mem[0x23], 1);
+        assert_eq!(vm.bit_mem[0x21], 1);
+
+        // Test Modbus Slave frame helper (FC06 write Holding Reg 4 -> %MW4 = 777)
+        let mut req = [5u8, MB_FC_WRITE_SINGLE_REGISTER, 0, 4, 0x03, 0x09, 0, 0];
+        let crc = modbus::compute_crc16(&req[..6]);
+        req[6] = (crc & 0xFF) as u8;
+        req[7] = (crc >> 8) as u8;
+        let mut resp = [0u8; 64];
+        let resp_len = vm.process_modbus_slave_frame(&req, &mut resp).unwrap();
+        assert_eq!(resp_len, 8);
+        assert_eq!(vm.word_mem[0x24], 777);
+        assert!(vm.mb_slave_rx_pulse);
+
+        // Scan 2: IX0.3 stays 1 (ALT must NOT re-toggle), IX0.5=1 (DEC -> 0), IX0.6=1 (RET skips QX0.1)
+        vm.bit_mem[0x21] = 0;
+        vm.bit_mem[0x02] = 0; // SEL -> 10
+        vm.bit_mem[0x05] = 1; // DEC
+        vm.bit_mem[0x06] = 1; // RET
+        vm.step_scan(20);
+        assert_eq!(vm.word_mem[0x21], 10);
+        assert_eq!(vm.bit_mem[0x40], 1);
+        assert_eq!(vm.word_mem[0x23], 0);
+        assert_eq!(vm.bit_mem[0x21], 0);
+        assert!(!vm.mb_slave_rx_pulse);
     }
 }
 

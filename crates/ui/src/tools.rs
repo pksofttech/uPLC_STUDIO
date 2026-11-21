@@ -47,6 +47,14 @@ pub enum ActiveTool {
     FTrig,
     UartSend,
     UartRecv,
+    MbMaster,
+    MbSlave,
+    Pwm,
+    Sel,
+    InRange,
+    Toggle,
+    IncDec,
+    Return,
     Sr,
     Rs,
     Jump,
@@ -113,6 +121,14 @@ impl ActiveTool {
             Self::FTrig => "F_TRIG (Falling Edge Detector)",
             Self::UartSend => "UART Send (TX)",
             Self::UartRecv => "UART Recv (RX)",
+            Self::MbMaster => "Modbus Master (RS-485)",
+            Self::MbSlave => "Modbus Slave (RS-485)",
+            Self::Pwm => "PWM Output (%QW)",
+            Self::Sel => "SEL (Binary Selector)",
+            Self::InRange => "IN_RANGE (Window Compare)",
+            Self::Toggle => "ALT (Toggle / Flip-Flop)",
+            Self::IncDec => "INC / DEC (1-Shot Step)",
+            Self::Return => "RET (Conditional Return)",
             Self::Sr => "SR (Set-Dominant Bistable FB)",
             Self::Rs => "RS (Reset-Dominant Bistable FB)",
             Self::Jump => "JMP (Jump to Label)",
@@ -158,6 +174,14 @@ impl ActiveTool {
             Self::FTrig => Some(TypeTag::FTrig),
             Self::UartSend => Some(TypeTag::UartSend),
             Self::UartRecv => Some(TypeTag::UartRecv),
+            Self::MbMaster => Some(TypeTag::MbMaster),
+            Self::MbSlave => Some(TypeTag::MbSlave),
+            Self::Pwm => Some(TypeTag::Pwm),
+            Self::Sel => Some(TypeTag::Select),
+            Self::InRange => Some(TypeTag::InRange),
+            Self::Toggle => Some(TypeTag::Toggle),
+            Self::IncDec => Some(TypeTag::IncDec),
+            Self::Return => Some(TypeTag::Return),
             Self::Sr => Some(TypeTag::Sr),
             Self::Rs => Some(TypeTag::Rs),
             Self::Jump => Some(TypeTag::Jump),
@@ -416,6 +440,85 @@ impl ActiveTool {
                 target_reg: "%MW1".to_string(),
                 ..Default::default()
             }),
+            Self::MbMaster => Some(LadderElement {
+                id,
+                element_type: TypeTag::MbMaster,
+                name: "MB_TX".to_string(),
+                symbol: "MB_MASTER".to_string(),
+                mb_slave_id: 1,
+                mb_function: 6,
+                preset_value: 0,
+                preset_value1: 1,
+                target_reg: "%MW10".to_string(),
+                ..Default::default()
+            }),
+            Self::MbSlave => Some(LadderElement {
+                id,
+                element_type: TypeTag::MbSlave,
+                name: "MBS0".to_string(),
+                symbol: "MB_SLAVE".to_string(),
+                mb_slave_id: 1,
+                preset_value: 9600,
+                ..Default::default()
+            }),
+            Self::Pwm => Some(LadderElement {
+                id,
+                element_type: TypeTag::Pwm,
+                name: "%QW0".to_string(),
+                symbol: "PWM_OUT".to_string(),
+                preset_value: 1000,
+                fb: FbParams {
+                    in1: "%MW0".to_string(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            Self::Sel => Some(LadderElement {
+                id,
+                element_type: TypeTag::Select,
+                name: "%MW0".to_string(),
+                target_reg: "%MW0".to_string(),
+                symbol: "SEL".to_string(),
+                fb: FbParams {
+                    in1: "%MW1".to_string(),
+                    in2: "%MW2".to_string(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            Self::InRange => Some(LadderElement {
+                id,
+                element_type: TypeTag::InRange,
+                name: "%MW0".to_string(),
+                symbol: "IN_RANGE".to_string(),
+                fb: FbParams {
+                    in1: "%MW0".to_string(),
+                    k: [10, 100, 0, 0],
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            Self::Toggle => Some(LadderElement {
+                id,
+                element_type: TypeTag::Toggle,
+                name: "%MX0.0".to_string(),
+                symbol: "ALT".to_string(),
+                ..Default::default()
+            }),
+            Self::IncDec => Some(LadderElement {
+                id,
+                element_type: TypeTag::IncDec,
+                name: "%MW0".to_string(),
+                symbol: "INC".to_string(),
+                ..Default::default()
+            }),
+            Self::Return => Some(LadderElement {
+                id,
+                element_type: TypeTag::Return,
+                name: "RET".to_string(),
+                symbol: "RET".to_string(),
+                ..Default::default()
+            }),
             Self::Sr => Some(LadderElement {
                 id,
                 element_type: TypeTag::Sr,
@@ -483,6 +586,14 @@ mod tests {
             (ActiveTool::Adc, TypeTag::Adc),
             (ActiveTool::UartSend, TypeTag::UartSend),
             (ActiveTool::UartRecv, TypeTag::UartRecv),
+            (ActiveTool::MbMaster, TypeTag::MbMaster),
+            (ActiveTool::MbSlave, TypeTag::MbSlave),
+            (ActiveTool::Pwm, TypeTag::Pwm),
+            (ActiveTool::Sel, TypeTag::Select),
+            (ActiveTool::InRange, TypeTag::InRange),
+            (ActiveTool::Toggle, TypeTag::Toggle),
+            (ActiveTool::IncDec, TypeTag::IncDec),
+            (ActiveTool::Return, TypeTag::Return),
         ];
         for (idx, (tool, expected_tag)) in tools.iter().enumerate() {
             assert_eq!(tool.element_type(), Some(*expected_tag));

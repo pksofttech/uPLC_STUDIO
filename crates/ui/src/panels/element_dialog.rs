@@ -19,7 +19,7 @@ pub struct ElementConfigModal {
 
 pub fn draw_modal_backdrop(ctx: &egui::Context, _palette: ThemePalette) {
     let screen_rect = ctx.content_rect();
-    egui::Area::new(egui::Id::new("app_modal_backdrop_shield"))
+    egui::Area::new(egui::Id::unique("app_modal_backdrop_shield"))
         .order(egui::Order::Middle)
         .fixed_pos(screen_rect.min)
         .interactable(true)
@@ -77,18 +77,14 @@ impl ElementConfigModal {
             i.key_pressed(egui::Key::Enter) && (i.modifiers.command || i.modifiers.ctrl)
         });
 
-        let title = format!(
-            "Element Configuration — {} (#{})",
-            self.draft.element_type.display_name(),
-            self.target_id
-        );
+        let title = format!("Configure {}", self.draft.element_type.display_name());
 
         let mut open_flag = self.is_open;
-        let max_w = (screen_rect.width() - 32.0).max(560.0);
-        let target_w = 680.0_f32.min(max_w);
-        let max_h = (screen_rect.height() - 24.0).max(580.0);
+        let max_w = (screen_rect.width() - 32.0).max(460.0);
+        let target_w = 520.0_f32.min(max_w);
+        let max_h = (screen_rect.height() - 24.0).max(480.0);
         // Only enable vertical scroll if the viewport is too short to fit the full dialog
-        let needs_vscroll = screen_rect.height() < 660.0;
+        let needs_vscroll = screen_rect.height() < 560.0;
 
         Window::new(title)
             .order(egui::Order::Foreground)
@@ -104,33 +100,27 @@ impl ElementConfigModal {
             .show(ctx, |ui| {
                 ui.set_min_width(target_w - 24.0);
 
-                // --- 1. Live Schematic Preview Box (like MICROPLC pictureBox1, upgraded) ---
+                // --- 1. Compact Header Strip ---
                 self.draw_live_preview_banner(ui, doc.contact_style, doc.coil_style, palette);
 
                 ui.add_space(8.0);
 
-                // --- 2. IEC Address, Symbol & Cross-Reference Section ---
-                ui.group(|ui| {
+                // --- 2. Primary Form (Address & Symbol) ---
+                section_frame(palette).show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.label(
-                        RichText::new("1. IEC Address & Symbol Assignment")
-                            .color(palette.accent_heading)
-                            .strong(),
-                    );
-                    ui.separator();
 
                     egui::Grid::new("elem_modal_addr_grid")
                         .num_columns(2)
-                        .spacing([12.0, 8.0])
-                        .min_col_width(125.0)
+                        .spacing([10.0, 8.0])
+                        .min_col_width(84.0)
                         .show(ui, |ui| {
-                            ui.label("IEC Address:");
+                            ui.label(RichText::new("Address").color(palette.rung_text_dim));
                             ui.horizontal(|ui| {
                                 let resp = ui.add(
                                     egui::TextEdit::singleline(&mut self.draft.name)
                                         .font(egui::TextStyle::Monospace)
-                                        .hint_text("e.g. %IX0.0, %QX0.0, %MX0.0")
-                                        .desired_width(160.0),
+                                        .hint_text("%IX0.0, %QX0.0, %MX0.0")
+                                        .desired_width(150.0),
                                 );
                                 if resp.changed() {
                                     self.draft.name = self.draft.name.to_ascii_uppercase();
@@ -142,11 +132,11 @@ impl ElementConfigModal {
                                     }
                                 }
 
-                                // Dropdown to pick from existing IEC elements or I/O mappings
+                                // Inline picker for existing IEC elements and I/O mappings
                                 let existing_iec = doc.program.collect_all_iec_elements();
-                                let combo_w = (ui.available_width() - 4.0).max(260.0);
+                                let combo_w = (ui.available_width() - 4.0).max(160.0);
                                 egui::ComboBox::from_id_salt("existing_tag_picker")
-                                    .selected_text("Pick IEC / Symbol...")
+                                    .selected_text("Pick...")
                                     .width(combo_w)
                                     .show_ui(ui, |ui| {
                                         for (_raw, iec_addr, sym, t_type, _) in &existing_iec {
@@ -181,157 +171,17 @@ impl ElementConfigModal {
                             });
                             ui.end_row();
 
-                            ui.label("Symbol:");
-                            let full_field_w = (ui.available_width() - 4.0).max(430.0);
-                            ui.vertical(|ui| {
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.draft.symbol)
-                                        .hint_text("e.g. START_PB, MOTOR_RUN")
-                                        .desired_width(full_field_w),
-                                );
-                                // Global Symbol Table conflict / usage indicators
-                                if doc.program.symbols.is_symbol_taken_by_other(&self.draft.symbol, &self.draft.name) {
-                                    ui.colored_label(
-                                        Color32::from_rgb(230, 126, 34),
-                                        "⚠ Warning: Symbol is already used by another address in Global Symbol Table",
-                                    );
-                                }
-                                let usages = doc.find_address_usages(&self.draft.name);
-                                if usages.len() > 1 {
-                                    ui.label(
-                                        RichText::new(format!(
-                                            "ℹ Synced across {} elements in project (Single Source of Truth)",
-                                            usages.len()
-                                        ))
-                                        .small()
-                                        .color(palette.rung_text_dim),
-                                    );
-                                }
-                            });
-                            ui.end_row();
-
-                            ui.label("Remark:");
-                            let full_field_w = (ui.available_width() - 4.0).max(430.0);
+                            ui.label(RichText::new("Symbol").color(palette.rung_text_dim));
+                            let sym_w = (ui.available_width() - 4.0).max(200.0);
                             ui.add(
-                                egui::TextEdit::singleline(&mut self.draft.comment)
-                                    .hint_text("Element description / remark...")
-                                    .desired_width(full_field_w),
+                                egui::TextEdit::singleline(&mut self.draft.symbol)
+                                    .hint_text("e.g. START_PB, MOTOR_RUN")
+                                    .desired_width(sym_w),
                             );
-                            ui.end_row();
-
-                            let rung_lbl = if let Some(r_idx) = self.rung_idx {
-                                format!("Network #{:02} Comment:", r_idx + 1)
-                            } else {
-                                "Network Comment:".to_string()
-                            };
-                            ui.label(rung_lbl);
-                            let full_field_w = (ui.available_width() - 4.0).max(430.0);
-                            let rc_resp = ui.add(
-                                egui::TextEdit::multiline(&mut self.rung_comment)
-                                    .desired_rows(2)
-                                    .hint_text("Enter comment for this network (supports multiple lines)...")
-                                    .desired_width(full_field_w),
-                            );
-                            if rc_resp.has_focus() {
-                                multiline_focused = true;
-                            }
                             ui.end_row();
                         });
 
-                    ui.add_space(4.0);
-
-                    // Quick IEC Address Bank (%IX / %QX / %MX / %MW / T / C)
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(RichText::new("Quick IEC Bank:").small().color(palette.rung_text_dim));
-                        let banks: &[(&str, &str)] = match self.draft.element_type {
-                            TypeTag::Coil => &[
-                                ("%QX0.0", "MOTOR_RUN"),
-                                ("%QX0.1", "LAMP_RUN"),
-                                ("%QX0.2", "ALARM_BUZZ"),
-                                ("%QX0.3", "VALVE_OUT"),
-                                ("%MX0.0", "RELAY_M0"),
-                                ("%MX0.1", "RELAY_M1"),
-                            ],
-                            TypeTag::Ton | TypeTag::Tof | TypeTag::Tp => &[
-                                ("T0", "TIMER_0"),
-                                ("T1", "TIMER_1"),
-                                ("T2", "TIMER_2"),
-                                ("T3", "TIMER_3"),
-                            ],
-                            TypeTag::Ctu | TypeTag::Ctd | TypeTag::Ctud => &[
-                                ("C0", "COUNT_0"),
-                                ("C1", "COUNT_1"),
-                                ("C2", "COUNT_2"),
-                                ("C3", "COUNT_3"),
-                            ],
-                            TypeTag::Move | TypeTag::Math | TypeTag::Compare => &[
-                                ("%MW0", "VAR_0"),
-                                ("%MW1", "VAR_1"),
-                                ("C0", "COUNT_0"),
-                                ("T0", "TIMER_0"),
-                                ("%IW0", "ADC_0"),
-                            ],
-                            TypeTag::Adc => &[
-                                ("%IW0", "ADC_0"),
-                                ("%IW1", "ADC_1"),
-                                ("%IW2", "ADC_2"),
-                                ("%IW3", "ADC_3"),
-                            ],
-                            TypeTag::Bitwise
-                            | TypeTag::ShiftRegisters
-                            | TypeTag::ShiftRegInbit
-                            | TypeTag::ShiftRegReset
-                            | TypeTag::ShiftLeft
-                            | TypeTag::ShiftRight
-                            | TypeTag::ShiftVariable => &[
-                                ("%MW0", "VAR_0"),
-                                ("%MW1", "VAR_1"),
-                                ("%MW30", "SHIFT_REG"),
-                                ("%MW96", "RETAIN_0"),
-                            ],
-                            TypeTag::Pid | TypeTag::Scale | TypeTag::Limit => &[
-                                ("PID0", "PID_LOOP"),
-                                ("SCALE0", "SCALE_0"),
-                                ("LIMIT0", "LIMIT_0"),
-                            ],
-                            TypeTag::UartSend | TypeTag::UartRecv => &[
-                                ("U_TX0", "UART_SEND"),
-                                ("U_RX0", "UART_RECV"),
-                            ],
-                            _ => &[
-                                ("%IX0.0", "START_PB"),
-                                ("%IX0.1", "STOP_PB"),
-                                ("%IX0.2", "SENSOR_1"),
-                                ("%IX0.3", "LIMIT_SW"),
-                                ("%QX0.0", "MOTOR_RUN"),
-                                ("%MX0.0", "RELAY_M0"),
-                                ("T0", "T0_DONE"),
-                                ("C0", "C0_DONE"),
-                            ],
-                        };
-                        for &(addr, sym) in banks {
-                            let is_sel = self.draft.name == addr;
-                            if ui
-                                .selectable_label(is_sel, RichText::new(addr).monospace())
-                                .on_hover_text(sym)
-                                .clicked()
-                            {
-                                self.draft.name = addr.to_string();
-                                if self.draft.symbol.is_empty()
-                                    || self.draft.symbol.starts_with("IN_")
-                                    || self.draft.symbol.starts_with("OUT_")
-                                    || self.draft.symbol.starts_with('%')
-                                    || self.draft.symbol.starts_with('X')
-                                    || self.draft.symbol.starts_with('Y')
-                                {
-                                    self.draft.symbol = sym.to_string();
-                                }
-                            }
-                        }
-                    });
-
-                    // Cross-Reference & Hardware Pin Info Bar
-                    let usages = doc.find_address_usages(&self.draft.name);
+                    // Contextual 1-line status strip (rendered ONLY when at least one meaningful item exists)
                     let hw_pin = doc
                         .program
                         .io_mappings
@@ -340,178 +190,141 @@ impl ElementConfigModal {
                             m.iec_address.eq_ignore_ascii_case(&self.draft.name)
                                 || m.plc_address.eq_ignore_ascii_case(&self.draft.name)
                         })
-                        .map(|m| format!("{} ({})", m.hw_pin, if m.is_input { "Input" } else { "Output" }))
-                        .unwrap_or_else(|| "Internal / Virtual".to_string());
+                        .map(|m| format!("Pin: {} ({})", m.hw_pin, if m.is_input { "IN" } else { "OUT" }));
 
-                    ui.add_space(4.0);
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(
-                            RichText::new(format!("Pin Mapping: {}", hw_pin))
-                                .small()
-                                .color(palette.accent_ok),
-                        );
-                        ui.separator();
-                        // RETAIN badge: address (or OUT / IN register) lies in the Flash-retained area
-                        let retain_addr = [
-                            &self.draft.name,
-                            &self.draft.target_reg,
-                            &self.draft.fb.in1,
-                            &self.draft.fb.in2,
-                        ]
-                        .into_iter()
-                        .find(|a| is_retain_address(a))
-                        .cloned();
-                        if let Some(addr) = retain_addr {
-                            ui.label(
-                                RichText::new("🔒 RETAIN")
-                                    .small()
-                                    .strong()
-                                    .color(palette.accent_ok)
-                                    .background_color(palette.accent_ok.gamma_multiply(0.15)),
-                            )
-                            .on_hover_text(format!(
-                                "{} is in the RETAIN area (M64..M95 / %MW96..%MW127): saved to Flash by the \
-                                 firmware and restored after power loss",
-                                addr
-                            ));
-                            ui.separator();
-                        }
+                    let retain_addr = [
+                        &self.draft.name,
+                        &self.draft.target_reg,
+                        &self.draft.fb.in1,
+                        &self.draft.fb.in2,
+                    ]
+                    .into_iter()
+                    .find(|a| is_retain_address(a))
+                    .cloned();
 
-                        // Type Classifier Badge (Memory Helper vs Physical Hardware)
-                        let norm_addr = self.draft.name.trim().to_ascii_uppercase();
-                        if norm_addr.starts_with("%MX")
-                            || (norm_addr.starts_with('M')
-                                && norm_addr.len() > 1
-                                && norm_addr[1..].chars().next().map_or(false, |c| c.is_ascii_digit()))
-                        {
-                            ui.label(
-                                RichText::new("🧠 Memory Relay (%M)")
-                                    .small()
-                                    .strong()
-                                    .color(Color32::from_rgb(190, 130, 255))
-                                    .background_color(Color32::from_rgb(190, 130, 255).gamma_multiply(0.15)),
-                            )
-                            .on_hover_text("Internal CPU Memory Bit: auxiliary relay for program logic (no physical terminal)");
-                            ui.separator();
-                        } else if norm_addr.starts_with("%QX")
-                            || (norm_addr.starts_with('Y')
-                                && norm_addr.len() > 1
-                                && norm_addr[1..].chars().next().map_or(false, |c| c.is_ascii_digit()))
-                        {
-                            ui.label(
-                                RichText::new("🔌 Physical Output (%Q)")
-                                    .small()
-                                    .strong()
-                                    .color(palette.accent_heading)
-                                    .background_color(palette.accent_heading.gamma_multiply(0.15)),
-                            )
-                            .on_hover_text("Hardware Output Terminal: physically drives relay, actuator or motor");
-                            ui.separator();
-                        } else if norm_addr.starts_with("%IX")
-                            || (norm_addr.starts_with('X')
-                                && norm_addr.len() > 1
-                                && norm_addr[1..].chars().next().map_or(false, |c| c.is_ascii_digit()))
-                        {
-                            ui.label(
-                                RichText::new("📥 Physical Input (%I)")
-                                    .small()
-                                    .strong()
-                                    .color(palette.accent_warn)
-                                    .background_color(palette.accent_warn.gamma_multiply(0.15)),
-                            )
-                            .on_hover_text("Hardware Input Terminal: receives signal from external switch/sensor");
-                            ui.separator();
-                        }
-                        let usage_str = if usages.is_empty() {
-                            "New IEC address (not used elsewhere yet)".to_string()
-                        } else {
-                            let r_list: Vec<String> = usages
-                                .iter()
-                                .map(|(r, _, t)| format!("R{:02}({})", r + 1, t.display_name()))
-                                .collect();
-                            format!("Cross-Ref ({}): {}", usages.len(), r_list.join(", "))
-                        };
-                        ui.label(RichText::new(usage_str).small().color(palette.rung_text_dim));
-                    });
+                    let usages = doc.find_address_usages(&self.draft.name);
+                    let has_refs = usages.len() > 1;
+                    let has_conflict = doc
+                        .program
+                        .symbols
+                        .is_symbol_taken_by_other(&self.draft.symbol, &self.draft.name);
+
+                    if hw_pin.is_some() || retain_addr.is_some() || has_refs || has_conflict {
+                        ui.add_space(6.0);
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            if let Some(pin_text) = hw_pin {
+                                ui.label(
+                                    RichText::new(pin_text)
+                                        .small()
+                                        .strong()
+                                        .color(palette.accent_ok)
+                                        .background_color(palette.accent_ok.gamma_multiply(0.12)),
+                                );
+                            }
+                            if let Some(addr) = retain_addr {
+                                ui.label(
+                                    RichText::new("RETAIN")
+                                        .small()
+                                        .strong()
+                                        .color(palette.accent_ok)
+                                        .background_color(palette.accent_ok.gamma_multiply(0.15)),
+                                )
+                                .on_hover_text(format!(
+                                    "{} is in the RETAIN area (M64..M95 / %MW96..%MW127): saved to Flash by the \
+                                     firmware and restored after power loss",
+                                    addr
+                                ));
+                            }
+                            if has_refs {
+                                let r_list: Vec<String> = usages
+                                    .iter()
+                                    .map(|(r, _, t)| format!("R{:02}({})", r + 1, t.display_name()))
+                                    .collect();
+                                ui.label(
+                                    RichText::new(format!("{} refs", usages.len()))
+                                        .small()
+                                        .color(palette.rung_text_dim),
+                                )
+                                .on_hover_text(r_list.join(", "));
+                            }
+                            if has_conflict {
+                                ui.label(
+                                    RichText::new("Symbol conflict: used by another address")
+                                        .small()
+                                        .color(palette.accent_warn),
+                                );
+                            }
+                        });
+                    }
                 });
 
                 ui.add_space(8.0);
 
                 // --- 3. Type-Specific Parameters Section ---
-                ui.group(|ui| {
+                section_frame(palette).show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.label(
-                        RichText::new("2. Instruction Mode & Parameters")
-                            .color(palette.accent_warn)
-                            .strong(),
-                    );
-                    ui.separator();
 
                     match self.draft.element_type {
                         TypeTag::Contact
                         | TypeTag::RTrig
                         | TypeTag::FTrig => {
                             if self.draft.element_type == TypeTag::Contact {
-                                ui.label("Contact Logic Type:");
-                                let card_w = ((ui.available_width() - 10.0) * 0.5).max(260.0);
-                                egui::Grid::new("contact_mode_cards_grid")
-                                    .num_columns(2)
-                                    .spacing([10.0, 8.0])
-                                    .show(ui, |ui| {
-                                        mode_select_card(
-                                            ui,
-                                            card_w,
-                                            VectorIcon::ContactNo,
-                                            "Normally Open (NO)",
-                                            "Conducts when input is ON (1)",
-                                            self.draft.contact_mode == ContactMode::NormallyOpen,
-                                            palette,
-                                            || self.draft.contact_mode = ContactMode::NormallyOpen,
-                                        );
-                                        mode_select_card(
-                                            ui,
-                                            card_w,
-                                            VectorIcon::ContactNc,
-                                            "Normally Closed (NC)",
-                                            "Conducts when input is OFF (0)",
-                                            self.draft.contact_mode == ContactMode::NormallyClosed,
-                                            palette,
-                                            || self.draft.contact_mode = ContactMode::NormallyClosed,
-                                        );
-                                        ui.end_row();
-
-                                        mode_select_card(
-                                            ui,
-                                            card_w,
-                                            VectorIcon::ContactNo,
-                                            "Positive Transition (P)",
-                                            "Pulse 1 scan on rising edge",
-                                            self.draft.contact_mode == ContactMode::PositiveTransition,
-                                            palette,
-                                            || self.draft.contact_mode = ContactMode::PositiveTransition,
-                                        );
-                                        mode_select_card(
-                                            ui,
-                                            card_w,
-                                            VectorIcon::ContactNc,
-                                            "Negative Transition (N)",
-                                            "Pulse 1 scan on falling edge",
-                                            self.draft.contact_mode == ContactMode::NegativeTransition,
-                                            palette,
-                                            || self.draft.contact_mode = ContactMode::NegativeTransition,
-                                        );
-                                        ui.end_row();
-                                    });
+                                let pill_w = ((ui.available_width() - 18.0) * 0.25).max(80.0);
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 6.0;
+                                    segmented_mode_pill(
+                                        ui,
+                                        pill_w,
+                                        Some(VectorIcon::ContactNo),
+                                        "NO",
+                                        "Normally Open — conducts when ON (1)",
+                                        self.draft.contact_mode == ContactMode::NormallyOpen,
+                                        palette,
+                                        || self.draft.contact_mode = ContactMode::NormallyOpen,
+                                    );
+                                    segmented_mode_pill(
+                                        ui,
+                                        pill_w,
+                                        Some(VectorIcon::ContactNc),
+                                        "NC",
+                                        "Normally Closed — conducts when OFF (0)",
+                                        self.draft.contact_mode == ContactMode::NormallyClosed,
+                                        palette,
+                                        || self.draft.contact_mode = ContactMode::NormallyClosed,
+                                    );
+                                    segmented_mode_pill(
+                                        ui,
+                                        pill_w,
+                                        Some(VectorIcon::ContactNo),
+                                        "P (Rise)",
+                                        "Positive Transition — 1-scan pulse on rising edge",
+                                        self.draft.contact_mode == ContactMode::PositiveTransition,
+                                        palette,
+                                        || self.draft.contact_mode = ContactMode::PositiveTransition,
+                                    );
+                                    segmented_mode_pill(
+                                        ui,
+                                        pill_w,
+                                        Some(VectorIcon::ContactNc),
+                                        "N (Fall)",
+                                        "Negative Transition — 1-scan pulse on falling edge",
+                                        self.draft.contact_mode == ContactMode::NegativeTransition,
+                                        palette,
+                                        || self.draft.contact_mode = ContactMode::NegativeTransition,
+                                    );
+                                });
                                 ui.add_space(6.0);
                             }
 
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label("Signal Trigger Mode:");
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new("Trigger").small().color(palette.rung_text_dim));
                                 if ui
                                     .selectable_label(
                                         self.draft.element_type == TypeTag::Contact,
-                                        "Standard Level",
+                                        "Level",
                                     )
+                                    .on_hover_text("Standard level-sensitive contact")
                                     .clicked()
                                 {
                                     self.draft.element_type = TypeTag::Contact;
@@ -519,8 +332,9 @@ impl ElementConfigModal {
                                 if ui
                                     .selectable_label(
                                         self.draft.element_type == TypeTag::RTrig,
-                                        "^ R_TRIG (Rising Edge FB)",
+                                        "R_TRIG",
                                     )
+                                    .on_hover_text("Rising edge trigger function block")
                                     .clicked()
                                 {
                                     self.draft.element_type = TypeTag::RTrig;
@@ -528,8 +342,9 @@ impl ElementConfigModal {
                                 if ui
                                     .selectable_label(
                                         self.draft.element_type == TypeTag::FTrig,
-                                        "v F_TRIG (Falling Edge FB)",
+                                        "F_TRIG",
                                     )
+                                    .on_hover_text("Falling edge trigger function block")
                                     .clicked()
                                 {
                                     self.draft.element_type = TypeTag::FTrig;
@@ -538,71 +353,68 @@ impl ElementConfigModal {
                         }
 
                         TypeTag::Coil => {
-                            ui.label("Output Coil Action:");
-                            let card_w = ((ui.available_width() - 10.0) * 0.5).max(260.0);
-                            egui::Grid::new("coil_mode_cards_grid")
-                                .num_columns(2)
-                                .spacing([10.0, 8.0])
+                            let pill_w = ((ui.available_width() - 12.0) / 3.0).max(100.0);
+                            egui::Grid::new("coil_mode_pills_grid")
+                                .num_columns(3)
+                                .spacing([6.0, 6.0])
                                 .show(ui, |ui| {
-                                    mode_select_card(
+                                    segmented_mode_pill(
                                         ui,
-                                        card_w,
-                                        VectorIcon::Coil,
+                                        pill_w,
+                                        Some(VectorIcon::Coil),
                                         "Normal ( )",
                                         "Energized while network is true",
                                         self.draft.coil_mode == CoilMode::Normal,
                                         palette,
                                         || self.draft.coil_mode = CoilMode::Normal,
                                     );
-                                    mode_select_card(
+                                    segmented_mode_pill(
                                         ui,
-                                        card_w,
-                                        VectorIcon::Coil,
+                                        pill_w,
+                                        Some(VectorIcon::Coil),
                                         "Negated (/)",
                                         "Inverted output state",
                                         self.draft.coil_mode == CoilMode::Negated,
                                         palette,
                                         || self.draft.coil_mode = CoilMode::Negated,
                                     );
-                                    ui.end_row();
-
-                                    mode_select_card(
+                                    segmented_mode_pill(
                                         ui,
-                                        card_w,
-                                        VectorIcon::CoilSet,
-                                        "Set Latch (S)",
+                                        pill_w,
+                                        Some(VectorIcon::CoilSet),
+                                        "Set (S)",
                                         "Latches ON when network is true",
                                         self.draft.coil_mode == CoilMode::SetLatch,
                                         palette,
                                         || self.draft.coil_mode = CoilMode::SetLatch,
                                     );
-                                    mode_select_card(
+                                    ui.end_row();
+
+                                    segmented_mode_pill(
                                         ui,
-                                        card_w,
-                                        VectorIcon::CoilReset,
-                                        "Reset Unlatch (R)",
+                                        pill_w,
+                                        Some(VectorIcon::CoilReset),
+                                        "Reset (R)",
                                         "Resets OFF when network is true",
                                         self.draft.coil_mode == CoilMode::ResetUnlatch,
                                         palette,
                                         || self.draft.coil_mode = CoilMode::ResetUnlatch,
                                     );
-                                    ui.end_row();
-
-                                    mode_select_card(
+                                    segmented_mode_pill(
                                         ui,
-                                        card_w,
-                                        VectorIcon::Coil,
-                                        "Positive Edge (P)",
+                                        pill_w,
+                                        Some(VectorIcon::Coil),
+                                        "Rise (P)",
                                         "Pulse 1 scan on rising edge",
                                         self.draft.coil_mode == CoilMode::PositiveTransition,
                                         palette,
                                         || self.draft.coil_mode = CoilMode::PositiveTransition,
                                     );
-                                    mode_select_card(
+                                    segmented_mode_pill(
                                         ui,
-                                        card_w,
-                                        VectorIcon::Coil,
-                                        "Negative Edge (N)",
+                                        pill_w,
+                                        Some(VectorIcon::Coil),
+                                        "Fall (N)",
                                         "Pulse 1 scan on falling edge",
                                         self.draft.coil_mode == CoilMode::NegativeTransition,
                                         palette,
@@ -610,37 +422,15 @@ impl ElementConfigModal {
                                     );
                                     ui.end_row();
                                 });
-
-                            ui.add_space(8.0);
-                            ui.label(RichText::new("Coil Visual Style (Symbol Representation):").strong());
-                            ui.horizontal_wrapped(|ui| {
-                                let is_auto = self.draft.coil_style.is_none();
-                                if ui.selectable_label(is_auto, "Auto (Global)").clicked() {
-                                    self.draft.coil_style = None;
-                                }
-                                for &st in &CoilStyle::ALL {
-                                    let selected = self.draft.coil_style == Some(st);
-                                    let label = match st {
-                                        CoilStyle::IecParentheses => "IEC —( )—",
-                                        CoilStyle::CircleRelay => "DIN Relay —○—",
-                                        CoilStyle::NemaBox => "NEMA Starter —[ ]—",
-                                        CoilStyle::SolenoidValve => "Solenoid —[ ⧖ ]—",
-                                        CoilStyle::PilotLight => "Pilot Lamp —( ⨂ )—",
-                                    };
-                                    if ui.selectable_label(selected, label).clicked() {
-                                        self.draft.coil_style = Some(st);
-                                    }
-                                }
-                            });
                         }
 
                         TypeTag::Ton | TypeTag::Tof | TypeTag::Tp => {
-                            ui.horizontal(|ui| {
+                            ui.horizontal_wrapped(|ui| {
                                 ui.label("Timer Function:");
                                 for (t_type, lbl) in [
                                     (TypeTag::Ton, "TON (On-Delay)"),
                                     (TypeTag::Tof, "TOF (Off-Delay)"),
-                                    (TypeTag::Tp, "TP (Pulse Timer)"),
+                                    (TypeTag::Tp, "TP (Pulse)"),
                                 ] {
                                     if ui
                                         .selectable_label(self.draft.element_type == t_type, lbl)
@@ -706,12 +496,12 @@ impl ElementConfigModal {
                         }
 
                         TypeTag::Ctu | TypeTag::Ctd | TypeTag::Ctud => {
-                            ui.horizontal(|ui| {
+                            ui.horizontal_wrapped(|ui| {
                                 ui.label("Counter Function:");
                                 for (c_type, lbl) in [
                                     (TypeTag::Ctu, "CTU (Count Up)"),
                                     (TypeTag::Ctd, "CTD (Count Down)"),
-                                    (TypeTag::Ctud, "CTUD (Up/Down Counter)"),
+                                    (TypeTag::Ctud, "CTUD (Up/Down)"),
                                 ] {
                                     if ui
                                         .selectable_label(self.draft.element_type == c_type, lbl)
@@ -725,10 +515,10 @@ impl ElementConfigModal {
                             ui.add_space(6.0);
                             egui::Grid::new("counter_params_grid")
                                 .num_columns(2)
-                                .spacing([12.0, 6.0])
+                                .spacing([10.0, 6.0])
                                 .show(ui, |ui| {
                                     ui.label("Target Preset (PV):");
-                                    ui.horizontal(|ui| {
+                                    ui.horizontal_wrapped(|ui| {
                                         ui.add(
                                             egui::DragValue::new(&mut self.draft.preset_value)
                                                 .range(1..=100_000)
@@ -1101,8 +891,8 @@ impl ElementConfigModal {
                                     });
                                     ui.end_row();
 
-                                    ui.label("Input Range [in_min .. in_max]:");
-                                    ui.horizontal(|ui| {
+                                    ui.label("Input Range:");
+                                    ui.horizontal_wrapped(|ui| {
                                         ui.add(
                                             egui::DragValue::new(&mut self.draft.fb.k[0])
                                                 .range(-100_000..=100_000)
@@ -1135,8 +925,8 @@ impl ElementConfigModal {
                                     });
                                     ui.end_row();
 
-                                    ui.label("Output Range [out_min .. out_max]:");
-                                    ui.horizontal(|ui| {
+                                    ui.label("Output Range:");
+                                    ui.horizontal_wrapped(|ui| {
                                         ui.add(
                                             egui::DragValue::new(&mut self.draft.fb.k[2])
                                                 .range(-100_000..=100_000)
@@ -1617,34 +1407,466 @@ impl ElementConfigModal {
                             );
                         }
 
+                        TypeTag::MbMaster => {
+                            egui::Grid::new("mb_master_dialog_grid")
+                                .num_columns(2)
+                                .spacing([12.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.label("Slave ID (1..=247):");
+                                    ui.horizontal(|ui| {
+                                        let mut id_val = self.draft.mb_slave_id.clamp(1, 247);
+                                        if ui
+                                            .add(egui::DragValue::new(&mut id_val).range(1..=247))
+                                            .changed()
+                                        {
+                                            self.draft.mb_slave_id = id_val;
+                                        }
+                                        for preset in [1u8, 2, 10, 247] {
+                                            if ui
+                                                .selectable_label(
+                                                    self.draft.mb_slave_id == preset,
+                                                    format!("{}", preset),
+                                                )
+                                                .clicked()
+                                            {
+                                                self.draft.mb_slave_id = preset;
+                                            }
+                                        }
+                                    });
+                                    ui.end_row();
+
+                                    ui.label("Function Code:");
+                                    egui::ComboBox::from_id_salt("dlg_mb_func")
+                                        .selected_text(format!("FC{:02}", self.draft.mb_function))
+                                        .show_ui(ui, |ui| {
+                                            for (fc, desc) in [
+                                                (1u8, "FC01 Read Coils"),
+                                                (2u8, "FC02 Read Discrete Inputs"),
+                                                (3u8, "FC03 Read Holding Regs"),
+                                                (4u8, "FC04 Read Input Regs"),
+                                                (5u8, "FC05 Write Single Coil"),
+                                                (6u8, "FC06 Write Single Reg"),
+                                                (15u8, "FC15 Write Multi Coils"),
+                                                (16u8, "FC16 Write Multi Regs"),
+                                            ] {
+                                                ui.selectable_value(
+                                                    &mut self.draft.mb_function,
+                                                    fc,
+                                                    desc,
+                                                );
+                                            }
+                                        });
+                                    ui.end_row();
+
+                                    ui.label("Remote Start Addr:");
+                                    ui.add(
+                                        egui::DragValue::new(&mut self.draft.preset_value)
+                                            .range(0..=65535),
+                                    );
+                                    ui.end_row();
+
+                                    ui.label("Register/Coil Count:");
+                                    ui.add(
+                                        egui::DragValue::new(&mut self.draft.preset_value1)
+                                            .range(1..=125),
+                                    );
+                                    ui.end_row();
+
+                                    ui.label("Local Buffer Reg:");
+                                    ui.horizontal(|ui| {
+                                        let r = ui.add(
+                                            egui::TextEdit::singleline(&mut self.draft.target_reg)
+                                                .font(egui::TextStyle::Monospace)
+                                                .hint_text("e.g. %MW0 or %MX0.0")
+                                                .desired_width(130.0),
+                                        );
+                                        if r.changed() {
+                                            self.draft.target_reg =
+                                                self.draft.target_reg.to_ascii_uppercase();
+                                        }
+                                        for p in ["%MW0", "%MW10", "%MX0.0", "%QX0.0"] {
+                                            if ui
+                                                .selectable_label(self.draft.target_reg == p, p)
+                                                .clicked()
+                                            {
+                                                self.draft.target_reg = p.to_string();
+                                            }
+                                        }
+                                    });
+                                    ui.end_row();
+                                });
+                            ui.add_space(4.0);
+                            ui.label(
+                                RichText::new("Triggers one Modbus RTU request on each rising edge of EN. Uses Virtual Slave in PC Simulator.")
+                                    .small()
+                                    .color(palette.rung_text_dim),
+                            );
+                        }
+
+                        TypeTag::MbSlave => {
+                            egui::Grid::new("mb_slave_dialog_grid")
+                                .num_columns(2)
+                                .spacing([12.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.label("Slave ID (1..=247):");
+                                    ui.horizontal(|ui| {
+                                        let mut id_val = self.draft.mb_slave_id.clamp(1, 247);
+                                        if ui
+                                            .add(egui::DragValue::new(&mut id_val).range(1..=247))
+                                            .changed()
+                                        {
+                                            self.draft.mb_slave_id = id_val;
+                                        }
+                                        for preset in [1u8, 2, 10, 247] {
+                                            if ui
+                                                .selectable_label(
+                                                    self.draft.mb_slave_id == preset,
+                                                    format!("{}", preset),
+                                                )
+                                                .clicked()
+                                            {
+                                                self.draft.mb_slave_id = preset;
+                                            }
+                                        }
+                                    });
+                                    ui.end_row();
+
+                                    ui.label("Baudrate (RS-485):");
+                                    egui::ComboBox::from_id_salt("dlg_mbs_baud")
+                                        .selected_text(format!("{} bps", self.draft.preset_value))
+                                        .show_ui(ui, |ui| {
+                                            for b in [9600, 19200, 38400, 57600, 115200] {
+                                                ui.selectable_value(
+                                                    &mut self.draft.preset_value,
+                                                    b,
+                                                    format!("{} bps", b),
+                                                );
+                                            }
+                                        });
+                                    ui.end_row();
+
+                                    ui.label("Frame Format:");
+                                    ui.label(
+                                        RichText::new("8N1 (8 Data, No Parity, 1 Stop)")
+                                            .monospace()
+                                            .color(palette.rung_text_dim),
+                                    );
+                                    ui.end_row();
+                                });
+
+                            ui.add_space(6.0);
+                            egui::Frame::new()
+                                .fill(palette.banner_bg)
+                                .stroke(Stroke::new(1.0, palette.card_border))
+                                .corner_radius(4.0)
+                                .inner_margin(8.0)
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        RichText::new("Modbus Register Map (Master -> PLC)")
+                                            .strong()
+                                            .small()
+                                            .color(palette.accent_heading),
+                                    );
+                                    ui.label(
+                                        RichText::new("• 0x Coils (FC01/05/15)      -> %QX / %MX")
+                                            .monospace()
+                                            .small(),
+                                    );
+                                    ui.label(
+                                        RichText::new("• 1x Discrete In (FC02)      -> %IX")
+                                            .monospace()
+                                            .small(),
+                                    );
+                                    ui.label(
+                                        RichText::new("• 3x Input Reg (FC04)        -> %IW")
+                                            .monospace()
+                                            .small(),
+                                    );
+                                    ui.label(
+                                        RichText::new("• 4x Holding Reg (FC03/06/16)-> %MW")
+                                            .monospace()
+                                            .small(),
+                                    );
+                                });
+                        }
+
+                        TypeTag::Pwm => {
+                            egui::Grid::new("pwm_dialog_grid")
+                                .num_columns(2)
+                                .spacing([12.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.label("Duty Input (IN):");
+                                    ui.horizontal(|ui| {
+                                        let r = ui.add(
+                                            egui::TextEdit::singleline(&mut self.draft.fb.in1)
+                                                .font(egui::TextStyle::Monospace)
+                                                .hint_text("e.g. %MW0 or 500")
+                                                .desired_width(130.0),
+                                        );
+                                        if r.changed() {
+                                            self.draft.fb.in1 = self.draft.fb.in1.to_ascii_uppercase();
+                                        }
+                                        for p in ["%MW0", "%MW1", "500", "1000"] {
+                                            if ui.selectable_label(self.draft.fb.in1 == p, p).clicked() {
+                                                self.draft.fb.in1 = p.to_string();
+                                            }
+                                        }
+                                    });
+                                    ui.end_row();
+
+                                    ui.label("Max Period (1..=65535):");
+                                    ui.horizontal(|ui| {
+                                        ui.add(
+                                            egui::DragValue::new(&mut self.draft.preset_value)
+                                                .range(1..=65535),
+                                        );
+                                        for p in [100, 1000, 10000] {
+                                            if ui
+                                                .selectable_label(
+                                                    self.draft.preset_value == p,
+                                                    format!("{}", p),
+                                                )
+                                                .clicked()
+                                            {
+                                                self.draft.preset_value = p;
+                                            }
+                                        }
+                                    });
+                                    ui.end_row();
+                                });
+                            ui.add_space(4.0);
+                            ui.label(
+                                RichText::new("Outputs clamped duty [0..Max] to %QW channel when EN is TRUE; writes 0 when FALSE.")
+                                    .small()
+                                    .color(palette.rung_text_dim),
+                            );
+                        }
+
+                        TypeTag::Select => {
+                            egui::Grid::new("sel_dialog_grid")
+                                .num_columns(2)
+                                .spacing([12.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.label("IN0 (EN = FALSE):");
+                                    let r0 = ui.add(
+                                        egui::TextEdit::singleline(&mut self.draft.fb.in1)
+                                            .font(egui::TextStyle::Monospace)
+                                            .hint_text("e.g. 0 or %MW0")
+                                            .desired_width(160.0),
+                                    );
+                                    if r0.changed() {
+                                        self.draft.fb.in1 = self.draft.fb.in1.to_ascii_uppercase();
+                                    }
+                                    ui.end_row();
+
+                                    ui.label("IN1 (EN = TRUE):");
+                                    let r1 = ui.add(
+                                        egui::TextEdit::singleline(&mut self.draft.fb.in2)
+                                            .font(egui::TextStyle::Monospace)
+                                            .hint_text("e.g. 100 or %MW1")
+                                            .desired_width(160.0),
+                                    );
+                                    if r1.changed() {
+                                        self.draft.fb.in2 = self.draft.fb.in2.to_ascii_uppercase();
+                                    }
+                                    ui.end_row();
+
+                                    ui.label("Destination (OUT):");
+                                    let rd = ui.add(
+                                        egui::TextEdit::singleline(&mut self.draft.target_reg)
+                                            .font(egui::TextStyle::Monospace)
+                                            .hint_text("e.g. %MW2")
+                                            .desired_width(160.0),
+                                    );
+                                    if rd.changed() {
+                                        self.draft.target_reg =
+                                            self.draft.target_reg.to_ascii_uppercase();
+                                    }
+                                    ui.end_row();
+                                });
+                        }
+
+                        TypeTag::InRange => {
+                            egui::Grid::new("in_range_dialog_grid")
+                                .num_columns(2)
+                                .spacing([12.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.label("Input Value (IN):");
+                                    let ri = ui.add(
+                                        egui::TextEdit::singleline(&mut self.draft.fb.in1)
+                                            .font(egui::TextStyle::Monospace)
+                                            .hint_text("e.g. %MW0 or %IW0")
+                                            .desired_width(160.0),
+                                    );
+                                    if ri.changed() {
+                                        self.draft.fb.in1 = self.draft.fb.in1.to_ascii_uppercase();
+                                    }
+                                    ui.end_row();
+
+                                    ui.label("Min Bound (MIN):");
+                                    ui.add(egui::DragValue::new(&mut self.draft.fb.k[0]));
+                                    ui.end_row();
+
+                                    ui.label("Max Bound (MAX):");
+                                    ui.add(egui::DragValue::new(&mut self.draft.fb.k[1]));
+                                    ui.end_row();
+                                });
+                            ui.add_space(4.0);
+                            ui.label(
+                                RichText::new("Conducts (TRUE) when MIN <= IN <= MAX.")
+                                    .small()
+                                    .color(palette.rung_text_dim),
+                            );
+                        }
+
+                        TypeTag::Toggle => {
+                            ui.label(
+                                RichText::new("ALT (Alternate / Flip-Flop): Toggles the target bit on each rising edge of EN.")
+                                    .small()
+                                    .color(palette.rung_text_dim),
+                            );
+                        }
+
+                        TypeTag::IncDec => {
+                            ui.horizontal(|ui| {
+                                ui.label("Operation Mode:");
+                                if ui
+                                    .selectable_label(self.draft.fb.mode == 0, "INC (+1)")
+                                    .clicked()
+                                {
+                                    self.draft.fb.mode = 0;
+                                    if self.draft.symbol == "DEC" || self.draft.symbol.is_empty() {
+                                        self.draft.symbol = "INC".to_string();
+                                    }
+                                }
+                                if ui
+                                    .selectable_label(self.draft.fb.mode != 0, "DEC (-1)")
+                                    .clicked()
+                                {
+                                    self.draft.fb.mode = 1;
+                                    if self.draft.symbol == "INC" || self.draft.symbol.is_empty() {
+                                        self.draft.symbol = "DEC".to_string();
+                                    }
+                                }
+                            });
+                            ui.add_space(4.0);
+                            ui.label(
+                                RichText::new("Increments or decrements the target word register by 1 on each rising edge of EN.")
+                                    .small()
+                                    .color(palette.rung_text_dim),
+                            );
+                        }
+
+                        TypeTag::MasterRelay => {
+                            ui.label(
+                                RichText::new("MC (Master Control Relay): Enables or disables the master control zone when energized.")
+                                    .small()
+                                    .color(palette.rung_text_dim),
+                            );
+                        }
+
+                        TypeTag::Return => {
+                            ui.label(
+                                RichText::new("RET (Conditional Return): Ends the current PLC scan immediately when EN is TRUE.")
+                                    .small()
+                                    .color(palette.rung_text_dim),
+                            );
+                        }
+
                         _ => {
                             ui.label("Standard instruction element.");
                         }
                     }
                 });
 
-                ui.add_space(10.0);
+                ui.add_space(6.0);
 
-                // --- 4. Action Buttons Bar ---
+                // --- 4. Collapsible Notes & Style Section (Collapsed by Default) ---
+                let notes_header = if self.draft.element_type == TypeTag::Coil {
+                    "Notes & Style"
+                } else {
+                    "Notes"
+                };
+                egui::CollapsingHeader::new(
+                    RichText::new(notes_header)
+                        .small()
+                        .strong()
+                        .color(palette.rung_text_dim),
+                )
+                .id_salt("elem_cfg_notes_style")
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.add_space(4.0);
+                    egui::Grid::new("elem_modal_notes_grid")
+                        .num_columns(2)
+                        .spacing([10.0, 6.0])
+                        .min_col_width(84.0)
+                        .show(ui, |ui| {
+                            ui.label(RichText::new("Remark").color(palette.rung_text_dim));
+                            let field_w = (ui.available_width() - 4.0).max(200.0);
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.draft.comment)
+                                    .hint_text("Element description / remark...")
+                                    .desired_width(field_w),
+                            );
+                            ui.end_row();
+
+                            let rung_lbl = if let Some(r_idx) = self.rung_idx {
+                                format!("Network #{:02}", r_idx + 1)
+                            } else {
+                                "Network".to_string()
+                            };
+                            ui.label(RichText::new(rung_lbl).color(palette.rung_text_dim));
+                            let field_w = (ui.available_width() - 4.0).max(200.0);
+                            let rc_resp = ui.add(
+                                egui::TextEdit::multiline(&mut self.rung_comment)
+                                    .desired_rows(2)
+                                    .hint_text("Network comment (supports multiple lines)...")
+                                    .desired_width(field_w),
+                            );
+                            if rc_resp.has_focus() {
+                                multiline_focused = true;
+                            }
+                            ui.end_row();
+
+                            if self.draft.element_type == TypeTag::Coil {
+                                ui.label(RichText::new("Coil Style").color(palette.rung_text_dim));
+                                ui.horizontal_wrapped(|ui| {
+                                    let is_auto = self.draft.coil_style.is_none();
+                                    if ui.selectable_label(is_auto, "Auto").clicked() {
+                                        self.draft.coil_style = None;
+                                    }
+                                    for &st in &CoilStyle::ALL {
+                                        let selected = self.draft.coil_style == Some(st);
+                                        let label = match st {
+                                            CoilStyle::IecParentheses => "IEC",
+                                            CoilStyle::CircleRelay => "DIN Relay",
+                                            CoilStyle::NemaBox => "NEMA",
+                                            CoilStyle::SolenoidValve => "Solenoid",
+                                            CoilStyle::PilotLight => "Pilot Lamp",
+                                        };
+                                        if ui.selectable_label(selected, label).clicked() {
+                                            self.draft.coil_style = Some(st);
+                                        }
+                                    }
+                                });
+                                ui.end_row();
+                            }
+                        });
+                });
+
+                ui.add_space(6.0);
+                ui.separator();
+                ui.add_space(4.0);
+
+                // --- 5. Pro IDE Footer Action Bar ---
                 ui.horizontal(|ui| {
-                    let apply_btn = egui::Button::new(
-                        RichText::new("Apply Changes (Enter)")
-                            .color(Color32::WHITE)
-                            .strong(),
-                    )
-                    .fill(Color32::from_rgb(28, 135, 70))
-                    .min_size(vec2(165.0, 30.0));
-
-                    if ui.add(apply_btn).clicked() {
-                        apply_clicked = true;
-                    }
-
                     if ui
                         .add(
                             egui::Button::new(
-                                RichText::new("Delete Element").color(palette.accent_danger),
+                                RichText::new("Delete").color(palette.accent_danger),
                             )
-                            .min_size(vec2(120.0, 30.0)),
+                            .min_size(vec2(72.0, 28.0)),
                         )
                         .clicked()
                     {
@@ -1652,8 +1874,25 @@ impl ElementConfigModal {
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let apply_btn = egui::Button::new(
+                            RichText::new("Apply")
+                                .color(Color32::WHITE)
+                                .strong(),
+                        )
+                        .fill(Color32::from_rgb(28, 135, 70))
+                        .min_size(vec2(96.0, 28.0));
+
                         if ui
-                            .add(egui::Button::new("Cancel (Esc)").min_size(vec2(105.0, 30.0)))
+                            .add(apply_btn)
+                            .on_hover_text("Apply changes [Enter]")
+                            .clicked()
+                        {
+                            apply_clicked = true;
+                        }
+
+                        if ui
+                            .add(egui::Button::new("Cancel").min_size(vec2(76.0, 28.0)))
+                            .on_hover_text("Discard changes [Esc]")
                             .clicked()
                         {
                             cancel_clicked = true;
@@ -1712,44 +1951,53 @@ impl ElementConfigModal {
         palette: ThemePalette,
     ) {
         let width = ui.available_width();
-        let height = 74.0;
+        let height = 48.0;
         let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
         let p = ui.painter();
 
-        p.rect_filled(rect, CornerRadius::same(8), palette.canvas_bg);
+        p.rect_filled(rect, CornerRadius::same(6), palette.canvas_bg);
         p.rect_stroke(
             rect,
-            CornerRadius::same(8),
-            Stroke::new(1.5, palette.banner_border),
+            CornerRadius::same(6),
+            Stroke::new(1.0, palette.banner_border),
             StrokeKind::Inside,
         );
 
-        // Left Schematic Preview Area
-        let schem_w = (width * 0.34).clamp(185.0, 225.0);
+        // Left Schematic Preview Zone
+        let schem_w = 104.0;
         let schem_rect = Rect::from_min_max(
             rect.min,
             pos2(rect.min.x + schem_w, rect.max.y),
         );
         let c = schem_rect.center();
-        let l_rail = schem_rect.min.x + 18.0;
-        let r_rail = schem_rect.max.x - 18.0;
+        let l_rail = schem_rect.min.x + 12.0;
+        let r_rail = schem_rect.max.x - 12.0;
 
         // Mini L1 & L2 rails
         p.line_segment(
-            [pos2(l_rail, rect.min.y + 12.0), pos2(l_rail, rect.max.y - 12.0)],
-            Stroke::new(3.0, palette.l1_rail),
+            [pos2(l_rail, rect.min.y + 8.0), pos2(l_rail, rect.max.y - 8.0)],
+            Stroke::new(2.5, palette.l1_rail),
         );
         p.line_segment(
-            [pos2(r_rail, rect.min.y + 12.0), pos2(r_rail, rect.max.y - 12.0)],
-            Stroke::new(3.0, palette.l2_rail),
+            [pos2(r_rail, rect.min.y + 8.0), pos2(r_rail, rect.max.y - 8.0)],
+            Stroke::new(2.5, palette.l2_rail),
         );
         p.line_segment(
-            [pos2(l_rail, c.y), pos2(c.x - 24.0, c.y)],
-            Stroke::new(2.0, palette.wire_idle),
+            [pos2(l_rail, c.y), pos2(c.x - 20.0, c.y)],
+            Stroke::new(1.8, palette.wire_idle),
         );
         p.line_segment(
-            [pos2(c.x + 24.0, c.y), pos2(r_rail, c.y)],
-            Stroke::new(2.0, palette.wire_idle),
+            [pos2(c.x + 20.0, c.y), pos2(r_rail, c.y)],
+            Stroke::new(1.8, palette.wire_idle),
+        );
+
+        // Hairline divider between schematic zone and summary text
+        p.line_segment(
+            [
+                pos2(schem_rect.max.x, rect.min.y + 6.0),
+                pos2(schem_rect.max.x, rect.max.y - 6.0),
+            ],
+            Stroke::new(1.0, palette.banner_border),
         );
 
         if self.draft.element_type == TypeTag::Contact {
@@ -1760,98 +2008,96 @@ impl ElementConfigModal {
 
             match active_style {
                 ContactStyle::IecStandard => {
-                    let gap = 10.0;
-                    let plate_h = 13.0;
-                    p.line_segment([pos2(c.x - 24.0, c.y), pos2(c.x - gap, c.y)], Stroke::new(2.0, wire_col));
-                    p.line_segment([pos2(c.x + gap, c.y), pos2(c.x + 24.0, c.y)], Stroke::new(2.0, wire_col));
-                    p.line_segment([pos2(c.x - gap, c.y - plate_h), pos2(c.x - gap, c.y + plate_h)], Stroke::new(2.6, stroke_col));
-                    p.line_segment([pos2(c.x + gap, c.y - plate_h), pos2(c.x + gap, c.y + plate_h)], Stroke::new(2.6, stroke_col));
+                    let gap = 9.0;
+                    let plate_h = 11.0;
+                    p.line_segment([pos2(c.x - 20.0, c.y), pos2(c.x - gap, c.y)], Stroke::new(1.8, wire_col));
+                    p.line_segment([pos2(c.x + gap, c.y), pos2(c.x + 20.0, c.y)], Stroke::new(1.8, wire_col));
+                    p.line_segment([pos2(c.x - gap, c.y - plate_h), pos2(c.x - gap, c.y + plate_h)], Stroke::new(2.4, stroke_col));
+                    p.line_segment([pos2(c.x + gap, c.y - plate_h), pos2(c.x + gap, c.y + plate_h)], Stroke::new(2.4, stroke_col));
                     if is_nc {
-                        p.line_segment([pos2(c.x - gap - 3.0, c.y + plate_h + 2.0), pos2(c.x + gap + 3.0, c.y - plate_h - 2.0)], Stroke::new(2.2, palette.accent_danger));
+                        p.line_segment([pos2(c.x - gap - 2.5, c.y + plate_h + 1.5), pos2(c.x + gap + 2.5, c.y - plate_h - 1.5)], Stroke::new(2.0, palette.accent_danger));
                     } else if self.draft.contact_mode == ContactMode::PositiveTransition {
-                        p.text(c, Align2::CENTER_CENTER, "P", FontId::monospace(13.0), stroke_col);
+                        p.text(c, Align2::CENTER_CENTER, "P", FontId::monospace(12.0), stroke_col);
                     } else if self.draft.contact_mode == ContactMode::NegativeTransition {
-                        p.text(c, Align2::CENTER_CENTER, "N", FontId::monospace(13.0), stroke_col);
+                        p.text(c, Align2::CENTER_CENTER, "N", FontId::monospace(12.0), stroke_col);
                     }
                 }
                 ContactStyle::JicSchematic => {
-                    let gap = 15.0;
-                    let term_r = 3.5;
+                    let gap = 13.0;
+                    let term_r = 3.0;
                     let p_left = pos2(c.x - gap, c.y);
                     let p_right = pos2(c.x + gap, c.y);
-                    p.line_segment([pos2(c.x - 24.0, c.y), pos2(p_left.x - term_r, c.y)], Stroke::new(2.0, wire_col));
-                    p.line_segment([pos2(p_right.x + term_r, c.y), pos2(c.x + 24.0, c.y)], Stroke::new(2.0, wire_col));
-                    p.circle_stroke(p_left, term_r, Stroke::new(2.0, stroke_col));
-                    p.circle_stroke(p_right, term_r, Stroke::new(2.0, stroke_col));
+                    p.line_segment([pos2(c.x - 20.0, c.y), pos2(p_left.x - term_r, c.y)], Stroke::new(1.8, wire_col));
+                    p.line_segment([pos2(p_right.x + term_r, c.y), pos2(c.x + 20.0, c.y)], Stroke::new(1.8, wire_col));
+                    p.circle_stroke(p_left, term_r, Stroke::new(1.8, stroke_col));
+                    p.circle_stroke(p_right, term_r, Stroke::new(1.8, stroke_col));
                     if is_nc {
-                        p.line_segment([pos2(p_left.x + term_r, c.y), pos2(p_right.x - term_r, c.y)], Stroke::new(2.6, stroke_col));
-                        p.line_segment([pos2(c.x - 5.0, c.y + 6.0), pos2(c.x + 5.0, c.y - 6.0)], Stroke::new(2.0, palette.accent_danger));
+                        p.line_segment([pos2(p_left.x + term_r, c.y), pos2(p_right.x - term_r, c.y)], Stroke::new(2.2, stroke_col));
+                        p.line_segment([pos2(c.x - 4.5, c.y + 5.5), pos2(c.x + 4.5, c.y - 5.5)], Stroke::new(1.8, palette.accent_danger));
                     } else {
-                        p.line_segment([pos2(p_left.x + 1.0, c.y - 2.0), pos2(p_right.x - 2.0, c.y - 12.0)], Stroke::new(2.6, stroke_col));
+                        p.line_segment([pos2(p_left.x + 1.0, c.y - 2.0), pos2(p_right.x - 2.0, c.y - 10.0)], Stroke::new(2.2, stroke_col));
                     }
                 }
                 ContactStyle::PushButton => {
-                    let gap = 14.0;
-                    let term_r = 3.5;
+                    let gap = 12.0;
+                    let term_r = 3.0;
                     let p_left = pos2(c.x - gap, c.y);
                     let p_right = pos2(c.x + gap, c.y);
-                    p.line_segment([pos2(c.x - 24.0, c.y), pos2(p_left.x - term_r, c.y)], Stroke::new(2.0, wire_col));
-                    p.line_segment([pos2(p_right.x + term_r, c.y), pos2(c.x + 24.0, c.y)], Stroke::new(2.0, wire_col));
-                    p.circle_stroke(p_left, term_r, Stroke::new(2.0, stroke_col));
-                    p.circle_stroke(p_right, term_r, Stroke::new(2.0, stroke_col));
-                    let bar_y = if is_nc { c.y - term_r } else { c.y - 8.0 };
+                    p.line_segment([pos2(c.x - 20.0, c.y), pos2(p_left.x - term_r, c.y)], Stroke::new(1.8, wire_col));
+                    p.line_segment([pos2(p_right.x + term_r, c.y), pos2(c.x + 20.0, c.y)], Stroke::new(1.8, wire_col));
+                    p.circle_stroke(p_left, term_r, Stroke::new(1.8, stroke_col));
+                    p.circle_stroke(p_right, term_r, Stroke::new(1.8, stroke_col));
+                    let bar_y = if is_nc { c.y - term_r } else { c.y - 7.0 };
                     let bar_col = if is_nc { palette.accent_ok } else { stroke_col };
-                    p.line_segment([pos2(c.x - gap - 2.0, bar_y), pos2(c.x + gap + 2.0, bar_y)], Stroke::new(2.6, bar_col));
-                    p.line_segment([pos2(c.x, bar_y), pos2(c.x, bar_y - 8.0)], Stroke::new(2.0, palette.rung_text_dim));
-                    p.line_segment([pos2(c.x - 6.0, bar_y - 8.0), pos2(c.x + 6.0, bar_y - 8.0)], Stroke::new(3.0, palette.accent_warn));
+                    p.line_segment([pos2(c.x - gap - 2.0, bar_y), pos2(c.x + gap + 2.0, bar_y)], Stroke::new(2.2, bar_col));
+                    p.line_segment([pos2(c.x, bar_y), pos2(c.x, bar_y - 6.5)], Stroke::new(1.8, palette.rung_text_dim));
+                    p.line_segment([pos2(c.x - 5.5, bar_y - 6.5), pos2(c.x + 5.5, bar_y - 6.5)], Stroke::new(2.6, palette.accent_warn));
                 }
                 ContactStyle::DinEuropean => {
-                    let gap = 11.0;
+                    let gap = 10.0;
                     let c_left = pos2(c.x - gap, c.y);
                     let c_right = pos2(c.x + gap, c.y);
 
-                    p.line_segment([pos2(c.x - 24.0, c.y), c_left], Stroke::new(2.0, wire_col));
-                    p.line_segment([c_right, pos2(c.x + 24.0, c.y)], Stroke::new(2.0, wire_col));
+                    p.line_segment([pos2(c.x - 20.0, c.y), c_left], Stroke::new(1.8, wire_col));
+                    p.line_segment([c_right, pos2(c.x + 20.0, c.y)], Stroke::new(1.8, wire_col));
+                    p.circle_filled(c_left, 2.5, stroke_col);
 
-                    // Left hinge terminal dot
-                    p.circle_filled(c_left, 3.0, stroke_col);
-
-                    let stub_h = 7.5;
+                    let stub_h = 6.5;
                     if is_nc {
                         let stub_bottom = pos2(c_right.x, c.y + stub_h);
-                        p.line_segment([c_right, stub_bottom], Stroke::new(2.0, stroke_col));
-                        p.line_segment([c_left, pos2(stub_bottom.x + 1.5, stub_bottom.y)], Stroke::new(2.4, stroke_col));
+                        p.line_segment([c_right, stub_bottom], Stroke::new(1.8, stroke_col));
+                        p.line_segment([c_left, pos2(stub_bottom.x + 1.5, stub_bottom.y)], Stroke::new(2.2, stroke_col));
                     } else {
                         let stub_top = pos2(c_right.x, c.y - stub_h);
-                        p.line_segment([c_right, stub_top], Stroke::new(2.0, stroke_col));
-                        p.line_segment([c_left, pos2(c_right.x - 2.5, c.y - stub_h - 7.0)], Stroke::new(2.4, stroke_col));
+                        p.line_segment([c_right, stub_top], Stroke::new(1.8, stroke_col));
+                        p.line_segment([c_left, pos2(c_right.x - 2.0, c.y - stub_h - 6.0)], Stroke::new(2.2, stroke_col));
                     }
 
-                    let text_y = c.y + 11.0;
+                    let text_y = c.y + 10.0;
                     if self.draft.contact_mode == ContactMode::PositiveTransition {
-                        p.text(pos2(c.x, text_y), Align2::CENTER_CENTER, "P", FontId::monospace(10.0), stroke_col);
+                        p.text(pos2(c.x, text_y), Align2::CENTER_CENTER, "P", FontId::monospace(9.5), stroke_col);
                     } else if self.draft.contact_mode == ContactMode::NegativeTransition {
-                        p.text(pos2(c.x, text_y), Align2::CENTER_CENTER, "N", FontId::monospace(10.0), stroke_col);
+                        p.text(pos2(c.x, text_y), Align2::CENTER_CENTER, "N", FontId::monospace(9.5), stroke_col);
                     }
                 }
                 ContactStyle::ToggleSwitch => {
-                    let sw_w = 42.0;
-                    let sw_h = 19.0;
+                    let sw_w = 38.0;
+                    let sw_h = 18.0;
                     let sw_rect = Rect::from_center_size(c, vec2(sw_w, sw_h));
-                    let knob_r = 7.0;
+                    let knob_r = 6.0;
                     let (bg, knob_x, label, label_col) = if is_nc {
                         (palette.card_bg, sw_rect.min.x + knob_r + 3.0, "NC", palette.accent_danger)
                     } else {
                         (palette.card_bg, sw_rect.max.x - knob_r - 3.0, "NO", palette.accent_ok)
                     };
                     p.rect_filled(sw_rect, CornerRadius::same(9), bg);
-                    p.rect_stroke(sw_rect, CornerRadius::same(9), Stroke::new(1.5, stroke_col), StrokeKind::Inside);
+                    p.rect_stroke(sw_rect, CornerRadius::same(9), Stroke::new(1.4, stroke_col), StrokeKind::Inside);
                     p.circle_filled(pos2(knob_x, c.y), knob_r, stroke_col);
                     p.text(
-                        pos2(if is_nc { sw_rect.max.x - 11.0 } else { sw_rect.min.x + 11.0 }, c.y),
+                        pos2(if is_nc { sw_rect.max.x - 10.0 } else { sw_rect.min.x + 10.0 }, c.y),
                         Align2::CENTER_CENTER,
                         label,
-                        FontId::monospace(9.0),
+                        FontId::monospace(8.5),
                         label_col,
                     );
                 }
@@ -1868,12 +2114,12 @@ impl ElementConfigModal {
 
             match active_style {
                 CoilStyle::IecParentheses => {
-                    let gap = 12.0;
-                    let arc_half_h = 13.0;
-                    let tip_dx = 4.5;
+                    let gap = 11.0;
+                    let arc_half_h = 11.0;
+                    let tip_dx = 4.0;
 
-                    p.line_segment([pos2(c.x - 24.0, c.y), pos2(c.x - gap, c.y)], Stroke::new(2.0, wire_col));
-                    p.line_segment([pos2(c.x + gap, c.y), pos2(c.x + 24.0, c.y)], Stroke::new(2.0, wire_col));
+                    p.line_segment([pos2(c.x - 20.0, c.y), pos2(c.x - gap, c.y)], Stroke::new(1.8, wire_col));
+                    p.line_segment([pos2(c.x + gap, c.y), pos2(c.x + 20.0, c.y)], Stroke::new(1.8, wire_col));
 
                     let lp0 = pos2(c.x - gap + tip_dx, c.y - arc_half_h);
                     let lp1 = pos2(c.x - gap - tip_dx, c.y);
@@ -1886,7 +2132,7 @@ impl ElementConfigModal {
                             omt * omt * lp0.x + 2.0 * omt * t * lp1.x + t * t * lp2.x,
                             omt * omt * lp0.y + 2.0 * omt * t * lp1.y + t * t * lp2.y,
                         );
-                        p.line_segment([prev_l, cur], Stroke::new(2.4, stroke_col));
+                        p.line_segment([prev_l, cur], Stroke::new(2.2, stroke_col));
                         prev_l = cur;
                     }
 
@@ -1901,7 +2147,7 @@ impl ElementConfigModal {
                             omt * omt * rp0.x + 2.0 * omt * t * rp1.x + t * t * rp2.x,
                             omt * omt * rp0.y + 2.0 * omt * t * rp1.y + t * t * rp2.y,
                         );
-                        p.line_segment([prev_r, cur], Stroke::new(2.4, stroke_col));
+                        p.line_segment([prev_r, cur], Stroke::new(2.2, stroke_col));
                         prev_r = cur;
                     }
 
@@ -1909,31 +2155,31 @@ impl ElementConfigModal {
                         CoilMode::Normal => {}
                         CoilMode::Negated => {
                             p.line_segment(
-                                [pos2(c.x - 4.5, c.y + 9.0), pos2(c.x + 4.5, c.y - 9.0)],
-                                Stroke::new(2.0, stroke_col),
+                                [pos2(c.x - 4.0, c.y + 7.5), pos2(c.x + 4.0, c.y - 7.5)],
+                                Stroke::new(1.8, stroke_col),
                             );
                         }
                         CoilMode::SetLatch => {
-                            p.text(c, Align2::CENTER_CENTER, "S", FontId::monospace(12.0), stroke_col);
+                            p.text(c, Align2::CENTER_CENTER, "S", FontId::monospace(11.0), stroke_col);
                         }
                         CoilMode::ResetUnlatch => {
-                            p.text(c, Align2::CENTER_CENTER, "R", FontId::monospace(12.0), stroke_col);
+                            p.text(c, Align2::CENTER_CENTER, "R", FontId::monospace(11.0), stroke_col);
                         }
                         CoilMode::PositiveTransition => {
-                            p.text(c, Align2::CENTER_CENTER, "P", FontId::monospace(12.0), stroke_col);
+                            p.text(c, Align2::CENTER_CENTER, "P", FontId::monospace(11.0), stroke_col);
                         }
                         CoilMode::NegativeTransition => {
-                            p.text(c, Align2::CENTER_CENTER, "N", FontId::monospace(12.0), stroke_col);
+                            p.text(c, Align2::CENTER_CENTER, "N", FontId::monospace(11.0), stroke_col);
                         }
                     }
                 }
 
                 CoilStyle::CircleRelay => {
-                    let coil_r = 14.0;
-                    p.line_segment([pos2(c.x - 24.0, c.y), pos2(c.x - coil_r, c.y)], Stroke::new(2.0, wire_col));
-                    p.line_segment([pos2(c.x + coil_r, c.y), pos2(c.x + 24.0, c.y)], Stroke::new(2.0, wire_col));
+                    let coil_r = 12.0;
+                    p.line_segment([pos2(c.x - 20.0, c.y), pos2(c.x - coil_r, c.y)], Stroke::new(1.8, wire_col));
+                    p.line_segment([pos2(c.x + coil_r, c.y), pos2(c.x + 20.0, c.y)], Stroke::new(1.8, wire_col));
                     p.circle_filled(c, coil_r, palette.card_bg);
-                    p.circle_stroke(c, coil_r, Stroke::new(2.4, stroke_col));
+                    p.circle_stroke(c, coil_r, Stroke::new(2.2, stroke_col));
 
                     match self.draft.coil_mode {
                         CoilMode::Normal => {}
@@ -1943,32 +2189,32 @@ impl ElementConfigModal {
                                     pos2(c.x - coil_r * 0.707, c.y + coil_r * 0.707),
                                     pos2(c.x + coil_r * 0.707, c.y - coil_r * 0.707),
                                 ],
-                                Stroke::new(2.0, stroke_col),
+                                Stroke::new(1.8, stroke_col),
                             );
                         }
                         CoilMode::SetLatch => {
-                            p.text(c, Align2::CENTER_CENTER, "S", FontId::monospace(12.0), stroke_col);
+                            p.text(c, Align2::CENTER_CENTER, "S", FontId::monospace(11.0), stroke_col);
                         }
                         CoilMode::ResetUnlatch => {
-                            p.text(c, Align2::CENTER_CENTER, "R", FontId::monospace(12.0), stroke_col);
+                            p.text(c, Align2::CENTER_CENTER, "R", FontId::monospace(11.0), stroke_col);
                         }
                         CoilMode::PositiveTransition => {
-                            p.text(c, Align2::CENTER_CENTER, "P", FontId::monospace(12.0), stroke_col);
+                            p.text(c, Align2::CENTER_CENTER, "P", FontId::monospace(11.0), stroke_col);
                         }
                         CoilMode::NegativeTransition => {
-                            p.text(c, Align2::CENTER_CENTER, "N", FontId::monospace(12.0), stroke_col);
+                            p.text(c, Align2::CENTER_CENTER, "N", FontId::monospace(11.0), stroke_col);
                         }
                     }
                 }
 
                 CoilStyle::NemaBox => {
-                    let box_w = 34.0;
-                    let box_h = 24.0;
+                    let box_w = 30.0;
+                    let box_h = 20.0;
                     let box_rect = Rect::from_center_size(c, vec2(box_w, box_h));
-                    p.line_segment([pos2(c.x - 24.0, c.y), pos2(box_rect.min.x, c.y)], Stroke::new(2.0, wire_col));
-                    p.line_segment([pos2(box_rect.max.x, c.y), pos2(c.x + 24.0, c.y)], Stroke::new(2.0, wire_col));
+                    p.line_segment([pos2(c.x - 20.0, c.y), pos2(box_rect.min.x, c.y)], Stroke::new(1.8, wire_col));
+                    p.line_segment([pos2(box_rect.max.x, c.y), pos2(c.x + 20.0, c.y)], Stroke::new(1.8, wire_col));
                     p.rect_filled(box_rect, CornerRadius::same(3), palette.card_bg);
-                    p.rect_stroke(box_rect, CornerRadius::same(3), Stroke::new(2.0, stroke_col), StrokeKind::Inside);
+                    p.rect_stroke(box_rect, CornerRadius::same(3), Stroke::new(1.8, stroke_col), StrokeKind::Inside);
 
                     let box_txt = match self.draft.coil_mode {
                         CoilMode::Normal => "M",
@@ -1978,21 +2224,21 @@ impl ElementConfigModal {
                         CoilMode::PositiveTransition => "P",
                         CoilMode::NegativeTransition => "N",
                     };
-                    p.text(c, Align2::CENTER_CENTER, box_txt, FontId::monospace(12.0), stroke_col);
+                    p.text(c, Align2::CENTER_CENTER, box_txt, FontId::monospace(11.0), stroke_col);
                 }
 
                 CoilStyle::SolenoidValve => {
-                    let sol_w = 36.0;
-                    let sol_h = 24.0;
+                    let sol_w = 32.0;
+                    let sol_h = 20.0;
                     let sol_rect = Rect::from_center_size(c, vec2(sol_w, sol_h));
-                    p.line_segment([pos2(c.x - 24.0, c.y), pos2(sol_rect.min.x, c.y)], Stroke::new(2.0, wire_col));
-                    p.line_segment([pos2(sol_rect.max.x, c.y), pos2(c.x + 24.0, c.y)], Stroke::new(2.0, wire_col));
+                    p.line_segment([pos2(c.x - 20.0, c.y), pos2(sol_rect.min.x, c.y)], Stroke::new(1.8, wire_col));
+                    p.line_segment([pos2(sol_rect.max.x, c.y), pos2(c.x + 20.0, c.y)], Stroke::new(1.8, wire_col));
                     p.rect_filled(sol_rect, CornerRadius::same(2), palette.card_bg);
-                    p.rect_stroke(sol_rect, CornerRadius::same(2), Stroke::new(2.0, stroke_col), StrokeKind::Inside);
+                    p.rect_stroke(sol_rect, CornerRadius::same(2), Stroke::new(1.8, stroke_col), StrokeKind::Inside);
 
                     p.line_segment(
                         [pos2(sol_rect.min.x, sol_rect.max.y), pos2(sol_rect.max.x, sol_rect.min.y)],
-                        Stroke::new(1.6, palette.rung_text_dim),
+                        Stroke::new(1.4, palette.rung_text_dim),
                     );
 
                     let sol_txt = match self.draft.coil_mode {
@@ -2004,41 +2250,41 @@ impl ElementConfigModal {
                         CoilMode::NegativeTransition => "N",
                     };
                     p.text(
-                        pos2(c.x, sol_rect.min.y + 6.5),
+                        pos2(c.x, sol_rect.min.y + 6.0),
                         Align2::CENTER_CENTER,
                         sol_txt,
-                        FontId::monospace(8.0),
+                        FontId::monospace(7.5),
                         stroke_col,
                     );
                 }
 
                 CoilStyle::PilotLight => {
-                    let lamp_r = 14.0;
-                    p.line_segment([pos2(c.x - 24.0, c.y), pos2(c.x - lamp_r, c.y)], Stroke::new(2.0, wire_col));
-                    p.line_segment([pos2(c.x + lamp_r, c.y), pos2(c.x + 24.0, c.y)], Stroke::new(2.0, wire_col));
+                    let lamp_r = 12.0;
+                    p.line_segment([pos2(c.x - 20.0, c.y), pos2(c.x - lamp_r, c.y)], Stroke::new(1.8, wire_col));
+                    p.line_segment([pos2(c.x + lamp_r, c.y), pos2(c.x + 20.0, c.y)], Stroke::new(1.8, wire_col));
                     p.circle_filled(c, lamp_r, palette.card_bg);
-                    p.circle_stroke(c, lamp_r, Stroke::new(2.2, stroke_col));
+                    p.circle_stroke(c, lamp_r, Stroke::new(2.0, stroke_col));
 
                     let d = lamp_r * 0.7071;
-                    p.line_segment([pos2(c.x - d, c.y - d), pos2(c.x + d, c.y + d)], Stroke::new(1.8, stroke_col));
-                    p.line_segment([pos2(c.x - d, c.y + d), pos2(c.x + d, c.y - d)], Stroke::new(1.8, stroke_col));
+                    p.line_segment([pos2(c.x - d, c.y - d), pos2(c.x + d, c.y + d)], Stroke::new(1.6, stroke_col));
+                    p.line_segment([pos2(c.x - d, c.y + d), pos2(c.x + d, c.y - d)], Stroke::new(1.6, stroke_col));
 
                     match self.draft.coil_mode {
                         CoilMode::Normal => {}
                         CoilMode::Negated => {
-                            p.circle_filled(pos2(c.x + lamp_r - 2.0, c.y - lamp_r + 2.0), 3.5, palette.accent_warn);
+                            p.circle_filled(pos2(c.x + lamp_r - 2.0, c.y - lamp_r + 2.0), 3.0, palette.accent_warn);
                         }
                         CoilMode::SetLatch => {
-                            p.text(pos2(c.x + lamp_r + 3.0, c.y - lamp_r + 3.0), Align2::LEFT_TOP, "S", FontId::monospace(9.0), stroke_col);
+                            p.text(pos2(c.x + lamp_r + 2.0, c.y - lamp_r + 2.0), Align2::LEFT_TOP, "S", FontId::monospace(8.5), stroke_col);
                         }
                         CoilMode::ResetUnlatch => {
-                            p.text(pos2(c.x + lamp_r + 3.0, c.y - lamp_r + 3.0), Align2::LEFT_TOP, "R", FontId::monospace(9.0), stroke_col);
+                            p.text(pos2(c.x + lamp_r + 2.0, c.y - lamp_r + 2.0), Align2::LEFT_TOP, "R", FontId::monospace(8.5), stroke_col);
                         }
                         CoilMode::PositiveTransition => {
-                            p.text(pos2(c.x + lamp_r + 3.0, c.y - lamp_r + 3.0), Align2::LEFT_TOP, "P", FontId::monospace(9.0), stroke_col);
+                            p.text(pos2(c.x + lamp_r + 2.0, c.y - lamp_r + 2.0), Align2::LEFT_TOP, "P", FontId::monospace(8.5), stroke_col);
                         }
                         CoilMode::NegativeTransition => {
-                            p.text(pos2(c.x + lamp_r + 3.0, c.y - lamp_r + 3.0), Align2::LEFT_TOP, "N", FontId::monospace(9.0), stroke_col);
+                            p.text(pos2(c.x + lamp_r + 2.0, c.y - lamp_r + 2.0), Align2::LEFT_TOP, "N", FontId::monospace(8.5), stroke_col);
                         }
                     }
                 }
@@ -2056,140 +2302,205 @@ impl ElementConfigModal {
                 | TypeTag::Pid
                 | TypeTag::Scale
                 | TypeTag::Limit
-                | TypeTag::Bitwise => VectorIcon::FunctionBlock,
+                | TypeTag::Bitwise
+                | TypeTag::Pwm
+                | TypeTag::Select
+                | TypeTag::InRange
+                | TypeTag::Toggle
+                | TypeTag::IncDec => VectorIcon::FunctionBlock,
                 TypeTag::ShiftRegisters
                 | TypeTag::ShiftRegInbit
                 | TypeTag::ShiftRegReset
                 | TypeTag::ShiftLeft
                 | TypeTag::ShiftRight
                 | TypeTag::ShiftVariable => VectorIcon::ShiftReg,
-                TypeTag::UartSend | TypeTag::UartRecv => VectorIcon::SerialComm,
+                TypeTag::UartSend | TypeTag::UartRecv | TypeTag::MbMaster | TypeTag::MbSlave => {
+                    VectorIcon::SerialComm
+                }
                 TypeTag::Comment => VectorIcon::Comment,
                 _ => VectorIcon::MasterRelay,
             };
 
-            let icon_box = Rect::from_center_size(c, vec2(42.0, 42.0));
+            let icon_box = Rect::from_center_size(c, vec2(28.0, 28.0));
             paint_icon(p, icon_box, icon, palette.accent_heading);
         }
 
-        // Top Address Badge inside schematic preview
-        p.text(
-            pos2(c.x, rect.min.y + 13.0),
-            Align2::CENTER_CENTER,
-            &self.draft.name,
-            FontId::monospace(12.0),
+        // Right Summary Info Area (clipped cleanly within banner)
+        let info_x = schem_rect.max.x + 12.0;
+        let info_clip = Rect::from_min_max(
+            pos2(info_x, rect.min.y),
+            pos2(rect.max.x - 8.0, rect.max.y),
+        );
+        let ip = p.with_clip_rect(info_clip);
+
+        // Line 1: Bold monospace address + optional symbol
+        let display_addr = if self.draft.name.trim().is_empty() {
+            "UNASSIGNED"
+        } else {
+            self.draft.name.as_str()
+        };
+        let name_rect = ip.text(
+            pos2(info_x, rect.min.y + 16.0),
+            Align2::LEFT_CENTER,
+            display_addr,
+            FontId::monospace(13.0),
             palette.accent_warn,
         );
-        p.text(
-            pos2(c.x, rect.max.y - 12.0),
-            Align2::CENTER_CENTER,
-            &self.draft.symbol,
-            FontId::proportional(10.5),
-            palette.symbol_subtext,
-        );
+        if !self.draft.symbol.trim().is_empty() {
+            ip.text(
+                pos2(name_rect.max.x, rect.min.y + 16.0),
+                Align2::LEFT_CENTER,
+                format!("  —  {}", self.draft.symbol.trim()),
+                FontId::proportional(12.0),
+                palette.text_primary,
+            );
+        }
 
-        // Right Summary Info Area
-        let info_x = schem_rect.max.x + 12.0;
-        p.text(
-            pos2(info_x, rect.min.y + 18.0),
-            Align2::LEFT_CENTER,
-            format!("LIVE PREVIEW : {}", self.draft.element_type.display_name()),
-            FontId::proportional(12.5),
-            palette.banner_title,
-        );
-
+        // Line 2: Clean concise 1-line summary
         let detail_summary = if let Some(fb_sum) = self.draft.fb_value_summary() {
-            format!("{}  |  {}", self.draft.name, fb_sum)
+            fb_sum
         } else {
             match self.draft.element_type {
                 TypeTag::Contact => {
-                    let st = global_contact_style;
                     let mode_str = match self.draft.contact_mode {
-                        ContactMode::NormallyOpen => "Normally Open (NO)",
-                        ContactMode::NormallyClosed => "Normally Closed (NC)",
-                        ContactMode::PositiveTransition => "Positive Transition (P)",
-                        ContactMode::NegativeTransition => "Negative Transition (N)",
+                        ContactMode::NormallyOpen => "NO — Normally Open",
+                        ContactMode::NormallyClosed => "NC — Normally Closed",
+                        ContactMode::PositiveTransition => "P — Rising Edge",
+                        ContactMode::NegativeTransition => "N — Falling Edge",
                     };
-                    format!(
-                        "Address: {}  |  Mode: {}  |  Style: {}",
-                        self.draft.name,
-                        mode_str,
-                        st.short_name()
-                    )
+                    format!("{}  |  {}", mode_str, global_contact_style.short_name())
                 }
                 TypeTag::Coil => {
                     let st = self.draft.coil_style.unwrap_or(global_coil_style);
-                    let norm_n = self.draft.name.trim().to_ascii_uppercase();
-                    let is_mem = norm_n.starts_with("%MX")
-                        || (norm_n.starts_with('M')
-                            && norm_n.len() > 1
-                            && norm_n[1..].chars().next().map_or(false, |c| c.is_ascii_digit()));
-                    let role_tag = if is_mem { "🧠 Memory Relay (%M)" } else { "🔌 Physical Output (%Q)" };
-                    format!(
-                        "Target: {} ({})  |  Action: {:?}  |  Symbol: {}",
-                        self.draft.name,
-                        role_tag,
-                        self.draft.coil_mode,
-                        st.short_name()
-                    )
+                    let mode_str = match self.draft.coil_mode {
+                        CoilMode::Normal => "Normal ( )",
+                        CoilMode::Negated => "Negated (/)",
+                        CoilMode::SetLatch => "Set (S)",
+                        CoilMode::ResetUnlatch => "Reset (R)",
+                        CoilMode::PositiveTransition => "Rise (P)",
+                        CoilMode::NegativeTransition => "Fall (N)",
+                    };
+                    format!("{}  |  {}", mode_str, st.short_name())
                 }
                 TypeTag::Ton | TypeTag::Tof | TypeTag::Tp => format!(
-                    "Timer: {}  |  PT = {} ms ({:.2}s)",
-                    self.draft.name,
+                    "PT = {}ms ({:.2}s)",
                     self.draft.preset_value,
                     self.draft.preset_value as f32 / 1000.0
                 ),
                 TypeTag::Ctu | TypeTag::Ctd | TypeTag::Ctud => format!(
-                    "Counter: {}  |  PV = {}  |  SV = {}",
-                    self.draft.name, self.draft.preset_value, self.draft.preset_value1
+                    "PV = {}  |  SV = {}",
+                    self.draft.preset_value, self.draft.preset_value1
                 ),
-                TypeTag::RTrig | TypeTag::FTrig => format!(
-                    "Edge Trigger: {} ({})",
-                    self.draft.name,
-                    if self.draft.element_type == TypeTag::RTrig { "R_TRIG Rising Edge" } else { "F_TRIG Falling Edge" }
-                ),
+                TypeTag::RTrig => "R_TRIG (Rising Edge)".to_string(),
+                TypeTag::FTrig => "F_TRIG (Falling Edge)".to_string(),
                 TypeTag::Compare => format!(
-                    "Condition: {} {} {}",
+                    "{} {} {}",
                     self.draft.name, self.draft.compare_op, self.draft.preset_value
                 ),
-                TypeTag::Move => format!("Assignment: {} := {}", self.draft.name, self.draft.preset_value),
+                TypeTag::Move => format!("{} := {}", self.draft.name, self.draft.preset_value),
                 TypeTag::Math => format!(
-                    "Expression: {} {}= {}",
+                    "{} {}= {}",
                     self.draft.name, self.draft.math_op, self.draft.preset_value
                 ),
-                _ => format!("Tag: {} ({})", self.draft.name, self.draft.symbol),
+                TypeTag::MbMaster => format!(
+                    "ID={} FC{:02} @{}+{} <-> {}",
+                    self.draft.mb_slave_id,
+                    self.draft.mb_function,
+                    self.draft.preset_value,
+                    self.draft.preset_value1.max(1),
+                    self.draft.target_reg
+                ),
+                TypeTag::MbSlave => format!(
+                    "ID={} @ {} bps (8N1)",
+                    self.draft.mb_slave_id.max(1),
+                    self.draft.preset_value.max(9600)
+                ),
+                TypeTag::Pwm => format!(
+                    "Duty <- {} (0..{})",
+                    self.draft.fb.in1,
+                    self.draft.preset_value.max(1)
+                ),
+                TypeTag::Select => format!(
+                    "{} := EN ? {} : {}",
+                    if self.draft.target_reg.is_empty() {
+                        &self.draft.name
+                    } else {
+                        &self.draft.target_reg
+                    },
+                    self.draft.fb.in2,
+                    self.draft.fb.in1
+                ),
+                TypeTag::InRange => format!(
+                    "{} <= {} <= {}",
+                    self.draft.fb.k[0], self.draft.fb.in1, self.draft.fb.k[1]
+                ),
+                TypeTag::Toggle => "ALT — Toggle bit on rising edge".to_string(),
+                TypeTag::IncDec => format!(
+                    "{} ({}1 on rising edge)",
+                    if self.draft.fb.mode == 0 { "INC" } else { "DEC" },
+                    if self.draft.fb.mode == 0 { "+" } else { "-" }
+                ),
+                TypeTag::Return => "RET — Conditional scan return".to_string(),
+                TypeTag::MasterRelay => format!("MC Zone: {}", self.draft.name),
+                TypeTag::Pid => format!(
+                    "PV={} SP={} -> {}",
+                    self.draft.fb.in1, self.draft.fb.in2, self.draft.target_reg
+                ),
+                TypeTag::Scale => format!(
+                    "{} [{}..{}] -> {} [{}..{}]",
+                    self.draft.fb.in1,
+                    self.draft.fb.k[0],
+                    self.draft.fb.k[1],
+                    self.draft.target_reg,
+                    self.draft.fb.k[2],
+                    self.draft.fb.k[3]
+                ),
+                TypeTag::Limit => format!(
+                    "{} in [{}..{}] -> {}",
+                    self.draft.fb.in1,
+                    self.draft.fb.k[0],
+                    self.draft.fb.k[1],
+                    self.draft.target_reg
+                ),
+                TypeTag::Bitwise => format!(
+                    "{}: {}, {} -> {}",
+                    self.draft.math_op, self.draft.fb.in1, self.draft.fb.in2, self.draft.target_reg
+                ),
+                TypeTag::UartSend => format!("UART TX: {}", self.draft.fb.in1),
+                TypeTag::UartRecv => format!("UART RX -> {}", self.draft.target_reg),
+                _ => self.draft.element_type.display_name().to_string(),
             }
         };
 
-        p.text(
-            pos2(info_x, rect.min.y + 39.0),
+        ip.text(
+            pos2(info_x, rect.min.y + 34.0),
             Align2::LEFT_CENTER,
             detail_summary,
-            FontId::monospace(11.0),
-            palette.text_primary,
-        );
-
-        p.text(
-            pos2(info_x, rect.min.y + 57.0),
-            Align2::LEFT_CENTER,
-            "Tip: Press [Enter] to Apply or [Esc] to Cancel",
-            FontId::proportional(10.5),
+            FontId::monospace(10.5),
             palette.rung_text_dim,
         );
     }
 }
 
-fn mode_select_card(
+fn section_frame(palette: ThemePalette) -> egui::Frame {
+    egui::Frame::new()
+        .fill(palette.card_bg)
+        .stroke(Stroke::new(1.0, palette.rung_badge_border))
+        .corner_radius(CornerRadius::same(6))
+        .inner_margin(egui::Margin::symmetric(12, 10))
+}
+
+fn segmented_mode_pill(
     ui: &mut Ui,
-    card_w: f32,
-    icon: VectorIcon,
-    title: &str,
-    subtitle: &str,
+    pill_w: f32,
+    icon: Option<VectorIcon>,
+    label: &str,
+    tooltip: &str,
     selected: bool,
     palette: ThemePalette,
     on_click: impl FnOnce(),
 ) {
-    let (rect, resp) = ui.allocate_exact_size(vec2(card_w, 48.0), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(pill_w, 28.0), Sense::click());
     if ui.is_rect_visible(rect) {
         let hovered = resp.hovered();
         let bg = if selected {
@@ -2197,7 +2508,7 @@ fn mode_select_card(
         } else if hovered {
             palette.rung_badge_hov_bg
         } else {
-            palette.card_bg
+            palette.canvas_bg
         };
         let border = if selected {
             palette.rung_badge_sel_border
@@ -2207,44 +2518,51 @@ fn mode_select_card(
             palette.rung_badge_border
         };
         let p = ui.painter();
-        p.rect_filled(rect, CornerRadius::same(6), bg);
+        p.rect_filled(rect, CornerRadius::same(4), bg);
         p.rect_stroke(
             rect,
-            CornerRadius::same(6),
-            Stroke::new(if selected { 1.8 } else { 1.0 }, border),
+            CornerRadius::same(4),
+            Stroke::new(if selected { 1.4 } else { 1.0 }, border),
             StrokeKind::Inside,
         );
-        let icon_r = Rect::from_center_size(pos2(rect.min.x + 24.0, rect.center().y), vec2(26.0, 26.0));
-        paint_icon(
-            p,
-            icon_r,
-            icon,
-            if selected {
-                palette.rung_text_sel
-            } else {
-                palette.accent_heading
-            },
-        );
-        p.text(
-            pos2(rect.min.x + 46.0, rect.min.y + 16.0),
-            Align2::LEFT_CENTER,
-            title,
-            FontId::proportional(12.0),
-            if selected {
-                palette.rung_text_sel
-            } else {
-                palette.text_primary
-            },
-        );
-        p.text(
-            pos2(rect.min.x + 46.0, rect.min.y + 33.0),
-            Align2::LEFT_CENTER,
-            subtitle,
-            FontId::proportional(10.0),
-            palette.rung_text_dim,
-        );
+
+        let text_col = if selected {
+            palette.rung_text_sel
+        } else {
+            palette.text_primary
+        };
+        let icon_col = if selected {
+            palette.rung_text_sel
+        } else {
+            palette.accent_heading
+        };
+
+        if let Some(ic) = icon {
+            let icon_size = 14.0;
+            let icon_r = Rect::from_center_size(
+                pos2(rect.min.x + 15.0, rect.center().y),
+                vec2(icon_size, icon_size),
+            );
+            paint_icon(p, icon_r, ic, icon_col);
+            p.text(
+                pos2(rect.min.x + 28.0, rect.center().y),
+                Align2::LEFT_CENTER,
+                label,
+                FontId::proportional(11.5),
+                text_col,
+            );
+        } else {
+            p.text(
+                rect.center(),
+                Align2::CENTER_CENTER,
+                label,
+                FontId::proportional(11.5),
+                text_col,
+            );
+        }
     }
-    if resp.clicked() {
+    let clicked = resp.on_hover_text(tooltip).clicked();
+    if clicked {
         on_click();
     }
 }

@@ -28,11 +28,11 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
 
             ui.horizontal(|ui| {
                 let prop_label = if has_elem_sel {
-                    "⚙ Property ●"
+                    "Property ●"
                 } else if has_rung_sel {
-                    "⚙ Network ●"
+                    "Network ●"
                 } else {
-                    "⚙ Property"
+                    "Property"
                 };
 
                 let is_tab0 = app.right_panel_tab == 0;
@@ -60,7 +60,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 };
                 let t1 = ui.selectable_label(
                     is_tab1,
-                    RichText::new(format!("📋 IEC ({})", tags_count))
+                    RichText::new(format!("IEC ({})", tags_count))
                         .size(11.0)
                         .strong()
                         .color(tab1_col),
@@ -79,7 +79,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 };
                 let t2 = ui.selectable_label(
                     is_tab2,
-                    RichText::new(format!("⚡ I/O ({}/{})", in_count, out_count))
+                    RichText::new(format!("I/O ({}/{})", in_count, out_count))
                         .size(11.0)
                         .strong()
                         .color(tab2_col),
@@ -96,7 +96,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 };
                 let t3 = ui.selectable_label(
                     is_tab3,
-                    RichText::new("📟 Special")
+                    RichText::new("Special")
                         .size(11.0)
                         .strong()
                         .color(tab3_col),
@@ -114,7 +114,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 };
                 let t4 = ui.selectable_label(
                     is_tab4,
-                    RichText::new(format!("📊 Watch ({})", watch_count))
+                    RichText::new(format!("Watch ({})", watch_count))
                         .size(11.0)
                         .strong()
                         .color(tab4_col),
@@ -245,6 +245,12 @@ fn render_element_inspector(
                             | TypeTag::ShiftRight
                             | TypeTag::ShiftVariable => (palette.accent_warn, "SHIFT FB"),
                             TypeTag::UartSend | TypeTag::UartRecv => (palette.accent_heading, "SERIAL FB"),
+                            TypeTag::MbMaster => (palette.accent_warn, "MODBUS RTU"),
+                            TypeTag::MbSlave => (palette.accent_ok, "MODBUS SLAVE"),
+                            TypeTag::Pwm => (palette.accent_ok, "PWM OUTPUT"),
+                            TypeTag::Select | TypeTag::InRange | TypeTag::IncDec => (func_col, "FUNCTION"),
+                            TypeTag::Toggle => (palette.accent_warn, "TOGGLE FB"),
+                            TypeTag::Return => (palette.accent_heading, "FLOW"),
                             _ => (palette.rung_text_dim, "ELEMENT"),
                         };
 
@@ -947,6 +953,136 @@ fn render_element_inspector(
                                     ui.end_row();
                                 });
                         }
+                        TypeTag::MbMaster => {
+                            ui.label(RichText::new("Modbus RTU Master (RS-485)").strong().size(11.5).color(palette.accent_heading));
+                            ui.separator();
+                            egui::Grid::new("insp_mb_master_grid")
+                                .num_columns(2)
+                                .spacing([8.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.label(RichText::new("Slave ID:").color(palette.text_primary));
+                                    ui.add(egui::DragValue::new(&mut elem.mb_slave_id).range(1..=247));
+                                    ui.end_row();
+
+                                    ui.label(RichText::new("Func Code:").color(palette.text_primary));
+                                    egui::ComboBox::from_id_salt("insp_mb_func")
+                                        .selected_text(format!("FC{:02}", elem.mb_function))
+                                        .show_ui(ui, |ui| {
+                                            for (fc, desc) in [
+                                                (1u8, "FC01 Read Coils"),
+                                                (2u8, "FC02 Read Discrete Inputs"),
+                                                (3u8, "FC03 Read Holding Regs"),
+                                                (4u8, "FC04 Read Input Regs"),
+                                                (5u8, "FC05 Write Single Coil"),
+                                                (6u8, "FC06 Write Single Reg"),
+                                                (15u8, "FC15 Write Multi Coils"),
+                                                (16u8, "FC16 Write Multi Regs"),
+                                            ] {
+                                                ui.selectable_value(&mut elem.mb_function, fc, desc);
+                                            }
+                                        });
+                                    ui.end_row();
+
+                                    ui.label(RichText::new("Start Addr:").color(palette.text_primary));
+                                    ui.add(egui::DragValue::new(&mut elem.preset_value).range(0..=65535));
+                                    ui.end_row();
+
+                                    ui.label(RichText::new("Count:").color(palette.text_primary));
+                                    ui.add(egui::DragValue::new(&mut elem.preset_value1).range(1..=125));
+                                    ui.end_row();
+
+                                    ui.label(RichText::new("Buffer Reg:").color(palette.text_primary));
+                                    ui.text_edit_singleline(&mut elem.target_reg);
+                                    ui.end_row();
+                                });
+                        }
+                        TypeTag::MbSlave => {
+                            ui.label(RichText::new("Modbus RTU Slave (RS-485)").strong().size(11.5).color(palette.accent_heading));
+                            ui.separator();
+                            egui::Grid::new("insp_mb_slave_grid")
+                                .num_columns(2)
+                                .spacing([8.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.label(RichText::new("Slave ID:").color(palette.text_primary));
+                                    ui.add(egui::DragValue::new(&mut elem.mb_slave_id).range(1..=247));
+                                    ui.end_row();
+                                    ui.label(RichText::new("Baudrate:").color(palette.text_primary));
+                                    egui::ComboBox::from_id_salt("insp_mbs_baud")
+                                        .selected_text(format!("{}", elem.preset_value))
+                                        .show_ui(ui, |ui| {
+                                            for b in [9600, 19200, 38400, 57600, 115200] {
+                                                ui.selectable_value(&mut elem.preset_value, b, format!("{} bps", b));
+                                            }
+                                        });
+                                    ui.end_row();
+                                });
+                        }
+                        TypeTag::Pwm => {
+                            ui.label(RichText::new("PWM Output (%QW)").strong().size(11.5).color(palette.accent_heading));
+                            ui.separator();
+                            egui::Grid::new("insp_pwm_grid")
+                                .num_columns(2)
+                                .spacing([8.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.label(RichText::new("Duty Input:").color(palette.text_primary));
+                                    ui.text_edit_singleline(&mut elem.fb.in1);
+                                    ui.end_row();
+                                    ui.label(RichText::new("Max Period:").color(palette.text_primary));
+                                    ui.add(egui::DragValue::new(&mut elem.preset_value).range(1..=65535));
+                                    ui.end_row();
+                                });
+                        }
+                        TypeTag::Select => {
+                            ui.label(RichText::new("SEL (Binary Selector)").strong().size(11.5).color(palette.accent_heading));
+                            ui.separator();
+                            egui::Grid::new("insp_sel_grid")
+                                .num_columns(2)
+                                .spacing([8.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.label(RichText::new("IN0 (EN=0):").color(palette.text_primary));
+                                    ui.text_edit_singleline(&mut elem.fb.in1);
+                                    ui.end_row();
+                                    ui.label(RichText::new("IN1 (EN=1):").color(palette.text_primary));
+                                    ui.text_edit_singleline(&mut elem.fb.in2);
+                                    ui.end_row();
+                                    ui.label(RichText::new("OUT Reg:").color(palette.text_primary));
+                                    ui.text_edit_singleline(&mut elem.target_reg);
+                                    ui.end_row();
+                                });
+                        }
+                        TypeTag::InRange => {
+                            ui.label(RichText::new("IN_RANGE (Window Compare)").strong().size(11.5).color(palette.accent_heading));
+                            ui.separator();
+                            egui::Grid::new("insp_inrange_grid")
+                                .num_columns(2)
+                                .spacing([8.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.label(RichText::new("Input (IN):").color(palette.text_primary));
+                                    ui.text_edit_singleline(&mut elem.fb.in1);
+                                    ui.end_row();
+                                    ui.label(RichText::new("Min:").color(palette.text_primary));
+                                    ui.add(egui::DragValue::new(&mut elem.fb.k[0]));
+                                    ui.end_row();
+                                    ui.label(RichText::new("Max:").color(palette.text_primary));
+                                    ui.add(egui::DragValue::new(&mut elem.fb.k[1]));
+                                    ui.end_row();
+                                });
+                        }
+                        TypeTag::IncDec => {
+                            ui.label(RichText::new("INC / DEC (1-Shot Step)").strong().size(11.5).color(palette.accent_heading));
+                            ui.separator();
+                            egui::Grid::new("insp_incdec_grid")
+                                .num_columns(2)
+                                .spacing([8.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.label(RichText::new("Operation:").color(palette.text_primary));
+                                    ui.horizontal(|ui| {
+                                        ui.selectable_value(&mut elem.fb.mode, 0, "INC (+1)");
+                                        ui.selectable_value(&mut elem.fb.mode, 1, "DEC (-1)");
+                                    });
+                                    ui.end_row();
+                                });
+                        }
                         _ => {
                             ui.label(RichText::new("No special parameters").small().color(palette.rung_text_dim));
                         }
@@ -1013,14 +1149,14 @@ fn render_element_inspector(
                 // 5. Action Control Bar
                 ui.horizontal_wrapped(|ui| {
                     if ui
-                        .button(RichText::new("⚙ Full Dialog (Enter)").color(palette.accent_heading).strong())
+                        .button(RichText::new("Full Dialog (Enter)").color(palette.accent_heading).strong())
                         .clicked()
                     {
                         open_full_dialog = true;
                     }
 
                     if ui
-                        .button(RichText::new("🗑 Delete (Del)").color(palette.accent_danger))
+                        .button(RichText::new("Delete (Del)").color(palette.accent_danger))
                         .clicked()
                     {
                         deleted = true;
@@ -1028,7 +1164,7 @@ fn render_element_inspector(
 
                     if sim_active && (elem.name.starts_with('X') || elem.name.starts_with('I') || elem.name.starts_with("%IX")) {
                         if ui
-                            .button(RichText::new("⚡ Toggle Input (Space)").color(palette.accent_ok))
+                            .button(RichText::new("Toggle Input (Space)").color(palette.accent_ok))
                             .clicked()
                         {
                             toggle_input_var = Some(elem.name.clone());
@@ -1073,7 +1209,7 @@ fn render_element_inspector(
 
                     ui.add_space(6.0);
                     ui.label(
-                        RichText::new("💡 Tip: Click any contact or coil inside this network to view its element properties.")
+                        RichText::new("Tip: Click any contact or coil inside this network to view its element properties.")
                             .small()
                             .color(palette.rung_text_dim),
                     );
@@ -1098,17 +1234,17 @@ fn render_element_inspector(
 
                     ui.add_space(8.0);
                     ui.label(
-                        RichText::new("💡 Click any contact, coil, or network on the canvas to inspect and edit its properties here.")
+                        RichText::new("Click any contact, coil, or network on the canvas to inspect and edit its properties here.")
                             .small()
                             .color(palette.rung_text_dim),
                     );
 
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        if ui.button("📋 Open IEC / Symbol").clicked() {
+                        if ui.button("Open IEC / Symbol").clicked() {
                             app.right_panel_tab = 1;
                         }
-                        if ui.button("⚡ Open I/O Monitor").clicked() {
+                        if ui.button("Open I/O Monitor").clicked() {
                             app.right_panel_tab = 2;
                         }
                     });
@@ -1242,11 +1378,11 @@ fn render_elements_explorer(
         ui.horizontal(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut app.elem_filter_text)
-                    .hint_text("🔍 Search IEC address or symbol...")
+                    .hint_text("Search IEC address or symbol...")
                     .desired_width(ui.available_width() - 28.0),
             );
             if !app.elem_filter_text.is_empty() {
-                if ui.small_button("✖").on_hover_text("Clear filter").clicked() {
+                if ui.small_button("×").on_hover_text("Clear filter").clicked() {
                     app.elem_filter_text.clear();
                 }
             }
@@ -1453,7 +1589,7 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette, _sim
                         ui.horizontal(|ui| {
                             ui.label(
                                 RichText::new(format!(
-                                    "⚡ ACTIVE FORCES: {} override(s)",
+                                    "ACTIVE FORCES: {} override(s)",
                                     app.doc.simulator.forced_bits.len()
                                 ))
                                 .strong()
@@ -1462,7 +1598,7 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette, _sim
                             );
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 let rel_btn = egui::Button::new(
-                                    RichText::new("✖ Release All Forces")
+                                    RichText::new("Release All Forces")
                                         .size(10.5)
                                         .strong()
                                         .color(Color32::WHITE),
@@ -1568,7 +1704,7 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette, _sim
                             // FORCE Column
                             if let Some(forced_val) = is_forced {
                                 let f_btn = egui::Button::new(
-                                    RichText::new(if forced_val { "⚡ F: 1" } else { "⚡ F: 0" })
+                                    RichText::new(if forced_val { "F: 1" } else { "F: 0" })
                                         .size(10.5)
                                         .strong()
                                         .color(Color32::WHITE),
@@ -1583,12 +1719,12 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette, _sim
                                     force_action = Some((vm_addr, None));
                                 }
                             } else {
-                                ui.menu_button("⚡", |ui| {
-                                    if ui.button("⚡ Force ON (1)").clicked() {
+                                ui.menu_button("Force", |ui| {
+                                    if ui.button("Force ON (1)").clicked() {
                                         force_action = Some((vm_addr, Some(true)));
                                         ui.close();
                                     }
-                                    if ui.button("⚡ Force OFF (0)").clicked() {
+                                    if ui.button("Force OFF (0)").clicked() {
                                         force_action = Some((vm_addr, Some(false)));
                                         ui.close();
                                     }
@@ -1690,7 +1826,7 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette, _sim
                             // FORCE Column
                             if let Some(forced_val) = is_forced {
                                 let f_btn = egui::Button::new(
-                                    RichText::new(if forced_val { "⚡ F: 1" } else { "⚡ F: 0" })
+                                    RichText::new(if forced_val { "F: 1" } else { "F: 0" })
                                         .size(10.5)
                                         .strong()
                                         .color(Color32::WHITE),
@@ -1705,12 +1841,12 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette, _sim
                                     force_action = Some((vm_addr, None));
                                 }
                             } else {
-                                ui.menu_button("⚡", |ui| {
-                                    if ui.button("⚡ Force ON (1)").clicked() {
+                                ui.menu_button("Force", |ui| {
+                                    if ui.button("Force ON (1)").clicked() {
                                         force_action = Some((vm_addr, Some(true)));
                                         ui.close();
                                     }
-                                    if ui.button("⚡ Force OFF (0)").clicked() {
+                                    if ui.button("Force OFF (0)").clicked() {
                                         force_action = Some((vm_addr, Some(false)));
                                         ui.close();
                                     }
@@ -1757,7 +1893,7 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette, _sim
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new("🎚 Analog Inputs (%IW0..%IW3)")
+                        RichText::new("Analog Inputs (%IW0..%IW3)")
                             .strong()
                             .color(palette.accent_heading),
                     );
@@ -1906,14 +2042,14 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette, _sim
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if app.online_target_hw && !is_matched {
                                 ui.label(
-                                    RichText::new("⚠ MISMATCH (PAUSED)")
+                                    RichText::new("MISMATCH (PAUSED)")
                                         .size(10.0)
                                         .strong()
                                         .color(palette.accent_warn),
                                 );
                             } else {
                                 ui.label(
-                                    RichText::new("🟢 LIVE")
+                                    RichText::new("● LIVE")
                                         .size(10.0)
                                         .strong()
                                         .color(palette.accent_ok),
@@ -1962,7 +2098,7 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette, _sim
                                 } else {
                                     palette.accent_warn
                                 },
-                                format!("M{}:{}⚡F:{}", i, u8::from(m_on), if f_val { 1 } else { 0 }),
+                                format!("M{}:{} F:{}", i, u8::from(m_on), if f_val { 1 } else { 0 }),
                             )
                         } else {
                             (
@@ -1981,16 +2117,16 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette, _sim
                         }
                         resp.context_menu(|ui| {
                             ui.label(RichText::new(format!("Marker %MX0.{} (M{})", i, i)).strong());
-                            if ui.button("⚡ Force ON (1)").clicked() {
+                            if ui.button("Force ON (1)").clicked() {
                                 force_action = Some((m_addr, Some(true)));
                                 ui.close();
                             }
-                            if ui.button("⚡ Force OFF (0)").clicked() {
+                            if ui.button("Force OFF (0)").clicked() {
                                 force_action = Some((m_addr, Some(false)));
                                 ui.close();
                             }
                             if m_forced.is_some() {
-                                if ui.button("✖ Release Force").clicked() {
+                                if ui.button("Release Force").clicked() {
                                     force_action = Some((m_addr, None));
                                     ui.close();
                                 }
@@ -2065,7 +2201,7 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette, _sim
                                     let mut edit_val = mw_val;
                                     ui.horizontal(|ui| {
                                         ui.add(egui::DragValue::new(&mut edit_val).speed(1.0));
-                                        if ui.button("✍ Write").clicked() {
+                                        if ui.button("Write").clicked() {
                                             write_word_val = Some((i as u8, edit_val));
                                             ui.close();
                                         }
@@ -2080,18 +2216,147 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette, _sim
                     });
             });
 
+            // Factory I/O (Modbus TCP/IP Client -> Factory I/O Server)
+            ui.add_space(6.0);
+            ui.group(|ui| {
+                ui.set_width(ui.available_width());
+                let is_running = app.factory_io_client.is_running();
+                let (connected, status_text, last_error, tx_count, rx_count) =
+                    if let Ok(st) = app.factory_io_client.shared().lock() {
+                        (
+                            st.connected,
+                            st.status_text.clone(),
+                            st.last_error.clone(),
+                            st.tx_count,
+                            st.rx_count,
+                        )
+                    } else {
+                        (false, "Disconnected".to_string(), None, 0, 0)
+                    };
+
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("Factory I/O (Modbus TCP)")
+                            .strong()
+                            .color(palette.accent_heading),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let (badge_text, badge_color) = if connected {
+                            ("● Connected", palette.accent_ok)
+                        } else if is_running {
+                            ("● Connecting", palette.accent_warn)
+                        } else {
+                            ("○ Offline", palette.rung_text_dim)
+                        };
+                        ui.label(RichText::new(badge_text).size(10.5).strong().color(badge_color));
+                    });
+                });
+                ui.separator();
+
+                let mut settings_dirty = false;
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Host:").size(11.0));
+                    if ui
+                        .add_enabled(
+                            !is_running,
+                            egui::TextEdit::singleline(&mut app.factory_io_host)
+                                .desired_width(105.0),
+                        )
+                        .changed()
+                    {
+                        settings_dirty = true;
+                    }
+                    ui.label(RichText::new("Port:").size(11.0));
+                    if ui
+                        .add_enabled(
+                            !is_running,
+                            egui::DragValue::new(&mut app.factory_io_port).range(1..=65535),
+                        )
+                        .changed()
+                    {
+                        settings_dirty = true;
+                    }
+                    ui.label(RichText::new("ID:").size(11.0));
+                    if ui
+                        .add_enabled(
+                            !is_running,
+                            egui::DragValue::new(&mut app.factory_io_unit_id).range(1..=247),
+                        )
+                        .changed()
+                    {
+                        settings_dirty = true;
+                    }
+                });
+                if settings_dirty {
+                    app.save_settings();
+                }
+
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    let is_hw_online = app.online_mode && app.online_target_hw;
+                    if is_running {
+                        if ui.button("Disconnect").clicked() {
+                            app.factory_io_client.stop();
+                        }
+                    } else {
+                        let btn = ui
+                            .add_enabled(!is_hw_online, egui::Button::new("Connect Factory I/O"))
+                            .on_hover_text(
+                                "Connect PC Simulator as Modbus TCP Client to Factory I/O (Modbus TCP/IP Server)",
+                            );
+                        if btn.clicked() {
+                            app.factory_io_client.start(crate::modbus_tcp::FactoryIoConfig {
+                                host: app.factory_io_host.clone(),
+                                port: app.factory_io_port,
+                                unit_id: app.factory_io_unit_id,
+                                poll_interval_ms: 20,
+                            });
+                            app.sync_factory_io_outputs();
+                        }
+                    }
+                    ui.label(
+                        RichText::new(format!("TX:{} RX:{}", tx_count, rx_count))
+                            .monospace()
+                            .size(10.0)
+                            .color(palette.rung_text_dim),
+                    );
+                });
+
+                ui.label(
+                    RichText::new(
+                        "Map: DI 0..15→X0..15 | COIL 0..15←Y0..15 | IR 0..7→%IW0..7 | HR 0..7←%MW0..7",
+                    )
+                    .monospace()
+                    .size(9.5)
+                    .color(palette.rung_text_dim),
+                );
+                if let Some(err) = last_error {
+                    ui.label(
+                        RichText::new(format!("{} — {}", status_text, err))
+                            .size(10.0)
+                            .color(palette.accent_warn),
+                    );
+                } else {
+                    ui.label(
+                        RichText::new(status_text)
+                            .size(10.0)
+                            .color(palette.rung_text_dim),
+                    );
+                }
+            });
+
             // UART Terminal Card (Simulator TX / RX)
             ui.add_space(6.0);
             ui.group(|ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new("📡 UART Terminal")
+                        RichText::new("UART Terminal")
                             .strong()
                             .color(palette.accent_heading),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("🗑 Clear").on_hover_text("Clear UART TX log").clicked() {
+                        if ui.small_button("Clear").on_hover_text("Clear UART TX log").clicked() {
                             app.uart_tx_history.clear();
                             app.doc.simulator.uart_tx_log.clear();
                         }
@@ -2219,7 +2484,7 @@ fn render_io_ports(ui: &mut Ui, app: &mut CanvasApp, palette: ThemePalette, _sim
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
-                            .button(RichText::new("📋 Copy VAR Table").small().color(palette.accent_heading))
+                            .button(RichText::new("Copy VAR Table").small().color(palette.accent_heading))
                             .on_hover_text("Copy IEC 61131-3 VAR ... END_VAR declarations to clipboard for OpenPLC / CODESYS")
                             .clicked()
                         {
@@ -2497,7 +2762,7 @@ fn render_retain_info(ui: &mut Ui, app: &CanvasApp, palette: ThemePalette) {
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                ui.label(RichText::new("🔒 RETAIN Memory (Flash)").small().strong().color(palette.accent_ok));
+                ui.label(RichText::new("RETAIN Memory (Flash)").small().strong().color(palette.accent_ok));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let live = app.online_mode || app.doc.simulator.is_active();
                     let txt = match retain_save_count(app) {
@@ -2518,8 +2783,8 @@ fn render_retain_info(ui: &mut Ui, app: &CanvasApp, palette: ThemePalette) {
             ui.label(
                 RichText::new(
                     "Values survive power loss. The firmware saves the area to Flash automatically when it \
-                     changes (at most once every 10 minutes), on STOP, and on \"💾 Save RETAIN to Flash\" \
-                     (Update to PLC window). \"🗑 Clear RETAIN\" erases it.",
+                     changes (at most once every 10 minutes), on STOP, and on \"Save RETAIN to Flash\" \
+                     (Update to PLC window). \"Clear RETAIN\" erases it.",
                 )
                 .small()
                 .color(palette.rung_text_dim),
@@ -2634,11 +2899,11 @@ fn render_special_registers(
                 ui.horizontal(|ui| {
                     ui.add(
                         egui::TextEdit::singleline(&mut app.special_reg_filter_text)
-                            .hint_text("🔍 Filter %SM, M8000, %SD, Scan...")
+                            .hint_text("Filter %SM, M8000, %SD, Scan...")
                             .desired_width(ui.available_width() - 28.0),
                     );
                     if !app.special_reg_filter_text.is_empty() {
-                        if ui.small_button("✖").on_hover_text("Clear filter").clicked() {
+                        if ui.small_button("×").on_hover_text("Clear filter").clicked() {
                             app.special_reg_filter_text.clear();
                         }
                     }
@@ -2788,7 +3053,7 @@ fn render_special_registers(
                                 }
 
                                 if ui
-                                    .small_button(format!("📋 {}", primary_addr))
+                                    .small_button(format!("{}", primary_addr))
                                     .on_hover_text(format!("Copy IEC address '{}' to clipboard", primary_addr))
                                     .clicked()
                                 {
@@ -2796,7 +3061,7 @@ fn render_special_registers(
                                 }
 
                                 if ui
-                                    .small_button(format!("📋 {}", primary_legacy))
+                                    .small_button(format!("{}", primary_legacy))
                                     .on_hover_text(format!("Copy legacy address '{}' to clipboard", primary_legacy))
                                     .clicked()
                                 {
@@ -2813,7 +3078,7 @@ fn render_special_registers(
 
             // Memory Architecture Legend Card
             egui::CollapsingHeader::new(
-                RichText::new("📖 Memory Architecture Legend")
+                RichText::new("Memory Architecture Legend")
                     .small()
                     .strong()
                     .color(palette.accent_heading),
@@ -2909,31 +3174,31 @@ fn render_watch_table(
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
-                            .small_button(RichText::new("✖ Clear").color(Color32::from_rgb(220, 80, 80)))
+                            .small_button(RichText::new("Clear").color(Color32::from_rgb(220, 80, 80)))
                             .on_hover_text("Clear all watched rows")
                             .clicked()
                         {
                             clear_all_watch = true;
                         }
 
-                        ui.menu_button("➕ Presets", |ui| {
-                            if ui.button("➕ All Digital Inputs (%IX)").clicked() {
+                        ui.menu_button("+ Presets", |ui| {
+                            if ui.button("+ All Digital Inputs (%IX)").clicked() {
                                 add_preset_kind = Some(1);
                                 ui.close();
                             }
-                            if ui.button("➕ All Digital Outputs (%QX)").clicked() {
+                            if ui.button("+ All Digital Outputs (%QX)").clicked() {
                                 add_preset_kind = Some(2);
                                 ui.close();
                             }
-                            if ui.button("➕ All Analog Inputs (%IW)").clicked() {
+                            if ui.button("+ All Analog Inputs (%IW)").clicked() {
                                 add_preset_kind = Some(3);
                                 ui.close();
                             }
-                            if ui.button("➕ Flash Retentive Variables (M64..M71, D128..D135)").clicked() {
+                            if ui.button("+ Flash Retentive Variables (M64..M71, D128..D135)").clicked() {
                                 add_preset_kind = Some(4);
                                 ui.close();
                             }
-                            if ui.button("➕ Diagnostic Registers (%SD0..%SD6)").clicked() {
+                            if ui.button("+ Diagnostic Registers (%SD0..%SD6)").clicked() {
                                 add_preset_kind = Some(5);
                                 ui.close();
                             }
@@ -2945,13 +3210,13 @@ fn render_watch_table(
 
                 // Search & Filter
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("🔍").small());
+                    ui.label(RichText::new("Find:").small());
                     ui.add(
                         egui::TextEdit::singleline(&mut app.watch_filter_text)
                             .hint_text("Filter address or symbol...")
                             .desired_width(ui.available_width() - 30.0),
                     );
-                    if !app.watch_filter_text.is_empty() && ui.small_button("✖").clicked() {
+                    if !app.watch_filter_text.is_empty() && ui.small_button("×").clicked() {
                         app.watch_filter_text.clear();
                     }
                 });
@@ -3073,13 +3338,13 @@ fn render_watch_table(
                                             app.watch_rows[idx].edit_buffer = buf.clone();
                                         }
                                         let enter_pressed = edit_res.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                                        if ui.small_button(RichText::new("✍").color(palette.accent_ok)).clicked() || enter_pressed {
+                                        if ui.small_button(RichText::new("Set").color(palette.accent_ok)).clicked() || enter_pressed {
                                             write_action = Some((idx, buf));
                                         }
                                     });
 
                                     // Col 6: Delete button
-                                    if ui.small_button(RichText::new("✖").color(palette.rung_text_dim)).clicked() {
+                                    if ui.small_button(RichText::new("×").color(palette.rung_text_dim)).clicked() {
                                         remove_idx = Some(idx);
                                     }
 
@@ -3108,7 +3373,7 @@ fn render_watch_table(
                             .hint_text("Symbol tag (optional)")
                             .desired_width(125.0),
                     );
-                    if ui.button(RichText::new("➕ Add").strong().color(palette.accent_ok)).clicked() {
+                    if ui.button(RichText::new("+ Add").strong().color(palette.accent_ok)).clicked() {
                         let a = app.watch_new_addr.trim().to_string();
                         let s = app.watch_new_symbol.trim().to_string();
                         if !a.is_empty() {

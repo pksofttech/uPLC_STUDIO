@@ -213,6 +213,12 @@ pub struct PlcSimulator {
     pub uart_tx_log: Vec<u8>,
     /// Bytes waiting to be "received" by UartRecv blocks (filled via `push_uart_rx`)
     pub uart_rx_queue: VecDeque<u8>,
+    /// Virtual Modbus RTU Slave ID for PC simulation (default 1; 0 disables)
+    pub mb_slave_id: u8,
+    /// Virtual Modbus RTU Slave word memory (OpenPLC map: 0x00..0x0F = Input Regs, 0x20..0xBF = Holding Regs)
+    pub mb_slave_words: [i32; 256],
+    /// Virtual Modbus RTU Slave bit memory (OpenPLC map: 0x00..0x1F = Discrete Inputs, 0x20..0xBF = Coils)
+    pub mb_slave_bits: [u8; 256],
 }
 
 impl Default for PlcSimulator {
@@ -299,6 +305,9 @@ impl Default for PlcSimulator {
             pid_states: HashMap::new(),
             uart_tx_log: Vec::new(),
             uart_rx_queue: VecDeque::new(),
+            mb_slave_id: 1,
+            mb_slave_words: [0; 256],
+            mb_slave_bits: [0; 256],
         }
     }
 }
@@ -778,6 +787,8 @@ impl PlcSimulator {
         self.pid_states.clear();
         self.uart_tx_log.clear();
         self.uart_rx_queue.clear();
+        self.mb_slave_words = [0; 256];
+        self.mb_slave_bits = [0; 256];
         self.scan_count = 0;
         self.simulation_time_ms = 0;
 
@@ -905,16 +916,23 @@ impl PlcSimulator {
             }
 
             let mut power_flow = true;
+            let mut early_return = false;
             self.acc_bool = true;
             for elem in &mut rung.elements {
                 power_flow = self.eval_element(elem, power_flow, scaled_dt);
                 self.acc_bool = power_flow;
                 if elem.element_type == TypeTag::Jump && power_flow {
                     jump_target = Some(elem.name.clone());
+                } else if elem.element_type == TypeTag::Return && power_flow {
+                    early_return = true;
+                    break;
                 }
             }
 
             rung.is_energized = power_flow;
+            if early_return {
+                break;
+            }
             rung_idx += 1;
         }
 
@@ -1371,7 +1389,189 @@ impl PlcSimulator {
                 elem.is_done = got;
                 got
             }
-            _ => power_in,
+            TypeTag::MbMaster => {
+                let mut done_pulse = false;
+                if self.fb_rising_edge(elem.id, power_in) {
+                    let fc = elem.mb_function;
+                    let count = (elem.preset_value1.max(1) as usize).min(125);
+                    let is_bit_fc = matches!(
+                        fc,
+                        uplc_vm::MB_FC_READ_COILS
+                            | uplc_vm::MB_FC_READ_DISCRETE_INPUTS
+                            | uplc_vm::MB_FC_WRITE_SINGLE_COIL
+                            | uplc_vm::MB_FC_WRITE_MULTIPLE_COILS
+                    );
+                    let is_write = matches!(
+                        fc,
+                        uplc_vm::MB_FC_WRITE_SINGLE_COIL
+                            | uplc_vm::MB_FC_WRITE_SINGLE_REGISTER
+                            | uplc_vm::MB_FC_WRITE_MULTIPLE_COILS
+                            | uplc_vm::MB_FC_WRITE_MULTIPLE_REGISTERS
+                    );
+
+                    let mut master_words = [0i32; 256];
+                    let mut master_bits = [0u8; 256];
+                    let base_addr = crate::bytecode::BytecodeCompiler::parse_direct_address(
+                        &elem.target_reg,
+                        !is_bit_fc,
+                    )
+                    .map(|(a, _, _)| a);
+
+                    let reg_name_at = |offset: usize| -> String {
+                        if let Some(base) = base_addr {
+                            crate::bytecode::BytecodeCompiler::format_address(
+                                base.wrapping_add(offset as u8),
+                                !is_bit_fc,
+                            )
+                            .0
+                        } else if offset == 0 {
+                            elem.target_reg.clone()
+                        } else {
+                            String::new()
+                        }
+                    };
+
+                    if is_write {
+                        for i in 0..count {
+                            let name = reg_name_at(i);
+                            if !name.is_empty() {
+                                if is_bit_fc {
+                                    master_bits[i] = u8::from(self.get_var_value(&name));
+                                } else {
+                                    master_words[i] = self.read_word(&name);
+                                }
+                            }
+                        }
+                    }
+
+                    let job = uplc_vm::ModbusMasterJob {
+                        job_id: 1,
+                        instance_id: 0,
+                        slave_id: elem.mb_slave_id,
+                        function_code: fc,
+                        reg_addr: elem.preset_value.max(0) as u16,
+                        count: count as u16,
+                        buffer_addr: 0,
+                        is_write,
+                    };
+
+                    let mut req_buf = [0u8; 256];
+                    let mut resp_buf = [0u8; 256];
+                    let status = match uplc_vm::encode_rtu_request(
+                        &job,
+                        &master_words,
+                        &master_bits,
+                        &mut req_buf,
+                    ) {
+                        Ok(req_len) => match uplc_vm::process_rtu_slave_request(
+                            self.mb_slave_id,
+                            &req_buf[..req_len],
+                            &mut self.mb_slave_words,
+                            &mut self.mb_slave_bits,
+                            &mut resp_buf,
+                        ) {
+                            Ok(0) => uplc_vm::MB_ERR_TIMEOUT,
+                            Ok(resp_len) => match uplc_vm::decode_rtu_response(
+                                &job,
+                                &resp_buf[..resp_len],
+                                &mut master_words,
+                                &mut master_bits,
+                            ) {
+                                Ok(()) => {
+                                    if !is_write {
+                                        for i in 0..count {
+                                            let name = reg_name_at(i);
+                                            if !name.is_empty() {
+                                                if is_bit_fc {
+                                                    self.set_var_value(&name, master_bits[i] != 0);
+                                                } else {
+                                                    self.write_word(&name, master_words[i]);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    done_pulse = true;
+                                    uplc_vm::MB_ERR_OK
+                                }
+                                Err(err_code) => err_code,
+                            },
+                            Err(_) => uplc_vm::MB_ERR_INVALID_PARAM,
+                        },
+                        Err(_) => uplc_vm::MB_ERR_INVALID_PARAM,
+                    };
+                    elem.current_accum = status as i32;
+                }
+                elem.is_done = done_pulse;
+                done_pulse
+            }
+            TypeTag::MbSlave => {
+                if power_in {
+                    self.mb_slave_id = elem.mb_slave_id.max(1);
+                } else {
+                    self.mb_slave_id = 0;
+                }
+                elem.is_done = power_in;
+                power_in
+            }
+            TypeTag::Pwm => {
+                let max_val = elem.preset_value.max(1);
+                let out = if power_in {
+                    self.read_word(&elem.fb.in1).clamp(0, max_val)
+                } else {
+                    0
+                };
+                self.write_word(&elem.name, out);
+                elem.current_accum = out;
+                self.acc_word = out;
+                elem.is_done = power_in;
+                power_in
+            }
+            TypeTag::Select => {
+                let in0 = self.read_word(&elem.fb.in1);
+                let in1 = self.read_word(&elem.fb.in2);
+                let out = if power_in { in1 } else { in0 };
+                let dst = if elem.target_reg.is_empty() { &elem.name } else { &elem.target_reg };
+                self.write_word(dst, out);
+                elem.current_accum = out;
+                self.acc_word = out;
+                elem.is_done = power_in;
+                power_in
+            }
+            TypeTag::InRange => {
+                let val = self.read_word(&elem.fb.in1);
+                elem.current_accum = val;
+                let ok = power_in && val >= elem.fb.k[0] && val <= elem.fb.k[1];
+                elem.is_done = ok;
+                ok
+            }
+            TypeTag::Toggle => {
+                if self.fb_rising_edge(elem.id, power_in) {
+                    let cur = self.get_var_value(&elem.name);
+                    self.set_var_value(&elem.name, !cur);
+                }
+                let state = self.get_var_value(&elem.name);
+                elem.is_done = state;
+                state
+            }
+            TypeTag::IncDec => {
+                if self.fb_rising_edge(elem.id, power_in) {
+                    let cur = self.read_word(&elem.name);
+                    let next = if elem.fb.mode != 0 {
+                        cur.saturating_sub(1)
+                    } else {
+                        cur.saturating_add(1)
+                    };
+                    self.write_word(&elem.name, next);
+                    elem.current_accum = next;
+                    self.acc_word = next;
+                }
+                elem.is_done = power_in;
+                power_in
+            }
+            TypeTag::Return => {
+                elem.is_done = power_in;
+                power_in
+            }
         };
 
         elem.is_energized = power_out;

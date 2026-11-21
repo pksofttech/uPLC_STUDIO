@@ -31,17 +31,17 @@ pub enum WorkMode {
 impl WorkMode {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Edit => "✏ Edit Mode",
-            Self::Simulator => "💻 Simulator",
-            Self::OnlineDebug => "🔌 Online PLC",
+            Self::Edit => "Edit Mode",
+            Self::Simulator => "Simulator",
+            Self::OnlineDebug => "Online PLC",
         }
     }
 
     pub fn short_label(self) -> &'static str {
         match self {
-            Self::Edit => "✏ Edit",
-            Self::Simulator => "💻 Sim",
-            Self::OnlineDebug => "🔌 Online",
+            Self::Edit => "Edit",
+            Self::Simulator => "Sim",
+            Self::OnlineDebug => "Online",
         }
     }
 }
@@ -153,6 +153,24 @@ pub struct AppSettings {
     pub rp2040_rs485_de_re_pin: u8,
     #[serde(default = "default_rp2040_rs485_config")]
     pub rp2040_rs485_config: u8,
+    #[serde(default = "default_factory_io_host")]
+    pub factory_io_host: String,
+    #[serde(default = "default_factory_io_port")]
+    pub factory_io_port: u16,
+    #[serde(default = "default_factory_io_unit_id")]
+    pub factory_io_unit_id: u8,
+}
+
+fn default_factory_io_host() -> String {
+    crate::modbus_tcp::DEFAULT_FACTORY_IO_HOST.to_string()
+}
+
+fn default_factory_io_port() -> u16 {
+    crate::modbus_tcp::DEFAULT_FACTORY_IO_PORT
+}
+
+fn default_factory_io_unit_id() -> u8 {
+    crate::modbus_tcp::DEFAULT_FACTORY_IO_UNIT_ID
 }
 
 fn default_rp2040_input_pins() -> [u8; 8] {
@@ -238,6 +256,9 @@ impl Default for AppSettings {
             rp2040_io_flags: default_rp2040_io_flags(),
             rp2040_rs485_de_re_pin: default_rp2040_rs485_de_re_pin(),
             rp2040_rs485_config: default_rp2040_rs485_config(),
+            factory_io_host: default_factory_io_host(),
+            factory_io_port: default_factory_io_port(),
+            factory_io_unit_id: default_factory_io_unit_id(),
         }
     }
 }
@@ -367,6 +388,7 @@ pub struct CanvasApp {
     pub show_about: bool,
     pub show_code_export: bool,
     pub show_io_config: bool,
+    pub settings_tab: u8,
     pub show_update_plc: bool,
     pub update_plc_tab: u8,
     pub update_plc_status: String,
@@ -410,6 +432,10 @@ pub struct CanvasApp {
     pub updater: crate::updater::AppUpdater,
     pub firmware_flasher: crate::firmware_flasher::FirmwareFlasher,
     pub hw_io_config: my_canvas_core::HardwareIoConfig,
+    pub factory_io_host: String,
+    pub factory_io_port: u16,
+    pub factory_io_unit_id: u8,
+    pub factory_io_client: crate::modbus_tcp::ModbusTcpClientHandle,
 }
 
 impl Default for CanvasApp {
@@ -461,6 +487,7 @@ impl Default for CanvasApp {
             show_about: false,
             show_code_export: false,
             show_io_config: false,
+            settings_tab: 0,
             show_update_plc: false,
             update_plc_tab: 0,
             update_plc_status: String::new(),
@@ -517,6 +544,18 @@ impl Default for CanvasApp {
             ),
             firmware_flasher: crate::firmware_flasher::FirmwareFlasher::default(),
             hw_io_config,
+            factory_io_host: if settings.factory_io_host.trim().is_empty() {
+                default_factory_io_host()
+            } else {
+                settings.factory_io_host
+            },
+            factory_io_port: if settings.factory_io_port == 0 {
+                default_factory_io_port()
+            } else {
+                settings.factory_io_port
+            },
+            factory_io_unit_id: settings.factory_io_unit_id.max(1),
+            factory_io_client: crate::modbus_tcp::ModbusTcpClientHandle::new(),
         };
         app.sync_doc_io_mappings_from_hw_config();
         app
@@ -665,13 +704,13 @@ impl CanvasApp {
                     self.is_example_template = false;
                     self.update_plc_is_error = false;
                     self.update_plc_status = format!(
-                        "✔ Successfully uploaded & decompiled program from PLC ({} Networks)",
+                        "Successfully uploaded & decompiled program from PLC ({} Networks)",
                         n_rungs
                     );
                 }
                 Err(e) => {
                     self.update_plc_is_error = true;
-                    self.update_plc_status = format!("✖ Upload from PLC failed: {}", e);
+                    self.update_plc_status = format!("Upload from PLC failed: {}", e);
                 }
             }
             return;
@@ -686,7 +725,7 @@ impl CanvasApp {
         {
             self.update_plc_is_error = true;
             self.update_plc_status = format!(
-                "✖ Program too large for {}: {} instructions (limit {}). Simplify the ladder or select another target.",
+                "Program too large for {}: {} instructions (limit {}). Simplify the ladder or select another target.",
                 target.mcu_name(),
                 bc.instructions.len(),
                 target.max_instructions()
@@ -701,7 +740,7 @@ impl CanvasApp {
         {
             self.update_plc_is_error = true;
             self.update_plc_status = format!(
-                "✖ {} uses a fixed pin map compiled into the firmware — runtime I/O config (0x0B/0x0C) is not supported",
+                "{} uses a fixed pin map compiled into the firmware — runtime I/O config (0x0B/0x0C) is not supported",
                 target.mcu_name()
             );
             return;
@@ -717,36 +756,36 @@ impl CanvasApp {
                         match cmd {
                             my_canvas_core::PlcSerialCommand::RunStopControl => {
                                 self.plc_remote_running = true;
-                                self.update_plc_status = "▶ PLC RUN Command sent to hardware".to_string();
+                                self.update_plc_status = "PLC RUN Command sent to hardware".to_string();
                             }
                             my_canvas_core::PlcSerialCommand::StopPlc => {
                                 self.plc_remote_running = false;
-                                self.update_plc_status = "⏹ PLC STOP Command sent to hardware".to_string();
+                                self.update_plc_status = "PLC STOP Command sent to hardware".to_string();
                             }
                             my_canvas_core::PlcSerialCommand::StepPlc => {
                                 self.plc_remote_running = false;
-                                self.update_plc_status = "⏭ PLC STEP Command sent to hardware".to_string();
+                                self.update_plc_status = "PLC STEP Command sent to hardware".to_string();
                             }
                             my_canvas_core::PlcSerialCommand::ForceIo => {
-                                self.update_plc_status = "⚡ Force I/O Command sent to hardware".to_string();
+                                self.update_plc_status = "Force I/O Command sent to hardware".to_string();
                             }
                             my_canvas_core::PlcSerialCommand::WriteValue => {
-                                self.update_plc_status = "✍ Write Value Command sent to hardware".to_string();
+                                self.update_plc_status = "Write Value Command sent to hardware".to_string();
                             }
                             my_canvas_core::PlcSerialCommand::PersistSave => {
-                                self.update_plc_status = "💾 Save RETAIN to Flash (0x08) sent to hardware".to_string();
+                                self.update_plc_status = "Save RETAIN to Flash (0x08) sent to hardware".to_string();
                             }
                             my_canvas_core::PlcSerialCommand::PersistClear => {
-                                self.update_plc_status = "🗑 Clear RETAIN (0x09) sent to hardware".to_string();
+                                self.update_plc_status = "Clear RETAIN (0x09) sent to hardware".to_string();
                             }
                             my_canvas_core::PlcSerialCommand::EnterBootsel => {
                                 self.plc_remote_running = false;
                                 self.stop_online_monitoring();
                                 self.update_plc_status =
                                     if target.supports_usb_bootsel() {
-                                        "⚡ Rebooting RP2040 into USB BOOTSEL (RPI-RP2) mode...".to_string()
+                                        "Rebooting RP2040 into USB BOOTSEL (RPI-RP2) mode...".to_string()
                                     } else {
-                                        format!("⚡ Reboot (0x0A) sent — {}", target.bootsel_status())
+                                        format!("Reboot (0x0A) sent — {}", target.bootsel_status())
                                     };
                             }
                             _ => {}
@@ -794,7 +833,7 @@ impl CanvasApp {
                             self.plc_remote_running = true;
                             let (_, prog_crc) = bc.program_signature();
                             self.update_plc_status = format!(
-                                "✔ Uploaded {} Bytes ({} / {} inst, CRC16=0x{:04X}) to {} {} @ {} baud — Burned to {} & PLC RUNNING",
+                                "Uploaded {} Bytes ({} / {} inst, CRC16=0x{:04X}) to {} {} @ {} baud — Burned to {} & PLC RUNNING",
                                 packet.len(),
                                 bc.instructions.len(),
                                 target.max_instructions(),
@@ -808,60 +847,60 @@ impl CanvasApp {
                         my_canvas_core::PlcSerialCommand::RunStopControl => {
                             self.plc_remote_running = true;
                             self.update_plc_status = format!(
-                                "▶ PLC RUN Command (0x02, payload=0x01) sent to {} — Scan Cycle Active",
+                                "PLC RUN Command (0x02, payload=0x01) sent to {} — Scan Cycle Active",
                                 port_path
                             );
                         }
                         my_canvas_core::PlcSerialCommand::StopPlc => {
                             self.plc_remote_running = false;
                             self.update_plc_status = format!(
-                                "⏹ PLC STOP Command (0x02, payload=0x00) sent to {} — All Outputs Safely Turned OFF",
+                                "PLC STOP Command (0x02, payload=0x00) sent to {} — All Outputs Safely Turned OFF",
                                 port_path
                             );
                         }
                         my_canvas_core::PlcSerialCommand::StepPlc => {
                             self.plc_remote_running = false;
                             self.update_plc_status = format!(
-                                "⏭ PLC STEP Command (0x05) sent to {} — Single Scan Executed",
+                                "PLC STEP Command (0x05) sent to {} — Single Scan Executed",
                                 port_path
                             );
                         }
                         my_canvas_core::PlcSerialCommand::ForceIo => {
-                            self.update_plc_status = format!("⚡ Force I/O Command sent to {}", port_path);
+                            self.update_plc_status = format!("Force I/O Command sent to {}", port_path);
                         }
                         my_canvas_core::PlcSerialCommand::WriteValue => {
-                            self.update_plc_status = format!("✍ Write Value Command sent to {}", port_path);
+                            self.update_plc_status = format!("Write Value Command sent to {}", port_path);
                         }
                         my_canvas_core::PlcSerialCommand::MonitorStatus => {
                             self.update_plc_status = format!(
-                                "✔ Status Monitor Request (0x03) sent to {}",
+                                "Status Monitor Request (0x03) sent to {}",
                                 port_path
                             );
                         }
                         my_canvas_core::PlcSerialCommand::UploadProgram => {}
                         my_canvas_core::PlcSerialCommand::PersistSave => {
-                            self.update_plc_status = format!("💾 Save RETAIN to Flash (0x08) sent to {}", port_path);
+                            self.update_plc_status = format!("Save RETAIN to Flash (0x08) sent to {}", port_path);
                         }
                         my_canvas_core::PlcSerialCommand::PersistClear => {
-                            self.update_plc_status = format!("🗑 Clear RETAIN (0x09) sent to {}", port_path);
+                            self.update_plc_status = format!("Clear RETAIN (0x09) sent to {}", port_path);
                         }
                         my_canvas_core::PlcSerialCommand::EnterBootsel => {
                             self.plc_remote_running = false;
                             self.update_plc_status = format!(
-                                "⚡ Reboot to BOOTSEL (0x0A) sent to {} — {}",
+                                "Reboot to BOOTSEL (0x0A) sent to {} — {}",
                                 port_path,
                                 target.bootsel_status()
                             );
                         }
                         my_canvas_core::PlcSerialCommand::GetIoConfig => {
                             self.update_plc_status = format!(
-                                "📥 Read Hardware I/O Pin Mapping (0x0B) sent to {}",
+                                "Read Hardware I/O Pin Mapping (0x0B) sent to {}",
                                 port_path
                             );
                         }
                         my_canvas_core::PlcSerialCommand::SetIoConfig => {
                             self.update_plc_status = format!(
-                                "✔ Applied & saved Hardware I/O Pin Mapping (0x0C) to {} Flash (Sector 509 / 0x1FD000) without rebuilding firmware!",
+                                "Applied & saved Hardware I/O Pin Mapping (0x0C) to {} Flash (Sector 509 / 0x1FD000) without rebuilding firmware!",
                                 port_path
                             );
                         }
@@ -870,7 +909,7 @@ impl CanvasApp {
                 Err(e) => {
                     self.update_plc_is_error = true;
                     self.update_plc_status = format!(
-                        "✖ Failed writing to {}: {} (Packet ready: {} Bytes)",
+                        "Failed writing to {}: {} (Packet ready: {} Bytes)",
                         port_path,
                         e,
                         packet.len()
@@ -880,7 +919,7 @@ impl CanvasApp {
             Err(e) => {
                 self.update_plc_is_error = true;
                 self.update_plc_status = format!(
-                    "⚠ Serial port '{}' not connected ({}) — Bytecode compiled ({} instructions, {} Bytes packet ready)",
+                    "Serial port '{}' not connected ({}) — Bytecode compiled ({} instructions, {} Bytes packet ready)",
                     port_path,
                     e,
                     bc.instructions.len(),
@@ -923,6 +962,9 @@ impl CanvasApp {
             rp2040_io_flags: self.hw_io_config.flags,
             rp2040_rs485_de_re_pin: self.hw_io_config.rs485_de_re_pin,
             rp2040_rs485_config: self.hw_io_config.rs485_config,
+            factory_io_host: self.factory_io_host.clone(),
+            factory_io_port: self.factory_io_port,
+            factory_io_unit_id: self.factory_io_unit_id,
         }
     }
 
@@ -1084,7 +1126,7 @@ impl CanvasApp {
                 self.save_settings();
                 self.update_plc_is_error = false;
                 self.update_plc_status = format!(
-                    "✔ Loaded Hardware I/O Pin Mapping from PLC ({}) — Status LED: {}",
+                    "Loaded Hardware I/O Pin Mapping from PLC ({}) — Status LED: {}",
                     port_path,
                     Self::format_rp2040_pin(cfg.status_led_pin)
                 );
@@ -1092,7 +1134,7 @@ impl CanvasApp {
             }
             Err(e) => {
                 self.update_plc_is_error = true;
-                self.update_plc_status = format!("✖ Read I/O Config from PLC failed: {}", e);
+                self.update_plc_status = format!("Read I/O Config from PLC failed: {}", e);
                 Err(e)
             }
         }
@@ -1117,7 +1159,7 @@ impl CanvasApp {
             ui.spacing_mut().item_spacing = egui::vec2(8.0, 6.0);
             ui.horizontal_wrapped(|ui| {
                 ui.label(
-                    RichText::new(format!("🔧 {} Fixed I/O Pin Map", target.mcu_name()))
+                    RichText::new(format!("{} Fixed I/O Pin Map", target.mcu_name()))
                         .color(palette.accent_heading)
                         .strong()
                         .size(12.5),
@@ -1193,7 +1235,7 @@ impl CanvasApp {
                     }
                 });
             ui.label(
-                RichText::new("⚠ Do not wire the USB-TTL DTR/RTS lines to NRST — uPLC Studio asserts DTR when opening the port.")
+                RichText::new("Note: Do not wire the USB-TTL DTR/RTS lines to NRST — uPLC Studio asserts DTR when opening the port.")
                     .size(10.5)
                     .color(palette.symbol_subtext),
             );
@@ -1229,7 +1271,7 @@ impl CanvasApp {
             // Header & Action Toolbar Row
             ui.horizontal_wrapped(|ui| {
                 ui.label(
-                    RichText::new("🔧 RP2040 Runtime GPIO & RS-485 Pin Mapping")
+                    RichText::new("RP2040 GPIO & RS-485 Pin Mapping")
                         .color(palette.accent_heading)
                         .strong()
                         .size(12.5),
@@ -1237,7 +1279,7 @@ impl CanvasApp {
                 ui.separator();
 
                 let read_btn = egui::Button::new(
-                    RichText::new("📥 Read from PLC (0x0B)")
+                    RichText::new("Read from PLC")
                         .strong()
                         .size(11.0),
                 )
@@ -1251,7 +1293,7 @@ impl CanvasApp {
                 }
 
                 let apply_btn = egui::Button::new(
-                    RichText::new("⚡ Apply & Save to PLC Flash (0x0C)")
+                    RichText::new("Apply to PLC")
                         .strong()
                         .size(11.0)
                         .color(egui::Color32::WHITE),
@@ -1260,14 +1302,14 @@ impl CanvasApp {
                 .corner_radius(egui::CornerRadius::same(5));
                 if ui
                     .add(apply_btn)
-                    .on_hover_text("Immediately reconfigure RP2040 GPIO & RS-485 pins at runtime and save to Flash Sector 509 (0x1FD000) without rebuilding firmware!")
+                    .on_hover_text("Immediately reconfigure RP2040 GPIO & RS-485 pins at runtime and save to Flash Sector 509 (0x1FD000) via USB-CDC (CMD 0x0C) without rebuilding firmware")
                     .clicked()
                 {
                     self.apply_io_config_to_plc();
                 }
 
                 if ui
-                    .button(RichText::new("↺ Reset Default").size(11.0))
+                    .button(RichText::new("Reset Default").size(11.0))
                     .on_hover_text("Restore factory default RP2040 GPIO & RS-485 mapping (X0..X3 = GP10..GP13, Y0..Y5 = GP15,14,7,6,2,3, RS-485 = GP8/GP9 @ 9600, LED = GP25)")
                     .clicked()
                 {
@@ -1397,7 +1439,7 @@ impl CanvasApp {
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(10.0, 6.0);
                 ui.label(
-                    RichText::new("📡 RS-485 (Modbus RTU):")
+                    RichText::new("RS-485 (Modbus RTU)")
                         .strong()
                         .color(palette.accent_heading),
                 );
@@ -2161,7 +2203,7 @@ impl CanvasApp {
         let mut do_discard = false;
         let mut do_cancel = false;
 
-        egui::Window::new("⚠ Unsaved Changes")
+        egui::Window::new("Unsaved Changes")
             .order(egui::Order::Foreground)
             .collapsible(false)
             .resizable(false)
@@ -2170,7 +2212,7 @@ impl CanvasApp {
             .show(ctx, |ui| {
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("⚠").size(28.0).color(palette.accent_warn));
+                    ui.label(RichText::new("!").size(28.0).strong().color(palette.accent_warn));
                     ui.add_space(8.0);
                     ui.vertical(|ui| {
                         let prompt_title = if is_demo {
@@ -2220,9 +2262,9 @@ impl CanvasApp {
                         }
 
                         let save_text = if is_demo {
-                            "💾 Save As..."
+                            "Save As..."
                         } else {
-                            "💾 Save"
+                            "Save"
                         };
                         let save_btn = egui::Button::new(
                             RichText::new(save_text).color(Color32::WHITE)
@@ -2260,7 +2302,7 @@ impl CanvasApp {
         let mut do_continue = false;
         let mut do_cancel = false;
 
-        egui::Window::new("⚠ Live Hardware Connection Safety Warning")
+        egui::Window::new("Live Hardware Connection Safety Warning")
             .order(egui::Order::Foreground)
             .collapsible(false)
             .resizable(false)
@@ -2269,7 +2311,7 @@ impl CanvasApp {
             .show(ctx, |ui| {
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("⚡").size(32.0).color(palette.accent_warn));
+                    ui.label(RichText::new("!").size(32.0).strong().color(palette.accent_warn));
                     ui.add_space(8.0);
                     ui.vertical(|ui| {
                         ui.label(
@@ -2319,7 +2361,7 @@ impl CanvasApp {
                         }
 
                         let proceed_btn = egui::Button::new(
-                            RichText::new("🔌 Proceed to Online Mode")
+                            RichText::new("Proceed to Online Mode")
                                 .strong()
                                 .color(Color32::WHITE),
                         )
@@ -2365,7 +2407,7 @@ impl CanvasApp {
             let configured_port = self.com_port.clone();
 
             if port_path.is_empty() {
-                self.online_status_text = format!("⚠ Waiting for port '{}'...", self.com_port_display());
+                self.online_status_text = format!("Waiting for port '{}'...", self.com_port_display());
             }
 
             let baud = serial::parse_baud(&self.baud_rate);
@@ -2667,7 +2709,48 @@ impl CanvasApp {
                     self.right_panel_tab = 2;
                 }
             }
+            self.sync_factory_io_inputs();
             self.doc.single_step_simulation(self.doc.simulator.cycle_time_ms);
+            self.sync_factory_io_outputs();
+        }
+    }
+
+    /// Pull latest Factory I/O sensor states (`X0..X15`, `%IW0..%IW7`) into `PlcSimulator`.
+    pub fn sync_factory_io_inputs(&mut self) {
+        if !self.factory_io_client.is_running() {
+            return;
+        }
+        let snapshot = if let Ok(st) = self.factory_io_client.shared().lock() {
+            if st.connected {
+                Some((st.discrete_inputs, st.input_regs))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some((di, ir)) = snapshot {
+            for (i, &val) in di.iter().enumerate() {
+                self.doc.simulator.set_var_value(&format!("X{}", i), val);
+            }
+            for (i, &val) in ir.iter().enumerate() {
+                self.doc.simulator.write_word(&format!("%IW{}", i), val);
+            }
+        }
+    }
+
+    /// Push latest `PlcSimulator` actuator states (`Y0..Y15`, `%MW0..%MW7`) to Factory I/O.
+    pub fn sync_factory_io_outputs(&self) {
+        if !self.factory_io_client.is_running() {
+            return;
+        }
+        if let Ok(mut st) = self.factory_io_client.shared().lock() {
+            for i in 0..crate::modbus_tcp::FACTORY_IO_DO_COUNT {
+                st.coils[i] = self.doc.simulator.get_var_value(&format!("Y{}", i));
+            }
+            for i in 0..crate::modbus_tcp::FACTORY_IO_AO_COUNT {
+                st.holding_regs[i] = self.doc.simulator.read_word(&format!("%MW{}", i));
+            }
         }
     }
 
@@ -2680,6 +2763,7 @@ impl CanvasApp {
             self.transmit_bytecode_to_plc(my_canvas_core::PlcSerialCommand::StopPlc);
         } else {
             self.doc.stop_simulation();
+            self.sync_factory_io_outputs();
         }
     }
 
@@ -2943,10 +3027,16 @@ impl eframe::App for CanvasApp {
             let cycle_ms = self.doc.simulator.cycle_time_ms.max(5) as u128;
             if elapsed.as_millis() >= cycle_ms {
                 let dt = elapsed.as_millis().min(100) as u32;
+                self.sync_factory_io_inputs();
                 self.doc.step_simulation(dt);
+                self.sync_factory_io_outputs();
                 self.last_sim_tick = now;
             }
             ui.ctx().request_repaint();
+        } else if self.factory_io_client.is_running() && !(self.online_mode && self.online_target_hw) {
+            self.sync_factory_io_inputs();
+            self.sync_factory_io_outputs();
+            ui.ctx().request_repaint_after(Duration::from_millis(50));
         }
 
         // Drain any newly transmitted bytes from UartSend blocks into the persistent UI history buffer
@@ -3008,9 +3098,9 @@ impl eframe::App for CanvasApp {
                     {
                         let snap = self.latest_snapshot.as_ref().unwrap();
                         let match_tag = if matched {
-                            format!("✔ MATCH (0x{:04X})", plc_crc)
+                            format!("MATCH (0x{:04X})", plc_crc)
                         } else {
-                            format!("⚠ MISMATCH (IDE:0x{:04X}≠PLC:0x{:04X})", ide_crc, plc_crc)
+                            format!("MISMATCH (IDE:0x{:04X}≠PLC:0x{:04X})", ide_crc, plc_crc)
                         };
                         self.online_status_text = format!(
                             "Online (HW) | Scan #{} | {} | {}",
@@ -3024,7 +3114,7 @@ impl eframe::App for CanvasApp {
                     self.doc.set_online_mode(false);
                     self.doc.clear_conduction();
                     self.online_status_text = format!(
-                        "⚠ Waiting for {} ({}) - Auto-reconnecting...",
+                        "Waiting for {} ({}) - Auto-reconnecting...",
                         self.plc_target().mcu_name(),
                         self.com_port_display()
                     );
@@ -3032,7 +3122,7 @@ impl eframe::App for CanvasApp {
             } else {
                 let snap = self.doc.capture_status_snapshot();
                 self.online_status_text = format!(
-                    "Online (Sim) | Scan #{} | {} | ✔ MATCH (0x{:04X})",
+                    "Online (Sim) | Scan #{} | {} | MATCH (0x{:04X})",
                     snap.scan_count,
                     if snap.running { "RUN" } else { "STOP" },
                     snap.prog_crc
@@ -3212,9 +3302,9 @@ impl eframe::App for CanvasApp {
         // 4. Left Panel: Ladder Tools & Components
         Panel::left("left_tools_panel")
             .resizable(!modal_open)
-            .default_size(200.0)
-            .min_size(175.0)
-            .max_size(270.0)
+            .default_size(240.0)
+            .min_size(200.0)
+            .max_size(340.0)
             .show(ui, |ui| {
                 if modal_open {
                     ui.disable();
@@ -3264,7 +3354,7 @@ impl eframe::App for CanvasApp {
                                 .map_or(self.doc.simulator.acc_word, |s| s.acc_word);
                             ui.label(
                                 RichText::new(format!(
-                                    "⚡ LIVE ACC: Bit={} | Word={}",
+                                    "LIVE ACC: Bit={} | Word={}",
                                     if acc_b { "1" } else { "0" },
                                     acc_w
                                 ))
@@ -3351,10 +3441,10 @@ impl eframe::App for CanvasApp {
                     );
                     let sim_state_label = match self.doc.simulator.state {
                         SimState::Running => ("● SIMULATOR RUNNING", palette.accent_ok),
-                        SimState::Step => ("⏭ SIMULATOR STEP", palette.accent_warn),
-                        SimState::Stopped => ("⏸ SIMULATOR PAUSED", palette.accent_heading),
+                        SimState::Step => ("SIMULATOR STEP", palette.accent_warn),
+                        SimState::Stopped => ("SIMULATOR PAUSED", palette.accent_heading),
                     };
-                    egui::Area::new(egui::Id::new("simulator_mode_top_banner"))
+                    egui::Area::new(egui::Id::unique("simulator_mode_top_banner"))
                         .order(egui::Order::Foreground)
                         .fixed_pos(banner_pos)
                         .interactable(!modal_open)
@@ -3374,14 +3464,14 @@ impl eframe::App for CanvasApp {
                                         );
                                         ui.separator();
                                         ui.label(
-                                            RichText::new("💡 Click any Contact on canvas to toggle ON/OFF • Right-click to Force")
+                                            RichText::new("Click any Contact on canvas to toggle ON/OFF • Right-click to Force")
                                                 .color(palette.text_primary)
                                                 .size(11.0),
                                         );
                                         ui.add_space(6.0);
                                         if ui
                                             .small_button(
-                                                RichText::new("✏ Back to Edit")
+                                                RichText::new("Back to Edit")
                                                     .strong()
                                                     .color(palette.accent_heading),
                                             )
@@ -3439,14 +3529,14 @@ impl eframe::App for CanvasApp {
                     let target_str = if is_hw { format!("{} MCU", self.plc_target().mcu_name()) } else { "Simulator".to_string() };
                     let (title_str, run_str, run_color) = if is_hw && !is_hw_conn {
                         (
-                            format!("⚠ RECONNECTING: {}", target_str),
+                            format!("RECONNECTING: {}", target_str),
                             "WAITING USB",
                             palette.accent_warn,
                         )
                     } else {
                         (
-                            format!("🟢 ONLINE: {}", target_str),
-                            if is_run { "● RUN" } else { "⏹ STOP" },
+                            format!("● ONLINE: {}", target_str),
+                            if is_run { "● RUN" } else { "■ STOP" },
                             if is_run { palette.accent_ok } else { palette.accent_danger },
                         )
                     };
@@ -3484,15 +3574,15 @@ impl eframe::App for CanvasApp {
 
                     let (sig_text, sig_color) = match match_info {
                         Some((true, ide_len, ide_crc, _, _)) => (
-                            format!("✔ CODE MATCH: {} Inst (CRC16 0x{:04X})", ide_len / 4, ide_crc),
+                            format!("CODE MATCH: {} Inst (CRC16 0x{:04X})", ide_len / 4, ide_crc),
                             palette.accent_ok,
                         ),
                         Some((false, _ide_len, ide_crc, _plc_len, plc_crc)) => (
-                            format!("⚠ MISMATCH! IDE:0x{:04X} ≠ PLC:0x{:04X}", ide_crc, plc_crc),
+                            format!("MISMATCH! IDE:0x{:04X} ≠ PLC:0x{:04X}", ide_crc, plc_crc),
                             palette.accent_warn,
                         ),
                         None => (
-                            "⏳ Verifying PLC Bytecode CRC16...".to_string(),
+                            "Verifying PLC Bytecode CRC16...".to_string(),
                             palette.rung_text_dim,
                         ),
                     };
@@ -3511,7 +3601,7 @@ impl eframe::App for CanvasApp {
                             max_rect.min.y + 14.0,
                         );
 
-                        egui::Area::new(egui::Id::new("online_mismatch_banner"))
+                        egui::Area::new(egui::Id::unique("online_mismatch_banner"))
                             .order(egui::Order::Foreground)
                             .fixed_pos(banner_pos)
                             .interactable(!modal_open)
@@ -3528,14 +3618,14 @@ impl eframe::App for CanvasApp {
                                     .show(ui, |ui| {
                                         ui.horizontal(|ui| {
                                             ui.label(
-                                                RichText::new("⚠ CODE MISMATCH (IDE ≠ PLC)")
+                                                RichText::new("CODE MISMATCH (IDE ≠ PLC)")
                                                     .color(palette.accent_warn)
                                                     .strong()
                                                     .size(11.5),
                                             );
                                             ui.add_space(6.0);
                                             let sync_btn = egui::Button::new(
-                                                RichText::new("⚡ Sync / Download Now")
+                                                RichText::new("Sync / Download Now")
                                                     .size(11.0)
                                                     .strong()
                                                     .color(egui::Color32::WHITE),
@@ -3550,7 +3640,7 @@ impl eframe::App for CanvasApp {
                                                 banner_cmd = Some(my_canvas_core::PlcSerialCommand::DownloadProgram);
                                             }
                                             let read_btn = egui::Button::new(
-                                                RichText::new("📥 Read from PLC")
+                                                RichText::new("Read from PLC")
                                                     .size(11.0)
                                                     .strong()
                                                     .color(egui::Color32::WHITE),
@@ -3566,7 +3656,7 @@ impl eframe::App for CanvasApp {
                                             }
                                             if ui
                                                 .button(
-                                                    RichText::new("⚙ Update Dialog...")
+                                                    RichText::new("Update Dialog...")
                                                         .size(11.0)
                                                         .color(palette.text_primary),
                                                 )
@@ -3577,7 +3667,7 @@ impl eframe::App for CanvasApp {
                                             }
                                             if ui
                                                 .small_button(
-                                                    RichText::new("✏ Edit")
+                                                    RichText::new("Edit")
                                                         .strong()
                                                         .color(palette.accent_heading),
                                                 )
@@ -3595,7 +3685,7 @@ impl eframe::App for CanvasApp {
                             (max_rect.center().x - 290.0).max(max_rect.min.x + 12.0),
                             max_rect.min.y + 10.0,
                         );
-                        egui::Area::new(egui::Id::new("online_hw_guidance_banner"))
+                        egui::Area::new(egui::Id::unique("online_hw_guidance_banner"))
                             .order(egui::Order::Foreground)
                             .fixed_pos(banner_pos)
                             .interactable(!modal_open)
@@ -3612,21 +3702,21 @@ impl eframe::App for CanvasApp {
                                         ui.horizontal(|ui| {
                                             if is_hw_conn {
                                                 ui.label(
-                                                    RichText::new(format!("🔌 ONLINE DEBUG ({})", self.plc_target().mcu_name()))
+                                                    RichText::new(format!("ONLINE DEBUG ({})", self.plc_target().mcu_name()))
                                                         .color(palette.accent_ok)
                                                         .strong()
                                                         .size(11.0),
                                                 );
                                                 ui.separator();
                                                 ui.label(
-                                                    RichText::new("💡 Click any element on canvas to Force ON/OFF on Hardware")
+                                                    RichText::new("Click any element on canvas to Force ON/OFF on Hardware")
                                                         .color(palette.text_primary)
                                                         .size(11.0),
                                                 );
                                             } else {
                                                 ui.label(
                                                     RichText::new(format!(
-                                                        "⚠ WAITING FOR {} ({})...",
+                                                        "WAITING FOR {} ({})...",
                                                         self.plc_target().mcu_name(),
                                                         self.com_port_display()
                                                     ))
@@ -3635,7 +3725,7 @@ impl eframe::App for CanvasApp {
                                                     .size(11.0),
                                                 );
                                                 if ui
-                                                    .small_button(RichText::new("⚙ Port Settings").size(10.5))
+                                                    .small_button(RichText::new("Port Settings").size(10.5))
                                                     .clicked()
                                                 {
                                                     open_upload_dialog = true;
@@ -3644,7 +3734,7 @@ impl eframe::App for CanvasApp {
                                             ui.add_space(6.0);
                                             if ui
                                                 .small_button(
-                                                    RichText::new("✏ Exit Online")
+                                                    RichText::new("Exit Online")
                                                         .strong()
                                                         .color(palette.accent_heading),
                                                 )
@@ -3667,7 +3757,7 @@ impl eframe::App for CanvasApp {
                                     let y_off = if !is_matched { 52.0 } else { 14.0 };
                                     let fw_banner_pos =
                                         egui::pos2(max_rect.center().x - 270.0, max_rect.min.y + y_off);
-                                    egui::Area::new(egui::Id::new("online_fw_feature_banner"))
+                                    egui::Area::new(egui::Id::unique("online_fw_feature_banner"))
                                         .order(egui::Order::Foreground)
                                         .fixed_pos(fw_banner_pos)
                                         .interactable(false)
@@ -3687,7 +3777,7 @@ impl eframe::App for CanvasApp {
                                                 .show(ui, |ui| {
                                                     ui.label(
                                                         RichText::new(format!(
-                                                            "⚠ FIRMWARE FEATURE LEVEL v{} (< v2): Program uses Phase 2 opcodes (PID/SCALE/LIMIT/BITWISE/SHIFT/UART)",
+                                                            "FIRMWARE FEATURE LEVEL v{} (< v2): Program uses Phase 2 opcodes (PID/SCALE/LIMIT/BITWISE/SHIFT/UART)",
                                                             snap.fw_feature_level.max(1)
                                                         ))
                                                         .color(if palette.is_light() {
@@ -3841,10 +3931,10 @@ impl eframe::App for CanvasApp {
                                     // Tag pills
                                     ui.horizontal_wrapped(|ui| {
                                         let tags = [
-                                            ("🦀 Rust 2021", Color32::from_rgb(234, 88, 12)),
-                                            ("⚡ IEC 61131-3", Color32::from_rgb(14, 165, 233)),
-                                            ("🔌 Arduino & RP2040", Color32::from_rgb(16, 185, 129)),
-                                            ("📡 Modbus RTU", Color32::from_rgb(168, 85, 247)),
+                                            ("Rust 2021", Color32::from_rgb(234, 88, 12)),
+                                            ("IEC 61131-3", Color32::from_rgb(14, 165, 233)),
+                                            ("Arduino & RP2040", Color32::from_rgb(16, 185, 129)),
+                                            ("Modbus RTU", Color32::from_rgb(168, 85, 247)),
                                         ];
                                         for (tag_text, tag_color) in tags {
                                             egui::Frame::new()
@@ -3873,7 +3963,7 @@ impl eframe::App for CanvasApp {
                         .inner_margin(egui::Margin::symmetric(12, 9))
                         .show(ui, |ui| {
                             ui.label(
-                                RichText::new("💡 Concept & Mission")
+                                RichText::new("Concept & Mission")
                                     .strong()
                                     .color(palette.accent_heading),
                             );
@@ -3898,7 +3988,7 @@ impl eframe::App for CanvasApp {
                                 .inner_margin(egui::Margin::symmetric(10, 8))
                                 .show(ui, |ui| {
                                     ui.set_width(250.0);
-                                    ui.label(RichText::new("⚡ Visual Ladder CAD").strong().color(palette.accent_heading));
+                                    ui.label(RichText::new("Visual Ladder CAD").strong().color(palette.accent_heading));
                                     ui.label(RichText::new("CAD canvas with live power flow visualizer displaying real-time electrical conduction and coil energization (10ms cycle).").size(11.0).color(palette.rung_text_dim));
                                 });
 
@@ -3910,7 +4000,7 @@ impl eframe::App for CanvasApp {
                                 .inner_margin(egui::Margin::symmetric(10, 8))
                                 .show(ui, |ui| {
                                     ui.set_width(250.0);
-                                    ui.label(RichText::new("🔌 Embedded Micro-VM").strong().color(palette.accent_ok));
+                                    ui.label(RichText::new("Embedded Micro-VM").strong().color(palette.accent_ok));
                                     ui.label(RichText::new("Compiles ladder logic into compact 32-bit bytecode uploaded to Arduino UNO/Nano/Mega and RP2040 Pico (Embassy Async).").size(11.0).color(palette.rung_text_dim));
                                 });
                             ui.end_row();
@@ -3923,7 +4013,7 @@ impl eframe::App for CanvasApp {
                                 .inner_margin(egui::Margin::symmetric(10, 8))
                                 .show(ui, |ui| {
                                     ui.set_width(250.0);
-                                    ui.label(RichText::new("📡 Live Telemetry & Modbus").strong().color(palette.accent_warn));
+                                    ui.label(RichText::new("Live Telemetry & Modbus").strong().color(palette.accent_warn));
                                     ui.label(RichText::new("USB online monitoring with real-time Data Watch Table, Force I/O, and integrated Modbus RTU master.").size(11.0).color(palette.rung_text_dim));
                                 });
 
@@ -3935,7 +4025,7 @@ impl eframe::App for CanvasApp {
                                 .inner_margin(egui::Margin::symmetric(10, 8))
                                 .show(ui, |ui| {
                                     ui.set_width(250.0);
-                                    ui.label(RichText::new("📐 IEC 61131-3 Interop").strong().color(Color32::from_rgb(168, 85, 247)));
+                                    ui.label(RichText::new("IEC 61131-3 Interop").strong().color(Color32::from_rgb(168, 85, 247)));
                                     ui.label(RichText::new("Native Instruction List (.il) import and export fully compatible with OpenPLC and CODESYS.").size(11.0).color(palette.rung_text_dim));
                                 });
                             ui.end_row();
@@ -4012,210 +4102,299 @@ impl eframe::App for CanvasApp {
             let mut open_io_config = self.show_io_config;
             let mut close_io_config = false;
             let mut settings_changed = false;
-            Window::new("Settings & Hardware Configuration")
+            let max_w = (ui.ctx().content_rect().width() - 32.0).max(520.0);
+            let target_w = 580.0_f32.min(max_w);
+            Window::new("Settings")
                 .order(egui::Order::Foreground)
                 .open(&mut open_io_config)
-                .min_size([640.0, 480.0])
-                .default_size([680.0, 540.0])
+                .min_width(target_w)
+                .default_width(target_w)
+                .max_width(max_w)
+                .resizable(true)
                 .collapsible(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .show(ui.ctx(), |ui| {
-                    egui::ScrollArea::vertical()
-                        .id_salt("settings_hw_cfg_scroll")
-                        .max_height(480.0)
-                        .show(ui, |ui| {
-                            ui.label(
-                                RichText::new("Appearance & Environment Settings")
-                                    .color(palette.accent_heading)
-                                    .strong(),
-                            );
-                    ui.add_space(4.0);
-
-                    egui::Grid::new("ui_theme_settings_grid")
-                        .num_columns(2)
-                        .spacing([12.0, 8.0])
-                        .show(ui, |ui| {
-                            ui.label("UI Theme:");
-                            ui.horizontal(|ui| {
-                                for t in AppTheme::ALL {
-                                    if ui.selectable_label(self.theme == t, t.label()).clicked() {
-                                        self.theme = t;
-                                        settings_changed = true;
-                                    }
-                                }
-                            });
-                            ui.end_row();
-
-                            ui.label("Schematic Style:");
-                            egui::ComboBox::from_id_salt("settings_schematic_style_combo")
-                                .selected_text(self.doc.schematic_style.label())
-                                .show_ui(ui, |ui| {
-                                    for st in SchematicStyle::ALL {
-                                        let is_cur = self.doc.schematic_style == st;
-                                        if ui
-                                            .selectable_label(is_cur, st.label())
-                                            .on_hover_text(st.description())
-                                            .clicked()
-                                        {
-                                            self.doc.set_schematic_style(st);
-                                            settings_changed = true;
-                                        }
-                                    }
-                                });
-                            ui.end_row();
-
-                            ui.label("IEC 61131-3 IL Panel:");
-                            if ui
-                                .checkbox(&mut self.show_il_code, "Show bottom IL code preview")
-                                .changed()
-                            {
-                                settings_changed = true;
-                            }
-                            ui.end_row();
-                        });
-
-                    ui.separator();
-                    ui.label(
-                        RichText::new("Hardware & Communication")
-                            .color(palette.accent_heading)
-                            .strong(),
-                    );
-                    ui.add_space(4.0);
-
-                    egui::Grid::new("opt_cfg_grid")
-                        .num_columns(2)
-                        .spacing([12.0, 8.0])
-                        .show(ui, |ui| {
-                            ui.label("Target Hardware:");
-                            let mut hw_changed = false;
-                            egui::ComboBox::from_id_salt("opt_target_hardware")
-                                .width(300.0)
-                                .selected_text(self.doc.program.hardware.clone())
-                                .show_ui(ui, |ui| {
-                                    for target in crate::target::HARDWARE_TARGETS {
-                                        if ui
-                                            .selectable_label(self.doc.program.hardware == target, target)
-                                            .clicked()
-                                            && self.doc.program.hardware != target
-                                        {
-                                            self.doc.program.hardware = target.to_string();
-                                            hw_changed = true;
-                                        }
-                                    }
-                                    // Keep a custom / legacy value from an older project file selectable
-                                    if !crate::target::HARDWARE_TARGETS.contains(&self.doc.program.hardware.as_str()) {
-                                        ui.separator();
-                                        ui.label(
-                                            RichText::new(format!("Current: {}", self.doc.program.hardware))
-                                                .italics()
-                                                .size(11.0),
-                                        );
-                                    }
-                                });
-                            if hw_changed {
-                                // Refresh X/Y pin labels (RP2040 GPn vs STM32 Pxn)
-                                self.sync_doc_io_mappings_from_hw_config();
-                                settings_changed = true;
-                            }
-                            ui.end_row();
-
-                            ui.label("Serial Port:");
-                            if ui
-                                .add(
-                                    egui::TextEdit::singleline(&mut self.com_port)
-                                        .hint_text("Auto-detect"),
-                                )
-                                .changed()
-                            {
-                                settings_changed = true;
-                            }
-                            ui.end_row();
-
-                            ui.label("Baud Rate:");
-                            egui::ComboBox::from_id_salt("baud_combo")
-                                .selected_text(&self.baud_rate)
-                                .show_ui(ui, |ui| {
-                                    for b in ["9600", "19200", "38400", "57600", "115200"] {
-                                        if ui
-                                            .selectable_value(&mut self.baud_rate, b.to_string(), b)
-                                            .changed()
-                                        {
-                                            settings_changed = true;
-                                        }
-                                    }
-                                });
-                            ui.end_row();
-
-                            ui.label("Scan Cycle Loop (ms):");
-                            if ui
-                                .add(
-                                    egui::DragValue::new(&mut self.doc.simulator.cycle_time_ms)
-                                        .range(1..=1000),
-                                )
-                                .changed()
-                            {
-                                settings_changed = true;
-                            }
-                            ui.end_row();
-                        });
-
-                    ui.separator();
-                    if self.render_rp2040_io_pin_config_ui(ui, "settings_dlg") {
-                        settings_changed = true;
-                    }
-
-                    ui.separator();
-                    ui.weak(format!(
-                        "Settings file: {}",
-                        AppSettings::config_path().display()
-                    ));
-                    ui.add_space(4.0);
-
+                    // Segmented 3-Tab Bar
                     ui.horizontal(|ui| {
-                        if ui.button("+ Add Input Port").clicked() {
-                            let n = self
-                                .doc
-                                .program
-                                .io_mappings
-                                .iter()
-                                .filter(|m| m.is_input)
-                                .count();
-                            self.doc.program.io_mappings.push(IOPortMapping {
-                                plc_address: format!("X{}", n),
-                                iec_address: format!("%IX{}.{}", n / 8, n % 8),
-                                symbol: format!("IN_{}", n),
-                                hw_pin: format!("D{}", n + 2),
-                                description: "Digital Input".to_string(),
-                                is_input: true,
-                            });
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        for (idx, label) in [(0u8, "General"), (1u8, "Hardware"), (2u8, "I/O Pins")] {
+                            let tab_btn = egui::Button::new(
+                                RichText::new(label).strong().size(11.5),
+                            )
+                            .selected(self.settings_tab == idx)
+                            .corner_radius(egui::CornerRadius::same(5));
+                            if ui.add(tab_btn).clicked() {
+                                self.settings_tab = idx;
+                            }
                         }
-                        if ui.button("+ Add Output Port").clicked() {
-                            let n = self
-                                .doc
-                                .program
-                                .io_mappings
-                                .iter()
-                                .filter(|m| !m.is_input)
-                                .count();
-                            self.doc.program.io_mappings.push(IOPortMapping {
-                                plc_address: format!("Y{}", n),
-                                iec_address: format!("%QX{}.{}", n / 8, n % 8),
-                                symbol: format!("OUT_{}", n),
-                                hw_pin: format!("D{}", n + 8),
-                                description: "Digital Output".to_string(),
-                                is_input: false,
-                            });
-                        }
+                    });
+                    ui.add_space(6.0);
+
+                    // Tab Content Card
+                    egui::Frame::NONE
+                        .fill(palette.card_bg)
+                        .stroke(egui::Stroke::new(1.0, palette.card_border))
+                        .corner_radius(egui::CornerRadius::same(6))
+                        .inner_margin(egui::Margin::symmetric(12, 10))
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            match self.settings_tab {
+                                0 => {
+                                    egui::Grid::new("settings_general_grid")
+                                        .num_columns(2)
+                                        .min_col_width(120.0)
+                                        .spacing([12.0, 8.0])
+                                        .show(ui, |ui| {
+                                            ui.label("UI Theme:");
+                                            ui.horizontal(|ui| {
+                                                for t in AppTheme::ALL {
+                                                    if ui
+                                                        .selectable_label(self.theme == t, t.label())
+                                                        .clicked()
+                                                    {
+                                                        self.theme = t;
+                                                        settings_changed = true;
+                                                    }
+                                                }
+                                            });
+                                            ui.end_row();
+
+                                            ui.label("Schematic Style:");
+                                            egui::ComboBox::from_id_salt("settings_schematic_style_combo")
+                                                .selected_text(self.doc.schematic_style.label())
+                                                .show_ui(ui, |ui| {
+                                                    for st in SchematicStyle::ALL {
+                                                        let is_cur = self.doc.schematic_style == st;
+                                                        if ui
+                                                            .selectable_label(is_cur, st.label())
+                                                            .on_hover_text(st.description())
+                                                            .clicked()
+                                                        {
+                                                            self.doc.set_schematic_style(st);
+                                                            settings_changed = true;
+                                                        }
+                                                    }
+                                                });
+                                            ui.end_row();
+
+                                            ui.label("IL Code Panel:");
+                                            if ui
+                                                .checkbox(
+                                                    &mut self.show_il_code,
+                                                    "Show bottom IL code preview",
+                                                )
+                                                .changed()
+                                            {
+                                                settings_changed = true;
+                                            }
+                                            ui.end_row();
+
+                                            ui.label("Scan Cycle:");
+                                            if ui
+                                                .add(
+                                                    egui::DragValue::new(
+                                                        &mut self.doc.simulator.cycle_time_ms,
+                                                    )
+                                                    .range(1..=1000)
+                                                    .suffix(" ms"),
+                                                )
+                                                .changed()
+                                            {
+                                                settings_changed = true;
+                                            }
+                                            ui.end_row();
+                                        });
+                                }
+                                1 => {
+                                    egui::Grid::new("settings_hardware_grid")
+                                        .num_columns(2)
+                                        .min_col_width(120.0)
+                                        .spacing([12.0, 8.0])
+                                        .show(ui, |ui| {
+                                            ui.label("Target MCU:");
+                                            let mut hw_changed = false;
+                                            egui::ComboBox::from_id_salt("opt_target_hardware")
+                                                .width(310.0)
+                                                .selected_text(self.doc.program.hardware.clone())
+                                                .show_ui(ui, |ui| {
+                                                    for target in crate::target::HARDWARE_TARGETS {
+                                                        if ui
+                                                            .selectable_label(
+                                                                self.doc.program.hardware == target,
+                                                                target,
+                                                            )
+                                                            .clicked()
+                                                            && self.doc.program.hardware != target
+                                                        {
+                                                            self.doc.program.hardware =
+                                                                target.to_string();
+                                                            hw_changed = true;
+                                                        }
+                                                    }
+                                                    if !crate::target::HARDWARE_TARGETS
+                                                        .contains(&self.doc.program.hardware.as_str())
+                                                    {
+                                                        ui.separator();
+                                                        ui.label(
+                                                            RichText::new(format!(
+                                                                "Current: {}",
+                                                                self.doc.program.hardware
+                                                            ))
+                                                            .italics()
+                                                            .size(11.0),
+                                                        );
+                                                    }
+                                                });
+                                            if hw_changed {
+                                                self.sync_doc_io_mappings_from_hw_config();
+                                                settings_changed = true;
+                                            }
+                                            ui.end_row();
+
+                                            ui.label("Serial Port:");
+                                            ui.horizontal(|ui| {
+                                                if ui
+                                                    .add(
+                                                        egui::TextEdit::singleline(&mut self.com_port)
+                                                            .desired_width(140.0)
+                                                            .hint_text("Auto")
+                                                            .font(egui::TextStyle::Monospace),
+                                                    )
+                                                    .changed()
+                                                {
+                                                    settings_changed = true;
+                                                }
+                                                egui::ComboBox::from_id_salt(
+                                                    "settings_port_detect_combo",
+                                                )
+                                                .width(95.0)
+                                                .selected_text(if self.com_port.trim().is_empty() {
+                                                    "Auto"
+                                                } else {
+                                                    "Detect"
+                                                })
+                                                .show_ui(ui, |ui| {
+                                                    let ports = serial::list_ports_cached(
+                                                        Duration::from_millis(1000),
+                                                    );
+                                                    let detected = serial::choose_plc_port(&ports);
+                                                    let auto_label = match &detected {
+                                                        Some(p) => format!("Auto-detect ({})", p),
+                                                        None => "Auto-detect".to_string(),
+                                                    };
+                                                    if ui
+                                                        .selectable_value(
+                                                            &mut self.com_port,
+                                                            String::new(),
+                                                            auto_label,
+                                                        )
+                                                        .changed()
+                                                    {
+                                                        settings_changed = true;
+                                                    }
+                                                    ui.separator();
+                                                    if let Some(auto_port) = detected {
+                                                        if ui
+                                                            .selectable_value(
+                                                                &mut self.com_port,
+                                                                auto_port.clone(),
+                                                                format!(
+                                                                    "{} (LaduinoPLC VM)",
+                                                                    auto_port
+                                                                ),
+                                                            )
+                                                            .changed()
+                                                        {
+                                                            settings_changed = true;
+                                                        }
+                                                        ui.separator();
+                                                    }
+                                                    for p in ports.iter().map(|p| p.display()) {
+                                                        if ui
+                                                            .selectable_value(
+                                                                &mut self.com_port,
+                                                                p.clone(),
+                                                                &p,
+                                                            )
+                                                            .changed()
+                                                        {
+                                                            settings_changed = true;
+                                                        }
+                                                    }
+                                                });
+                                            });
+                                            ui.end_row();
+
+                                            ui.label("Baud Rate:");
+                                            egui::ComboBox::from_id_salt("baud_combo")
+                                                .width(95.0)
+                                                .selected_text(&self.baud_rate)
+                                                .show_ui(ui, |ui| {
+                                                    for b in [
+                                                        "9600", "19200", "38400", "57600", "115200",
+                                                    ] {
+                                                        if ui
+                                                            .selectable_value(
+                                                                &mut self.baud_rate,
+                                                                b.to_string(),
+                                                                b,
+                                                            )
+                                                            .changed()
+                                                        {
+                                                            settings_changed = true;
+                                                        }
+                                                    }
+                                                });
+                                            ui.end_row();
+                                        });
+
+                                    let target = self.plc_target();
+                                    ui.add_space(6.0);
+                                    ui.label(
+                                        RichText::new(format!(
+                                            "Link: {} · Max: {} inst",
+                                            target.link_description(),
+                                            target.max_instructions()
+                                        ))
+                                        .small()
+                                        .color(palette.rung_text_dim),
+                                    );
+                                }
+                                _ => {
+                                    egui::ScrollArea::vertical()
+                                        .id_salt("settings_io_pins_scroll")
+                                        .max_height(360.0)
+                                        .show(ui, |ui| {
+                                            if self.render_rp2040_io_pin_config_ui(ui, "settings_dlg")
+                                            {
+                                                settings_changed = true;
+                                            }
+                                        });
+                                }
+                            }
+                        });
+
+                    // Pinned Bottom Footer
+                    ui.add_space(6.0);
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new("Auto-saved")
+                                .small()
+                                .color(palette.rung_text_dim),
+                        )
+                        .on_hover_text(format!(
+                            "Settings file: {}",
+                            AppSettings::config_path().display()
+                        ));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("Save & Close").clicked() {
-                                self.save_settings();
+                            let done_btn = egui::Button::new(RichText::new("Done").strong())
+                                .min_size(egui::vec2(76.0, 28.0))
+                                .corner_radius(egui::CornerRadius::same(5));
+                            if ui.add(done_btn).clicked() {
                                 close_io_config = true;
                             }
-                            if ui.button("Save Settings").clicked() {
-                                self.save_settings();
-                            }
                         });
-                    });
                     });
                 });
 
@@ -4272,7 +4451,7 @@ impl eframe::App for CanvasApp {
                                 let _ = std::fs::write(path, &code);
                             }
                         }
-                        if ui.button("⚡ Compile Bytecode / Update to PLC...").clicked() {
+                        if ui.button("Compile Bytecode / Update to PLC...").clicked() {
                             close_code_export = true;
                             self.show_update_plc = true;
                         }
@@ -4304,48 +4483,58 @@ impl eframe::App for CanvasApp {
             let req_feature_level = bc.required_feature_level();
             let target_max_inst = self.plc_target().max_instructions();
 
-            Window::new("⚡ Update to PLC — Micro-VM Serial Loader & Controller")
+            let max_w = (ui.ctx().content_rect().width() - 32.0).max(480.0);
+            let target_w = 540.0_f32.min(max_w);
+
+            Window::new("Update to PLC")
                 .order(egui::Order::Foreground)
                 .open(&mut open_update_plc)
-                .min_size([740.0, 540.0])
-                .default_size([780.0, 580.0])
+                .min_width(target_w)
+                .default_width(target_w)
+                .max_width(max_w)
+                .resizable(true)
                 .collapsible(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .show(ui.ctx(), |ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
 
-                    // 1. Modern Connection & Live PLC Runtime Control Card
+                    // 1. Compact Connection Bar (Single Card)
                     egui::Frame::group(ui.style())
                         .fill(palette.card_bg)
                         .stroke(egui::Stroke::new(1.0, palette.card_border))
-                        .corner_radius(egui::CornerRadius::same(8))
-                        .inner_margin(egui::Margin::symmetric(12, 10))
+                        .corner_radius(egui::CornerRadius::same(6))
+                        .inner_margin(egui::Margin::symmetric(12, 8))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
-                                // Left: USB Serial Port Configuration
-                                let status_dot_color = if port_exists {
-                                    egui::Color32::from_rgb(46, 204, 113)
+                                let status_color = if port_exists {
+                                    palette.accent_ok
                                 } else {
-                                    egui::Color32::from_rgb(231, 76, 60)
+                                    palette.accent_danger
                                 };
+                                let (dot_rect, _) = ui.allocate_exact_size(
+                                    egui::vec2(8.0, 8.0),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter()
+                                    .circle_filled(dot_rect.center(), 3.0, status_color);
                                 ui.label(
-                                    RichText::new(if port_exists { "● Connected" } else { "○ Offline" })
-                                        .color(status_dot_color)
+                                    RichText::new(if port_exists { "Connected" } else { "Offline" })
+                                        .color(status_color)
                                         .strong()
                                         .size(11.5),
                                 );
                                 ui.separator();
 
                                 ui.label(
-                                    RichText::new("USB Serial:")
-                                        .color(palette.accent_heading)
-                                        .strong(),
+                                    RichText::new("Port")
+                                        .color(palette.rung_text_dim)
+                                        .size(11.5),
                                 );
                                 if ui
                                     .add(
                                         egui::TextEdit::singleline(&mut self.com_port)
-                                            .hint_text("Auto-detect")
-                                            .desired_width(125.0)
+                                            .hint_text("Auto")
+                                            .desired_width(110.0)
                                             .font(egui::TextStyle::Monospace),
                                     )
                                     .changed()
@@ -4353,22 +4542,27 @@ impl eframe::App for CanvasApp {
                                     settings_changed = true;
                                 }
                                 egui::ComboBox::from_id_salt("update_plc_port_combo")
-                                    .width(105.0)
+                                    .width(82.0)
                                     .selected_text(if self.com_port.trim().is_empty() {
-                                        "🔍 Auto-detect"
+                                        "Auto"
                                     } else {
-                                        "🔍 Detect"
+                                        "Detect"
                                     })
                                     .show_ui(ui, |ui| {
                                         // Enumerate once per second while the popup is open
-                                        let ports = serial::list_ports_cached(Duration::from_millis(1000));
+                                        let ports =
+                                            serial::list_ports_cached(Duration::from_millis(1000));
                                         let detected = serial::choose_plc_port(&ports);
                                         let auto_label = match &detected {
-                                            Some(p) => format!("Auto-detect (★ {})", p),
+                                            Some(p) => format!("Auto-detect ({})", p),
                                             None => "Auto-detect".to_string(),
                                         };
                                         if ui
-                                            .selectable_value(&mut self.com_port, String::new(), auto_label)
+                                            .selectable_value(
+                                                &mut self.com_port,
+                                                String::new(),
+                                                auto_label,
+                                            )
                                             .changed()
                                         {
                                             settings_changed = true;
@@ -4379,7 +4573,7 @@ impl eframe::App for CanvasApp {
                                                 .selectable_value(
                                                     &mut self.com_port,
                                                     auto_port.clone(),
-                                                    format!("★ {} (LaduinoPLC VM)", auto_port),
+                                                    format!("{} (LaduinoPLC VM)", auto_port),
                                                 )
                                                 .changed()
                                             {
@@ -4398,12 +4592,12 @@ impl eframe::App for CanvasApp {
                                     });
 
                                 ui.label(
-                                    RichText::new("Baud:")
-                                        .color(palette.accent_heading)
-                                        .strong(),
+                                    RichText::new("Baud")
+                                        .color(palette.rung_text_dim)
+                                        .size(11.5),
                                 );
                                 egui::ComboBox::from_id_salt("update_plc_baud_combo")
-                                    .width(76.0)
+                                    .width(72.0)
                                     .selected_text(&self.baud_rate)
                                     .show_ui(ui, |ui| {
                                         for b in ["9600", "19200", "38400", "57600", "115200"] {
@@ -4420,66 +4614,50 @@ impl eframe::App for CanvasApp {
                                         }
                                     });
 
-                                // Right: Hardware Target Tag & Live PLC Runtime Status Badge
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
-                                        // PLC State Pill Indicator
                                         let (badge_text, badge_bg, badge_fg) =
                                             if self.plc_remote_running {
                                                 (
-                                                    "● PLC RUNNING",
+                                                    "RUNNING",
                                                     if palette.is_light() {
-                                                        egui::Color32::from_rgba_unmultiplied(39, 174, 96, 32)
+                                                        egui::Color32::from_rgba_unmultiplied(
+                                                            39, 174, 96, 28,
+                                                        )
                                                     } else {
-                                                        egui::Color32::from_rgba_unmultiplied(39, 174, 96, 45)
+                                                        egui::Color32::from_rgba_unmultiplied(
+                                                            39, 174, 96, 40,
+                                                        )
                                                     },
-                                                    if palette.is_light() {
-                                                        palette.accent_ok
-                                                    } else {
-                                                        egui::Color32::from_rgb(46, 204, 113)
-                                                    },
+                                                    palette.accent_ok,
                                                 )
                                             } else {
                                                 (
-                                                    "■ PLC STOPPED",
+                                                    "STOPPED",
                                                     if palette.is_light() {
-                                                        egui::Color32::from_rgba_unmultiplied(231, 76, 60, 32)
+                                                        egui::Color32::from_rgba_unmultiplied(
+                                                            231, 76, 60, 24,
+                                                        )
                                                     } else {
-                                                        egui::Color32::from_rgba_unmultiplied(231, 76, 60, 45)
+                                                        egui::Color32::from_rgba_unmultiplied(
+                                                            231, 76, 60, 34,
+                                                        )
                                                     },
-                                                    if palette.is_light() {
-                                                        palette.accent_danger
-                                                    } else {
-                                                        egui::Color32::from_rgb(241, 96, 80)
-                                                    },
+                                                    palette.accent_danger,
                                                 )
                                             };
                                         egui::Frame::NONE
                                             .fill(badge_bg)
-                                            .corner_radius(egui::CornerRadius::same(5))
-                                            .inner_margin(egui::Margin::symmetric(10, 5))
+                                            .corner_radius(egui::CornerRadius::same(4))
+                                            .inner_margin(egui::Margin::symmetric(8, 3))
                                             .show(ui, |ui| {
                                                 ui.label(
                                                     RichText::new(badge_text)
                                                         .color(badge_fg)
                                                         .monospace()
                                                         .strong()
-                                                        .size(11.5),
-                                                );
-                                            });
-
-                                        // Target Hardware Tag
-                                        egui::Frame::NONE
-                                            .fill(palette.canvas_bg)
-                                            .stroke(egui::Stroke::new(1.0, palette.card_border))
-                                            .corner_radius(egui::CornerRadius::same(5))
-                                            .inner_margin(egui::Margin::symmetric(8, 4))
-                                            .show(ui, |ui| {
-                                                ui.label(
-                                                    RichText::new(format!("🎯 {} Micro-VM", self.plc_target().mcu_name()))
-                                                        .size(11.0)
-                                                        .color(palette.symbol_subtext),
+                                                        .size(10.5),
                                                 );
                                             });
                                     },
@@ -4487,292 +4665,143 @@ impl eframe::App for CanvasApp {
                             });
                         });
 
-                    // 2. Telemetry & Bytecode Metrics Strip (4 Modern Cards)
+                    // 2. 1-Line Program Summary Strip + Slim Capacity Bar
                     let (_, prog_crc16) = bc.program_signature();
-                    ui.columns(4, |cols| {
-                        let metrics = [
-                            (
-                                "PROGRAM SIZE",
-                                format!(
-                                    "{} / {} Inst ({} B)",
-                                    bc.instructions.len(),
-                                    target_max_inst,
-                                    bc.payload_size_bytes()
-                                ),
-                                if bc.instructions.len() > target_max_inst {
-                                    egui::Color32::from_rgb(231, 76, 60)
-                                } else {
-                                    palette.accent_ok
-                                },
-                            ),
-                            (
-                                "SERIAL FRAME",
-                                format!("{} Bytes (0xAA)", packet.len()),
-                                palette.accent_heading,
-                            ),
-                            (
-                                "FINGERPRINT (CRC16 / CRC8)",
-                                format!("0x{:04X} | Frame 0x{:02X}", prog_crc16, crc8),
-                                if palette.is_light() {
-                                    palette.accent_heading
-                                } else {
-                                    egui::Color32::from_rgb(52, 152, 219)
-                                },
-                            ),
-                            (
-                                "MAPPED I/O & MEM",
-                                format!("{} Symbols", bc.memory_map.len()),
-                                palette.symbol_subtext,
-                            ),
-                        ];
-                        for (i, (title, val, color)) in metrics.iter().enumerate() {
-                            egui::Frame::group(cols[i].style())
-                                .fill(palette.card_bg)
-                                .stroke(egui::Stroke::new(1.0, palette.card_border))
-                                .corner_radius(egui::CornerRadius::same(6))
-                                .inner_margin(egui::Margin::symmetric(10, 6))
-                                .show(&mut cols[i], |ui| {
-                                    ui.label(
-                                        RichText::new(*title)
-                                            .size(9.5)
-                                            .color(palette.symbol_subtext)
-                                            .strong(),
-                                    );
-                                    ui.label(
-                                        RichText::new(val)
-                                            .monospace()
-                                            .strong()
-                                            .size(12.5)
-                                            .color(*color),
-                                    );
-                                });
-                        }
-                    });
+                    let inst_count = bc.instructions.len();
+                    let fill_ratio = if target_max_inst > 0 {
+                        (inst_count as f32 / target_max_inst as f32).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    let cap_percent = if target_max_inst > 0 {
+                        (inst_count as f32 / target_max_inst as f32) * 100.0
+                    } else {
+                        0.0
+                    };
+                    let bar_color = if inst_count > target_max_inst {
+                        palette.accent_danger
+                    } else if cap_percent >= 85.0 {
+                        palette.accent_warn
+                    } else {
+                        palette.accent_ok
+                    };
+                    let pct_color = if inst_count > target_max_inst {
+                        palette.accent_danger
+                    } else if cap_percent >= 85.0 {
+                        palette.accent_warn
+                    } else {
+                        palette.rung_text_dim
+                    };
 
-                    // 3. Modern Segmented View Mode Tabs
-                    ui.horizontal(|ui| {
-                        let tab0_btn = egui::Button::new(
-                            RichText::new("📦 1. 32-Bit Bytecode")
-                                .strong()
-                                .size(11.5),
-                        )
-                        .selected(self.update_plc_tab == 0)
-                        .corner_radius(egui::CornerRadius::same(6));
-                        if ui.add(tab0_btn).clicked() {
-                            self.update_plc_tab = 0;
-                        }
-
-                        let tab1_btn = egui::Button::new(
-                            RichText::new("🗺 2. Memory Mapping (0x00..0xFF)")
-                                .strong()
-                                .size(11.5),
-                        )
-                        .selected(self.update_plc_tab == 1)
-                        .corner_radius(egui::CornerRadius::same(6));
-                        if ui.add(tab1_btn).clicked() {
-                            self.update_plc_tab = 1;
-                        }
-
-                        let tab2_btn = egui::Button::new(
-                            RichText::new(format!("🔧 3. {} Hardware I/O Pins", self.plc_target().mcu_name()))
-                                .strong()
-                                .size(11.5),
-                        )
-                        .selected(self.update_plc_tab == 2)
-                        .corner_radius(egui::CornerRadius::same(6));
-                        if ui.add(tab2_btn).clicked() {
-                            self.update_plc_tab = 2;
-                        }
-
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui
-                                .small_button("📋 Copy Hex")
-                                .on_hover_text("Copy raw Serial frame hex string to clipboard")
-                                .clicked()
-                            {
-                                ui.ctx().copy_text(bc.to_packet_hex_string(
-                                    my_canvas_core::PlcSerialCommand::DownloadProgram,
-                                ));
-                                self.update_plc_is_error = false;
-                                self.update_plc_status = format!(
-                                    "✔ Copied {} Bytes Serial Packet Hex to clipboard",
-                                    packet.len()
-                                );
-                            }
-                            if ui
-                                .small_button("💾 Save .bin...")
-                                .on_hover_text("Export raw 32-bit bytecode binary file (.bin)")
-                                .clicked()
-                            {
-                                let mut dialog = rfd::FileDialog::new()
-                                    .set_directory(self.dialog_directory())
-                                    .add_filter("Micro-VM Bytecode Binary (*.bin)", &["bin"]);
-                                if let Some(ref current_path) = self.doc.file_path {
-                                    let path = std::path::Path::new(current_path);
-                                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                                        dialog = dialog.set_file_name(format!("{}.bin", stem));
-                                    }
-                                }
-                                if let Some(path) = dialog.save_file() {
-                                    self.set_last_folder_from_path(&path);
-                                    let raw = bc.to_raw_bytes();
-                                    if std::fs::write(&path, &raw).is_ok() {
-                                        self.update_plc_is_error = false;
-                                        self.update_plc_status = format!(
-                                            "✔ Saved {} Bytes raw bytecode to {}",
-                                            raw.len(),
-                                            path.display()
-                                        );
-                                    }
-                                }
-                            }
-                        });
-                    });
-
-                    // 4. Tab Content Container Card
                     egui::Frame::group(ui.style())
                         .fill(palette.card_bg)
                         .stroke(egui::Stroke::new(1.0, palette.card_border))
-                        .corner_radius(egui::CornerRadius::same(8))
-                        .inner_margin(egui::Margin::symmetric(10, 8))
-                        .show(ui, |ui| match self.update_plc_tab {
-                            0 => {
-                                let disasm = bc.to_disassembly_text();
-                                egui::ScrollArea::both()
-                                    .id_salt("bytecode_disasm_scroll")
-                                    .max_height(275.0)
-                                    .show(ui, |ui| {
-                                        let mut text = disasm;
-                                        ui.add(
-                                            egui::TextEdit::multiline(&mut text)
-                                                .code_editor()
-                                                .desired_width(f32::INFINITY),
-                                        );
-                                    });
-                            }
-                            1 => {
-                                ui.label(
-                                    RichText::new(
-                                        "Unified Memory Space: X[0x00..0x1F] | Y[0x20..0x3F] | M[0x40..0xBF] | T[0xC0..0xDF] | C[0xE0..0xFF]",
-                                    )
-                                    .monospace()
-                                    .size(11.5)
-                                    .color(palette.accent_heading),
-                                );
-                                ui.add_space(4.0);
-                                egui::ScrollArea::vertical()
-                                    .id_salt("unified_mem_map_scroll")
-                                    .max_height(250.0)
-                                    .show(ui, |ui| {
-                                        egui::Grid::new("unified_mem_map_grid")
-                                            .striped(true)
-                                            .num_columns(6)
-                                            .spacing([14.0, 6.0])
-                                            .show(ui, |ui| {
-                                                ui.strong("Unified Addr");
-                                                ui.strong("Canonical");
-                                                ui.strong("IEC 61131-3");
-                                                ui.strong("Symbol");
-                                                ui.strong("MCU Pin");
-                                                ui.strong("VM Memory Region");
-                                                ui.end_row();
-
-                                                for entry in &bc.memory_map {
-                                                    ui.monospace(format!(
-                                                        "0x{:02X} ({:3})",
-                                                        entry.addr, entry.addr
-                                                    ));
-                                                    ui.monospace(&entry.canonical_name);
-                                                    ui.monospace(&entry.iec_address);
-                                                    ui.label(&entry.symbol);
-                                                    ui.monospace(if entry.hw_pin.is_empty() {
-                                                        "-"
-                                                    } else {
-                                                        &entry.hw_pin
-                                                    });
-                                                    ui.weak(entry.region.space_label());
-                                                    ui.end_row();
-                                                }
-                                            });
-                                    });
-                            }
-                            _ => {
-                                egui::ScrollArea::vertical()
-                                    .id_salt("update_plc_io_cfg_scroll")
-                                    .max_height(265.0)
-                                    .show(ui, |ui| {
-                                        if self.render_rp2040_io_pin_config_ui(ui, "update_plc") {
-                                            settings_changed = true;
-                                        }
-                                    });
-                            }
-                        });
-
-                    // 5. Styled Status & ACK Telemetry Banner
-                    let status_text = if self.update_plc_status.is_empty() {
-                        format!(
-                            "Ready — Target Port: {} @ {} bps | Protocol: SOF 0xAA + CMD + LEN + PAYLOAD + CRC8",
-                            self.com_port_display(), self.baud_rate
-                        )
-                    } else {
-                        self.update_plc_status.clone()
-                    };
-                    let (banner_bg, banner_stroke, banner_fg) = if self.update_plc_status.is_empty()
-                    {
-                        (
-                            palette.card_bg,
-                            palette.card_border,
-                            palette.symbol_subtext,
-                        )
-                    } else if self.update_plc_is_error {
-                        (
-                            egui::Color32::from_rgba_unmultiplied(231, 76, 60, 28),
-                            egui::Color32::from_rgb(231, 76, 60),
-                            if palette.is_light() {
-                                palette.accent_danger
-                            } else {
-                                egui::Color32::from_rgb(255, 118, 105)
-                            },
-                        )
-                    } else {
-                        (
-                            egui::Color32::from_rgba_unmultiplied(39, 174, 96, 28),
-                            egui::Color32::from_rgb(39, 174, 96),
-                            if palette.is_light() {
-                                palette.accent_ok
-                            } else {
-                                egui::Color32::from_rgb(46, 204, 113)
-                            },
-                        )
-                    };
-
-                    egui::Frame::NONE
-                        .fill(banner_bg)
-                        .stroke(egui::Stroke::new(1.0, banner_stroke))
                         .corner_radius(egui::CornerRadius::same(6))
-                        .inner_margin(egui::Margin::symmetric(10, 7))
+                        .inner_margin(egui::Margin::symmetric(12, 8))
                         .show(ui, |ui| {
-                            ui.set_width(ui.available_width());
-                            ui.label(
-                                RichText::new(status_text)
-                                    .monospace()
-                                    .size(11.5)
-                                    .color(banner_fg),
+                            ui.horizontal(|ui| {
+                                let summary = format!(
+                                    "{}  ·  {}/{} inst ({} B)  ·  CRC 0x{:04X}",
+                                    self.plc_target().mcu_name(),
+                                    inst_count,
+                                    target_max_inst,
+                                    bc.payload_size_bytes(),
+                                    prog_crc16
+                                );
+                                let details_tooltip = format!(
+                                    "Target: {} Micro-VM\nSerial Frame: {} bytes (SOF 0xAA, CRC8 0x{:02X})\nProgram CRC16: 0x{:04X}\nMapped Symbols: {}",
+                                    self.plc_target().mcu_name(),
+                                    packet.len(),
+                                    crc8,
+                                    prog_crc16,
+                                    bc.memory_map.len()
+                                );
+                                ui.label(
+                                    RichText::new(summary)
+                                        .monospace()
+                                        .size(11.5)
+                                        .color(palette.text_primary),
+                                )
+                                .on_hover_text(details_tooltip);
+
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.label(
+                                            RichText::new(format!("{:.0}%", cap_percent))
+                                                .monospace()
+                                                .size(11.0)
+                                                .color(pct_color),
+                                        );
+                                    },
+                                );
+                            });
+
+                            ui.add_space(5.0);
+                            let (bar_rect, bar_resp) = ui.allocate_exact_size(
+                                egui::vec2(ui.available_width(), 4.0),
+                                egui::Sense::hover(),
                             );
+                            let painter = ui.painter();
+                            painter.rect_filled(bar_rect, 2.0, palette.canvas_bg);
+                            if fill_ratio > 0.0 {
+                                let fill_w = (bar_rect.width() * fill_ratio)
+                                    .max(2.0)
+                                    .min(bar_rect.width());
+                                let fill_rect = egui::Rect::from_min_size(
+                                    bar_rect.min,
+                                    egui::vec2(fill_w, bar_rect.height()),
+                                );
+                                painter.rect_filled(fill_rect, 2.0, bar_color);
+                            }
+                            bar_resp.on_hover_text(format!(
+                                "Capacity: {} / {} instructions ({:.1}%)",
+                                inst_count, target_max_inst, cap_percent
+                            ));
                         });
 
-                    // 5a. Compiler Report (Errors / Warnings) & Firmware Feature-Level v2 Check
+                    // 3. Status & Compiler / Firmware Alerts (Quiet when Idle, Clear when Active)
+                    if !self.update_plc_status.is_empty() {
+                        let (banner_bg, banner_stroke, banner_fg) = if self.update_plc_is_error {
+                            (
+                                egui::Color32::from_rgba_unmultiplied(231, 76, 60, 24),
+                                palette.accent_danger,
+                                palette.accent_danger,
+                            )
+                        } else {
+                            (
+                                egui::Color32::from_rgba_unmultiplied(39, 174, 96, 24),
+                                palette.accent_ok,
+                                palette.accent_ok,
+                            )
+                        };
+                        egui::Frame::NONE
+                            .fill(banner_bg)
+                            .stroke(egui::Stroke::new(1.0, banner_stroke))
+                            .corner_radius(egui::CornerRadius::same(6))
+                            .inner_margin(egui::Margin::symmetric(10, 6))
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.label(
+                                    RichText::new(&self.update_plc_status)
+                                        .monospace()
+                                        .size(11.0)
+                                        .color(banner_fg),
+                                );
+                            });
+                    }
+
                     if compile_report.has_messages() {
                         let is_err = !compile_report.is_ok();
                         let (rep_bg, rep_border) = if is_err {
                             (
-                                egui::Color32::from_rgba_unmultiplied(231, 76, 60, 28),
-                                egui::Color32::from_rgb(231, 76, 60),
+                                egui::Color32::from_rgba_unmultiplied(231, 76, 60, 24),
+                                palette.accent_danger,
                             )
                         } else {
                             (
-                                egui::Color32::from_rgba_unmultiplied(245, 158, 11, 28),
-                                egui::Color32::from_rgb(245, 158, 11),
+                                egui::Color32::from_rgba_unmultiplied(245, 158, 11, 24),
+                                palette.accent_warn,
                             )
                         };
                         egui::Frame::NONE
@@ -4784,26 +4813,18 @@ impl eframe::App for CanvasApp {
                                 ui.set_width(ui.available_width());
                                 for err in &compile_report.errors {
                                     ui.label(
-                                        RichText::new(format!("✖ Compile Error: {}", err))
+                                        RichText::new(format!("Error: {}", err))
                                             .monospace()
                                             .size(11.0)
-                                            .color(if palette.is_light() {
-                                                palette.accent_danger
-                                            } else {
-                                                egui::Color32::from_rgb(255, 118, 105)
-                                            }),
+                                            .color(palette.accent_danger),
                                     );
                                 }
                                 for warn in &compile_report.warnings {
                                     ui.label(
-                                        RichText::new(format!("⚠ Compile Warning: {}", warn))
+                                        RichText::new(format!("Warning: {}", warn))
                                             .monospace()
                                             .size(11.0)
-                                            .color(if palette.is_light() {
-                                                palette.accent_warn
-                                            } else {
-                                                egui::Color32::from_rgb(251, 191, 36)
-                                            }),
+                                            .color(palette.accent_warn),
                                     );
                                 }
                             });
@@ -4821,113 +4842,290 @@ impl eframe::App for CanvasApp {
                                 .map(|s| s.fw_feature_level.max(1))
                                 .unwrap_or(1);
                             egui::Frame::NONE
-                                .fill(egui::Color32::from_rgba_unmultiplied(245, 158, 11, 32))
-                                .stroke(egui::Stroke::new(
-                                    1.2,
-                                    egui::Color32::from_rgb(245, 158, 11),
-                                ))
+                                .fill(egui::Color32::from_rgba_unmultiplied(245, 158, 11, 24))
+                                .stroke(egui::Stroke::new(1.0, palette.accent_warn))
                                 .corner_radius(egui::CornerRadius::same(6))
                                 .inner_margin(egui::Margin::symmetric(10, 6))
                                 .show(ui, |ui| {
                                     ui.set_width(ui.available_width());
                                     ui.label(
                                         RichText::new(format!(
-                                            "⚠ Connected PLC firmware reports Feature Level v{} (< v2), but this program requires Feature Level v2 (PID / SCALE / LIMIT / BITWISE / SHIFT / UART / ADC).",
+                                            "Warning: Connected PLC firmware reports Feature Level v{} (< v2), but this program requires Feature Level v2 (PID / SCALE / LIMIT / BITWISE / SHIFT / UART / ADC).",
                                             fw_ver
                                         ))
-                                        .strong()
                                         .size(11.0)
-                                        .color(if palette.is_light() {
-                                            palette.accent_warn
-                                        } else {
-                                            egui::Color32::from_rgb(251, 191, 36)
-                                        }),
+                                        .color(palette.accent_warn),
                                     );
                                 });
                         }
                     }
 
-                    ui.add_space(3.0);
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new("💾 Flash Retention:")
-                                .strong()
-                                .size(11.0)
-                                .color(palette.accent_heading),
-                        );
-                        ui.label(
-                            RichText::new("RETAIN Area (M64..M95 / %MW96..%MW127 @ Sector 0x1FF000)")
-                                .size(11.0)
-                                .color(palette.accent_ok),
-                        );
-
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let clear_retain_btn = egui::Button::new(
-                                RichText::new("🗑 Clear RETAIN")
-                                    .size(11.0)
-                                    .strong()
-                                    .color(palette.accent_danger),
+                    // 4. Collapsible "Details / Inspector" (Collapsed by Default)
+                    egui::CollapsingHeader::new(
+                        RichText::new("Details / Inspector")
+                            .small()
+                            .strong()
+                            .color(palette.rung_text_dim),
+                    )
+                    .id_salt("update_plc_inspector_collapse")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let tab0_btn = egui::Button::new(
+                                RichText::new("Bytecode").strong().size(11.0),
                             )
+                            .selected(self.update_plc_tab == 0)
                             .corner_radius(egui::CornerRadius::same(5));
-                            if ui
-                                .add(clear_retain_btn)
-                                .on_hover_text(
-                                    "Zero M64..M95 and D96..D127 in RAM and erase the RETAIN Flash sector (CMD 0x09)",
-                                )
-                                .clicked()
-                            {
-                                self.confirm_retain_action =
-                                    Some(my_canvas_core::PlcSerialCommand::PersistClear);
+                            if ui.add(tab0_btn).clicked() {
+                                self.update_plc_tab = 0;
                             }
 
-                            let save_retain_btn = egui::Button::new(
-                                RichText::new("💾 Save RETAIN to Flash")
-                                    .size(11.0)
-                                    .strong()
-                                    .color(palette.accent_ok),
+                            let tab1_btn = egui::Button::new(
+                                RichText::new("Memory Map").strong().size(11.0),
                             )
+                            .selected(self.update_plc_tab == 1)
                             .corner_radius(egui::CornerRadius::same(5));
-                            if ui
-                                .add(save_retain_btn)
-                                .on_hover_text(
-                                    "Save current M64..M95 and D96..D127 values to non-volatile Flash sector 0x1FF000 (CMD 0x08)",
-                                )
-                                .clicked()
-                            {
-                                self.confirm_retain_action =
-                                    Some(my_canvas_core::PlcSerialCommand::PersistSave);
+                            if ui.add(tab1_btn).clicked() {
+                                self.update_plc_tab = 1;
                             }
+
+                            let tab2_btn = egui::Button::new(
+                                RichText::new("I/O Pins").strong().size(11.0),
+                            )
+                            .selected(self.update_plc_tab == 2)
+                            .corner_radius(egui::CornerRadius::same(5));
+                            if ui.add(tab2_btn).clicked() {
+                                self.update_plc_tab = 2;
+                            }
+
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui
+                                        .small_button("Save .bin")
+                                        .on_hover_text(
+                                            "Export raw 32-bit bytecode binary file (.bin)",
+                                        )
+                                        .clicked()
+                                    {
+                                        let mut dialog = rfd::FileDialog::new()
+                                            .set_directory(self.dialog_directory())
+                                            .add_filter(
+                                                "Micro-VM Bytecode Binary (*.bin)",
+                                                &["bin"],
+                                            );
+                                        if let Some(ref current_path) = self.doc.file_path {
+                                            let path = std::path::Path::new(current_path);
+                                            if let Some(stem) =
+                                                path.file_stem().and_then(|s| s.to_str())
+                                            {
+                                                dialog =
+                                                    dialog.set_file_name(format!("{}.bin", stem));
+                                            }
+                                        }
+                                        if let Some(path) = dialog.save_file() {
+                                            self.set_last_folder_from_path(&path);
+                                            let raw = bc.to_raw_bytes();
+                                            if std::fs::write(&path, &raw).is_ok() {
+                                                self.update_plc_is_error = false;
+                                                self.update_plc_status = format!(
+                                                    "Saved {} bytes raw bytecode to {}",
+                                                    raw.len(),
+                                                    path.display()
+                                                );
+                                            }
+                                        }
+                                    }
+                                    if ui
+                                        .small_button("Copy Hex")
+                                        .on_hover_text(
+                                            "Copy raw serial frame hex string to clipboard",
+                                        )
+                                        .clicked()
+                                    {
+                                        ui.ctx().copy_text(bc.to_packet_hex_string(
+                                            my_canvas_core::PlcSerialCommand::DownloadProgram,
+                                        ));
+                                        self.update_plc_is_error = false;
+                                        self.update_plc_status = format!(
+                                            "Copied {} bytes serial packet hex to clipboard",
+                                            packet.len()
+                                        );
+                                    }
+                                },
+                            );
                         });
+
+                        egui::Frame::group(ui.style())
+                            .fill(palette.card_bg)
+                            .stroke(egui::Stroke::new(1.0, palette.card_border))
+                            .corner_radius(egui::CornerRadius::same(6))
+                            .inner_margin(egui::Margin::symmetric(10, 8))
+                            .show(ui, |ui| match self.update_plc_tab {
+                                0 => {
+                                    let disasm = bc.to_disassembly_text();
+                                    egui::ScrollArea::both()
+                                        .id_salt("bytecode_disasm_scroll")
+                                        .max_height(210.0)
+                                        .show(ui, |ui| {
+                                            let mut text = disasm;
+                                            ui.add(
+                                                egui::TextEdit::multiline(&mut text)
+                                                    .code_editor()
+                                                    .desired_width(f32::INFINITY),
+                                            );
+                                        });
+                                }
+                                1 => {
+                                    ui.label(
+                                        RichText::new(
+                                            "Unified Memory Space: X[0x00..0x1F] | Y[0x20..0x3F] | M[0x40..0xBF] | T[0xC0..0xDF] | C[0xE0..0xFF]",
+                                        )
+                                        .monospace()
+                                        .size(11.0)
+                                        .color(palette.accent_heading),
+                                    );
+                                    ui.add_space(4.0);
+                                    egui::ScrollArea::vertical()
+                                        .id_salt("unified_mem_map_scroll")
+                                        .max_height(200.0)
+                                        .show(ui, |ui| {
+                                            egui::Grid::new("unified_mem_map_grid")
+                                                .striped(true)
+                                                .num_columns(6)
+                                                .spacing([14.0, 6.0])
+                                                .show(ui, |ui| {
+                                                    ui.strong("Unified Addr");
+                                                    ui.strong("Canonical");
+                                                    ui.strong("IEC 61131-3");
+                                                    ui.strong("Symbol");
+                                                    ui.strong("MCU Pin");
+                                                    ui.strong("VM Memory Region");
+                                                    ui.end_row();
+
+                                                    for entry in &bc.memory_map {
+                                                        ui.monospace(format!(
+                                                            "0x{:02X} ({:3})",
+                                                            entry.addr, entry.addr
+                                                        ));
+                                                        ui.monospace(&entry.canonical_name);
+                                                        ui.monospace(&entry.iec_address);
+                                                        ui.label(&entry.symbol);
+                                                        ui.monospace(if entry.hw_pin.is_empty() {
+                                                            "-"
+                                                        } else {
+                                                            &entry.hw_pin
+                                                        });
+                                                        ui.weak(entry.region.space_label());
+                                                        ui.end_row();
+                                                    }
+                                                });
+                                        });
+                                }
+                                _ => {
+                                    egui::ScrollArea::vertical()
+                                        .id_salt("update_plc_io_cfg_scroll")
+                                        .max_height(210.0)
+                                        .show(ui, |ui| {
+                                            if self
+                                                .render_rp2040_io_pin_config_ui(ui, "update_plc")
+                                            {
+                                                settings_changed = true;
+                                            }
+                                        });
+                                }
+                            });
                     });
 
-                    if let Some(pending_cmd) = self.confirm_retain_action {
-                        let is_clear =
-                            pending_cmd == my_canvas_core::PlcSerialCommand::PersistClear;
-                        let prompt_txt = if is_clear {
-                            "⚠ Confirm Clear RETAIN? This zeroes M64..M95 & %MW96..%MW127 in RAM and erases Flash sector 0x1FF000 (CMD 0x09)."
-                        } else {
-                            "💾 Confirm Save RETAIN to Flash? This writes current M64..M95 & %MW96..%MW127 to Flash sector 0x1FF000 (CMD 0x08)."
-                        };
-                        egui::Frame::NONE
-                            .fill(egui::Color32::from_rgba_unmultiplied(245, 158, 11, 28))
-                            .stroke(egui::Stroke::new(
-                                1.0,
-                                if is_clear {
-                                    palette.accent_danger
-                                } else {
-                                    palette.accent_warn
-                                },
-                            ))
-                            .corner_radius(egui::CornerRadius::same(6))
-                            .inner_margin(egui::Margin::symmetric(10, 6))
-                            .show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.label(
-                                        RichText::new(prompt_txt)
+                    // 5. Collapsible "Advanced / Flash RETAIN" (Collapsed by Default)
+                    egui::CollapsingHeader::new(
+                        RichText::new("Advanced / Flash RETAIN")
+                            .small()
+                            .strong()
+                            .color(palette.rung_text_dim),
+                    )
+                    .id_salt("update_plc_retain_collapse")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new("M64..M95 / %MW96..%MW127")
+                                    .monospace()
+                                    .size(11.0)
+                                    .color(palette.rung_text_dim),
+                            );
+
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    let clear_retain_btn = egui::Button::new(
+                                        RichText::new("Clear RETAIN")
                                             .size(11.0)
-                                            .strong()
-                                            .color(palette.text_primary),
-                                    );
+                                            .color(palette.accent_danger),
+                                    )
+                                    .corner_radius(egui::CornerRadius::same(5));
+                                    if ui
+                                        .add(clear_retain_btn)
+                                        .on_hover_text(
+                                            "Zero M64..M95 and D96..D127 in RAM and erase the RETAIN Flash sector (CMD 0x09)",
+                                        )
+                                        .clicked()
+                                    {
+                                        self.confirm_retain_action = Some(
+                                            my_canvas_core::PlcSerialCommand::PersistClear,
+                                        );
+                                    }
+
+                                    let save_retain_btn = egui::Button::new(
+                                        RichText::new("Save RETAIN")
+                                            .size(11.0)
+                                            .color(palette.accent_ok),
+                                    )
+                                    .corner_radius(egui::CornerRadius::same(5));
+                                    if ui
+                                        .add(save_retain_btn)
+                                        .on_hover_text(
+                                            "Save current M64..M95 and D96..D127 values to non-volatile Flash sector 0x1FF000 (CMD 0x08)",
+                                        )
+                                        .clicked()
+                                    {
+                                        self.confirm_retain_action = Some(
+                                            my_canvas_core::PlcSerialCommand::PersistSave,
+                                        );
+                                    }
+                                },
+                            );
+                        });
+
+                        if let Some(pending_cmd) = self.confirm_retain_action {
+                            let is_clear =
+                                pending_cmd == my_canvas_core::PlcSerialCommand::PersistClear;
+                            let prompt_txt = if is_clear {
+                                "Confirm Clear RETAIN? Zeroes M64..M95 & %MW96..%MW127 in RAM and erases Flash sector 0x1FF000 (CMD 0x09)."
+                            } else {
+                                "Confirm Save RETAIN? Writes current M64..M95 & %MW96..%MW127 to Flash sector 0x1FF000 (CMD 0x08)."
+                            };
+                            egui::Frame::NONE
+                                .fill(egui::Color32::from_rgba_unmultiplied(245, 158, 11, 24))
+                                .stroke(egui::Stroke::new(
+                                    1.0,
+                                    if is_clear {
+                                        palette.accent_danger
+                                    } else {
+                                        palette.accent_warn
+                                    },
+                                ))
+                                .corner_radius(egui::CornerRadius::same(6))
+                                .inner_margin(egui::Margin::symmetric(10, 6))
+                                .show(ui, |ui| {
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.label(
+                                            RichText::new(prompt_txt)
+                                                .size(11.0)
+                                                .color(palette.text_primary),
+                                        );
+                                    });
+                                    ui.add_space(4.0);
                                     ui.with_layout(
                                         egui::Layout::right_to_left(egui::Align::Center),
                                         |ui| {
@@ -4935,7 +5133,7 @@ impl eframe::App for CanvasApp {
                                                 self.confirm_retain_action = None;
                                             }
                                             let confirm_btn = egui::Button::new(
-                                                RichText::new("✔ Confirm")
+                                                RichText::new("Confirm")
                                                     .size(11.0)
                                                     .strong()
                                                     .color(egui::Color32::WHITE),
@@ -4952,100 +5150,65 @@ impl eframe::App for CanvasApp {
                                         },
                                     );
                                 });
-                            });
-                    }
-
-                    ui.add_space(2.0);
-
-                    // 6. Primary Bottom Action Bar (Unified PLC Controls)
-                    ui.horizontal(|ui| {
-                        let upload_btn = egui::Button::new(
-                            RichText::new("⚡ Upload to PLC")
-                                .strong()
-                                .size(12.5)
-                                .color(egui::Color32::WHITE),
-                        )
-                        .fill(egui::Color32::from_rgb(24, 130, 90))
-                        .corner_radius(egui::CornerRadius::same(6))
-                        .min_size(egui::vec2(160.0, 32.0));
-
-                        let upload_hover = if compile_report.is_ok() {
-                            "Transmit 32-Bit Bytecode Packet Frame (CMD 0x01) via USB Serial and auto-start PLC execution"
-                        } else {
-                            "Upload disabled: resolve compile errors above before downloading to PLC"
-                        };
-
-                        if ui
-                            .add_enabled(compile_report.is_ok(), upload_btn)
-                            .on_hover_text(upload_hover)
-                            .clicked()
-                        {
-                            trigger_cmd = Some(my_canvas_core::PlcSerialCommand::DownloadProgram);
                         }
+                    });
 
+                    // 6. Pro IDE Bottom Action Bar
+                    ui.separator();
+                    ui.horizontal(|ui| {
                         let read_plc_btn = egui::Button::new(
-                            RichText::new("📥 Read from PLC (Decompile)")
-                                .strong()
-                                .size(12.5)
-                                .color(egui::Color32::WHITE),
+                            RichText::new("Read PLC").size(11.5),
                         )
-                        .fill(egui::Color32::from_rgb(41, 128, 185))
-                        .corner_radius(egui::CornerRadius::same(6))
-                        .min_size(egui::vec2(195.0, 32.0));
-
+                        .corner_radius(egui::CornerRadius::same(5))
+                        .min_size(egui::vec2(74.0, 28.0));
                         if ui
                             .add(read_plc_btn)
-                            .on_hover_text(
-                                "Request Bytecode from connected PLC (CMD 0x04) and decompile it back into Ladder Diagram networks on Canvas",
-                            )
+                            .on_hover_text("Read bytecode from PLC and decompile to Ladder")
                             .clicked()
                         {
                             trigger_cmd = Some(my_canvas_core::PlcSerialCommand::UploadProgram);
                         }
 
-                        ui.separator();
-
-                        let run_action_btn = egui::Button::new(
-                            RichText::new("▶ RUN PLC")
-                                .strong()
-                                .size(12.5)
-                                .color(egui::Color32::WHITE),
+                        let mut run_btn = egui::Button::new(
+                            RichText::new("RUN")
+                                .size(11.5)
+                                .color(if self.plc_remote_running {
+                                    palette.accent_ok
+                                } else {
+                                    palette.text_primary
+                                }),
                         )
-                        .fill(if self.plc_remote_running {
-                            egui::Color32::from_rgb(39, 174, 96)
-                        } else {
-                            egui::Color32::from_rgb(45, 95, 65)
-                        })
-                        .corner_radius(egui::CornerRadius::same(6))
-                        .min_size(egui::vec2(96.0, 32.0));
-
+                        .corner_radius(egui::CornerRadius::same(5))
+                        .min_size(egui::vec2(52.0, 28.0));
+                        if self.plc_remote_running {
+                            run_btn = run_btn.stroke(egui::Stroke::new(1.0, palette.accent_ok));
+                        }
                         if ui
-                            .add(run_action_btn)
-                            .on_hover_text("Start 1ms deterministic PLC scan execution on MCU (CMD 0x02, Payload 0x01)")
+                            .add(run_btn)
+                            .on_hover_text("Start PLC scan execution")
                             .clicked()
                         {
                             trigger_cmd = Some(my_canvas_core::PlcSerialCommand::RunStopControl);
                         }
 
-                        let stop_action_btn = egui::Button::new(
-                            RichText::new("⏹ STOP PLC")
-                                .strong()
-                                .size(12.5)
-                                .color(egui::Color32::WHITE),
+                        let mut stop_btn = egui::Button::new(
+                            RichText::new("STOP")
+                                .size(11.5)
+                                .color(if !self.plc_remote_running {
+                                    palette.accent_danger
+                                } else {
+                                    palette.text_primary
+                                }),
                         )
-                        .fill(if !self.plc_remote_running {
-                            egui::Color32::from_rgb(192, 57, 43)
-                        } else {
-                            egui::Color32::from_rgb(120, 50, 48)
-                        })
-                        .corner_radius(egui::CornerRadius::same(6))
-                        .min_size(egui::vec2(96.0, 32.0));
-
+                        .corner_radius(egui::CornerRadius::same(5))
+                        .min_size(egui::vec2(56.0, 28.0));
+                        if !self.plc_remote_running {
+                            stop_btn =
+                                stop_btn.stroke(egui::Stroke::new(1.0, palette.accent_danger));
+                        }
                         if ui
-                            .add(stop_action_btn)
-                            .on_hover_text(
-                                "Halt PLC scan cycle and turn off all physical outputs (CMD 0x02, Payload 0x00)",
-                            )
+                            .add(stop_btn)
+                            .on_hover_text("Stop PLC scan and turn off physical outputs")
                             .clicked()
                         {
                             self.plc_remote_running = false;
@@ -5055,11 +5218,36 @@ impl eframe::App for CanvasApp {
                         }
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let close_btn = egui::Button::new(
-                                RichText::new("Close").size(12.5),
+                            let upload_btn = egui::Button::new(
+                                RichText::new("Upload to PLC")
+                                    .strong()
+                                    .size(12.0)
+                                    .color(egui::Color32::WHITE),
                             )
-                            .corner_radius(egui::CornerRadius::same(6))
-                            .min_size(egui::vec2(80.0, 32.0));
+                            .fill(egui::Color32::from_rgb(24, 130, 90))
+                            .corner_radius(egui::CornerRadius::same(5))
+                            .min_size(egui::vec2(124.0, 28.0));
+
+                            let upload_hover = if compile_report.is_ok() {
+                                "Transmit 32-bit bytecode packet (CMD 0x01) via USB Serial and start PLC execution"
+                            } else {
+                                "Upload disabled: resolve compile errors above before downloading to PLC"
+                            };
+
+                            if ui
+                                .add_enabled(compile_report.is_ok(), upload_btn)
+                                .on_hover_text(upload_hover)
+                                .clicked()
+                            {
+                                trigger_cmd =
+                                    Some(my_canvas_core::PlcSerialCommand::DownloadProgram);
+                            }
+
+                            let close_btn = egui::Button::new(
+                                RichText::new("Close").size(12.0),
+                            )
+                            .corner_radius(egui::CornerRadius::same(5))
+                            .min_size(egui::vec2(72.0, 28.0));
                             if ui.add(close_btn).clicked() {
                                 close_update_plc = true;
                             }
@@ -5139,6 +5327,9 @@ mod tests {
                     rp2040_io_flags: default_rp2040_io_flags(),
                     rp2040_rs485_de_re_pin: default_rp2040_rs485_de_re_pin(),
                     rp2040_rs485_config: default_rp2040_rs485_config(),
+                    factory_io_host: default_factory_io_host(),
+                    factory_io_port: default_factory_io_port(),
+                    factory_io_unit_id: default_factory_io_unit_id(),
                 };
                 let json = serde_json::to_string_pretty(&settings).unwrap();
                 let loaded: AppSettings = serde_json::from_str(&json).unwrap();

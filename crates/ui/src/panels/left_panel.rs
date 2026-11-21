@@ -13,9 +13,9 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
 
     if !is_edit_mode {
         let (mode_title, mode_col) = match app.work_mode {
-            WorkMode::Simulator => ("💻 Simulator Mode", palette.accent_ok),
-            WorkMode::OnlineDebug => ("🔌 Online PLC Debug", palette.accent_warn),
-            WorkMode::Edit => ("✏ Edit Mode", palette.accent_heading),
+            WorkMode::Simulator => ("Simulator Mode", palette.accent_ok),
+            WorkMode::OnlineDebug => ("Online PLC Debug", palette.accent_warn),
+            WorkMode::Edit => ("Edit Mode", palette.accent_heading),
         };
         egui::Frame::new()
             .fill(mode_col.gamma_multiply(0.14))
@@ -26,7 +26,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 ui.set_width(ui.available_width());
                 ui.label(RichText::new(mode_title).color(mode_col).strong().size(11.5));
                 ui.label(
-                    RichText::new("🔒 Circuit editing is locked while testing.")
+                    RichText::new("Circuit editing is locked while testing.")
                         .size(10.0)
                         .color(palette.text_primary),
                 );
@@ -35,7 +35,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     .add_sized(
                         [ui.available_width(), 24.0],
                         egui::Button::new(
-                            RichText::new("✏ Switch to Edit Mode")
+                            RichText::new("Switch to Edit Mode")
                                 .strong()
                                 .size(11.0)
                                 .color(Color32::WHITE),
@@ -244,7 +244,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
 
         // --- Quick Access Insert Bar ---
         ui.label(
-            RichText::new("★ Quick Insert")
+            RichText::new("Quick Insert")
                 .size(11.0)
                 .color(palette.accent_heading)
                 .strong(),
@@ -331,7 +331,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
         // --- Search / Filter bar ---
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            ui.label(RichText::new("🔍").size(10.5).color(palette.rung_text_dim));
+            ui.label(RichText::new("Find:").size(10.5).color(palette.rung_text_dim));
             let edit_w = (ui.available_width()
                 - if !app.component_filter.is_empty() {
                     22.0
@@ -345,7 +345,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     .desired_width(edit_w),
             );
             if !app.component_filter.is_empty() {
-                if ui.small_button("✖").clicked() {
+                if ui.small_button("×").clicked() {
                     app.component_filter.clear();
                 }
             }
@@ -391,12 +391,12 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 } else {
                     // 1. IEC Bit Logic
                     egui::CollapsingHeader::new(
-                        RichText::new("⚡ IEC Bit Logic")
+                        RichText::new("IEC Bit Logic")
                             .size(11.5)
                             .strong()
                             .color(palette.accent_heading),
                     )
-                    .default_open(true)
+                    .default_open(false)
                     .show(ui, |ui| {
                         ui.spacing_mut().item_spacing.y = 2.0;
                         component_accordion_item(
@@ -562,11 +562,21 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                             palette.accent_danger,
                             palette,
                         );
+                        component_accordion_item(
+                            ui,
+                            app,
+                            Some(VectorIcon::FunctionBlock),
+                            "ALT",
+                            "ALT (Toggle / Flip-Flop)",
+                            ActiveTool::Toggle,
+                            palette.accent_warn,
+                            palette,
+                        );
                     });
 
                     // 2. IEC Timers & Counters
                     egui::CollapsingHeader::new(
-                        RichText::new("⏱ IEC Timers & Counters")
+                        RichText::new("IEC Timers & Counters")
                             .size(11.5)
                             .strong()
                             .color(palette.accent_ok),
@@ -639,7 +649,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
 
                     // 3. IEC Edge Triggers
                     egui::CollapsingHeader::new(
-                        RichText::new("⚡ IEC Edge Triggers")
+                        RichText::new("IEC Edge Triggers")
                             .size(11.5)
                             .strong()
                             .color(palette.accent_ok),
@@ -671,7 +681,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
 
                     // 4. IEC Math & Compare
                     egui::CollapsingHeader::new(
-                        RichText::new("📐 IEC Math & Compare")
+                        RichText::new("IEC Math & Compare")
                             .size(11.5)
                             .strong()
                             .color(palette.accent_warn),
@@ -749,11 +759,41 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                             palette.accent_heading,
                             palette,
                         );
+                        component_accordion_item(
+                            ui,
+                            app,
+                            Some(VectorIcon::FunctionBlock),
+                            "RNG",
+                            "IN_RANGE (Window Compare)",
+                            ActiveTool::InRange,
+                            palette.accent_ok,
+                            palette,
+                        );
+                        component_accordion_item(
+                            ui,
+                            app,
+                            Some(VectorIcon::FunctionBlock),
+                            "SEL",
+                            "SEL (Binary Selector)",
+                            ActiveTool::Sel,
+                            palette.accent_heading,
+                            palette,
+                        );
+                        component_accordion_item(
+                            ui,
+                            app,
+                            Some(VectorIcon::FunctionBlock),
+                            "±1",
+                            "INC / DEC (1-Shot Step)",
+                            ActiveTool::IncDec,
+                            palette.accent_warn,
+                            palette,
+                        );
                     });
 
                     // 5. IEC Program Flow
                     egui::CollapsingHeader::new(
-                        RichText::new("🔀 IEC Program Flow")
+                        RichText::new("IEC Program Flow")
                             .size(11.5)
                             .strong()
                             .color(palette.accent_heading),
@@ -781,11 +821,21 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                             palette.accent_ok,
                             palette,
                         );
+                        component_accordion_item(
+                            ui,
+                            app,
+                            Some(VectorIcon::FunctionBlock),
+                            "RET",
+                            "RET (Conditional Return)",
+                            ActiveTool::Return,
+                            palette.accent_danger,
+                            palette,
+                        );
                     });
 
                     // 6. Process Control
                     egui::CollapsingHeader::new(
-                        RichText::new("🎛 Process Control")
+                        RichText::new("Process Control")
                             .size(11.5)
                             .strong()
                             .color(palette.accent_ok),
@@ -833,11 +883,21 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                             palette.accent_heading,
                             palette,
                         );
+                        component_accordion_item(
+                            ui,
+                            app,
+                            Some(VectorIcon::FunctionBlock),
+                            "PWM",
+                            "PWM Output (%QW)",
+                            ActiveTool::Pwm,
+                            palette.accent_ok,
+                            palette,
+                        );
                     });
 
                     // 7. Bitwise & Shift
                     egui::CollapsingHeader::new(
-                        RichText::new("🔣 Bitwise & Shift")
+                        RichText::new("Bitwise & Shift")
                             .size(11.5)
                             .strong()
                             .color(palette.accent_warn),
@@ -950,7 +1010,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
 
                     // 8. Communication & Serial
                     egui::CollapsingHeader::new(
-                        RichText::new("📡 Communication")
+                        RichText::new("Communication")
                             .size(11.5)
                             .strong()
                             .color(palette.accent_heading),
@@ -975,6 +1035,26 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                             "RX",
                             "UART Recv (RX)",
                             ActiveTool::UartRecv,
+                            palette.accent_ok,
+                            palette,
+                        );
+                        component_accordion_item(
+                            ui,
+                            app,
+                            Some(VectorIcon::SerialComm),
+                            "MB",
+                            "Modbus Master (RS-485)",
+                            ActiveTool::MbMaster,
+                            palette.accent_warn,
+                            palette,
+                        );
+                        component_accordion_item(
+                            ui,
+                            app,
+                            Some(VectorIcon::SerialComm),
+                            "MBS",
+                            "Modbus Slave (RS-485)",
+                            ActiveTool::MbSlave,
                             palette.accent_ok,
                             palette,
                         );
@@ -1730,5 +1810,69 @@ const ALL_COMPONENTS: &[ComponentDef] = &[
         tool: ActiveTool::UartRecv,
         category: "Communication",
         accent_kind: 0,
+    },
+    ComponentDef {
+        icon: Some(VectorIcon::SerialComm),
+        badge: "MB",
+        name: "Modbus Master (RS-485)",
+        tool: ActiveTool::MbMaster,
+        category: "Communication",
+        accent_kind: 3,
+    },
+    ComponentDef {
+        icon: Some(VectorIcon::SerialComm),
+        badge: "MBS",
+        name: "Modbus Slave (RS-485)",
+        tool: ActiveTool::MbSlave,
+        category: "Communication",
+        accent_kind: 0,
+    },
+    ComponentDef {
+        icon: Some(VectorIcon::FunctionBlock),
+        badge: "PWM",
+        name: "PWM Output (%QW)",
+        tool: ActiveTool::Pwm,
+        category: "Process Control",
+        accent_kind: 0,
+    },
+    ComponentDef {
+        icon: Some(VectorIcon::FunctionBlock),
+        badge: "SEL",
+        name: "SEL (Binary Selector)",
+        tool: ActiveTool::Sel,
+        category: "Math & Compare",
+        accent_kind: 2,
+    },
+    ComponentDef {
+        icon: Some(VectorIcon::FunctionBlock),
+        badge: "RNG",
+        name: "IN_RANGE (Window Compare)",
+        tool: ActiveTool::InRange,
+        category: "Math & Compare",
+        accent_kind: 0,
+    },
+    ComponentDef {
+        icon: Some(VectorIcon::FunctionBlock),
+        badge: "ALT",
+        name: "ALT (Toggle / Flip-Flop)",
+        tool: ActiveTool::Toggle,
+        category: "Bit Logic",
+        accent_kind: 3,
+    },
+    ComponentDef {
+        icon: Some(VectorIcon::FunctionBlock),
+        badge: "±1",
+        name: "INC / DEC (1-Shot Step)",
+        tool: ActiveTool::IncDec,
+        category: "Math & Compare",
+        accent_kind: 3,
+    },
+    ComponentDef {
+        icon: Some(VectorIcon::FunctionBlock),
+        badge: "RET",
+        name: "RET (Conditional Return)",
+        tool: ActiveTool::Return,
+        category: "Program Flow",
+        accent_kind: 1,
     },
 ];

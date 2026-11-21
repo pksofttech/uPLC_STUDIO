@@ -1,14 +1,18 @@
 use crate::app::{CanvasApp, WorkMode};
 use crate::icons::{modern_tool_button, paint_icon, VectorIcon};
-use crate::theme::{AppTheme, ThemePalette};
+use crate::target::PlcTarget;
+use crate::theme::ThemePalette;
 use crate::tools::ActiveTool;
 use egui::{Align, Align2, Color32, CornerRadius, FontId, Layout, Rect, Stroke, StrokeKind, Ui};
-use my_canvas_core::SchematicStyle;
 
 /// Uniform CAD toolbar control height (in logical pixels)
 const CAD_BTN_HEIGHT: f32 = 26.0;
 /// Square icon-only CAD button width (26x26)
 const CAD_ICON_BTN_WIDTH: f32 = 26.0;
+/// Minimum horizontal gap between the 3 toolbar zones (Left | Center | Right)
+const ZONE_MIN_GAP: f32 = 8.0;
+/// Horizontal gap between Group 2 and Group 3 inside the Center zone
+const CENTER_GROUP_GAP: f32 = 6.0;
 
 /// AutoCAD-style precision toolbar group container.
 /// Uses direct horizontal Frame allocation with `Align::Center` and uniform `interact_size.y`
@@ -167,23 +171,150 @@ fn cad_lcd_readout(ui: &mut Ui, text: &str, text_color: Color32, palette: ThemeP
     }
 }
 
+/// Compute exact width of a `cad_toolbar_group` given its item widths (including dividers).
+fn group_width(item_widths: &[f32]) -> f32 {
+    let inner: f32 = item_widths.iter().sum();
+    let gaps = item_widths.len().saturating_sub(1) as f32 * 3.0;
+    // 4px left + 4px right inner margin + 2px frame stroke
+    inner + gaps + 10.0
+}
+
 pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
     let palette = app.theme.palette();
     let avail_width = ui.available_width();
 
-    // 3-tier responsive breakpoints calibrated so groups never overflow or clip labels
-    let show_file_labels = avail_width >= 1460.0;
+    // 3-tier responsive breakpoints calibrated for the streamlined 3-zone toolbar
+    // Ensures zero horizontal scrolling at >= 1024px while keeping labels crisp on wide displays
+    let show_file_labels = avail_width >= 1380.0;
     let is_compact = avail_width < 1220.0;
-    let is_ultra_compact = avail_width < 980.0;
+    let is_ultra_compact = avail_width < 940.0;
+
+    // Pre-compute deterministic button widths for Center & Right zones so 3-zone spacing is exact
+    let (edit_lbl, edit_w) = if is_compact {
+        ("Edit", 56.0)
+    } else {
+        ("Edit Mode", 84.0)
+    };
+    let (sim_lbl, sim_w) = if is_compact {
+        ("Sim", 52.0)
+    } else {
+        ("Simulator", 84.0)
+    };
+    let (on_lbl, on_w) = if is_compact {
+        ("PLC", 52.0)
+    } else {
+        ("Online PLC", 90.0)
+    };
+    let group2_w = group_width(&[edit_w, sim_w, on_w]);
+
+    let is_hw_conn = app.is_hw_online_connected();
+    let is_matched = app
+        .online_program_match_info()
+        .map_or(true, |(m, _, _, _, _)| m);
+
+    let (plc_lbl, plc_w, plc_icon) = if app.work_mode == WorkMode::OnlineDebug
+        && !is_matched
+        && is_hw_conn
+    {
+        if is_compact {
+            ("Sync", 56.0, VectorIcon::SyncAlert)
+        } else {
+            ("Sync PLC", 80.0, VectorIcon::SyncAlert)
+        }
+    } else if is_compact {
+        ("Update", 64.0, VectorIcon::SerialComm)
+    } else {
+        ("Update PLC", 88.0, VectorIcon::SerialComm)
+    };
+
+    let (read_lbl, read_w) = if is_compact {
+        ("Read", 56.0)
+    } else {
+        ("Read PLC", 80.0)
+    };
+
+    let (run_lbl, run_w) = if is_compact {
+        ("RUN", 52.0)
+    } else {
+        ("RUN", 58.0)
+    };
+    let (stop_lbl, stop_w) = if is_compact {
+        ("STOP", 56.0)
+    } else {
+        ("STOP", 60.0)
+    };
+    let (step_lbl, step_w) = if is_compact {
+        ("", CAD_ICON_BTN_WIDTH)
+    } else {
+        ("Step", 52.0)
+    };
+    let (reset_lbl, reset_w) = if is_compact {
+        ("", CAD_ICON_BTN_WIDTH)
+    } else {
+        ("Reset", 56.0)
+    };
+
+    let group3_w = match app.work_mode {
+        WorkMode::Edit => {
+            if is_ultra_compact {
+                group_width(&[plc_w])
+            } else {
+                group_width(&[plc_w, read_w])
+            }
+        }
+        WorkMode::Simulator => {
+            if is_ultra_compact {
+                group_width(&[run_w, stop_w, step_w, reset_w, 3.0, 48.0])
+            } else {
+                group_width(&[run_w, stop_w, step_w, reset_w, 3.0, 48.0, 84.0])
+            }
+        }
+        WorkMode::OnlineDebug => {
+            if is_ultra_compact {
+                group_width(&[run_w, stop_w, step_w, 3.0, plc_w])
+            } else {
+                group_width(&[run_w, stop_w, step_w, 3.0, 84.0, plc_w])
+            }
+        }
+    };
+    let center_est_w = group2_w + CENTER_GROUP_GAP + group3_w;
+
+    // Right Zone controls
+    let target = app.plc_target();
+    let (mcu_lbl, mcu_w) = match target {
+        PlcTarget::Rp2040 => ("RP2040", 70.0),
+        PlcTarget::Stm32f103c6 => {
+            if is_compact {
+                ("STM32", 64.0)
+            } else {
+                ("STM32F103", 90.0)
+            }
+        }
+    };
+    let (code_lbl, code_w) = if is_compact {
+        ("", CAD_ICON_BTN_WIDTH)
+    } else {
+        ("Code", 54.0)
+    };
+    let (cfg_lbl, cfg_w) = if is_compact {
+        ("", CAD_ICON_BTN_WIDTH)
+    } else {
+        ("Config", 62.0)
+    };
+    let right_est_w = group_width(&[mcu_w, 3.0, code_w, 3.0, cfg_w]);
 
     egui::ScrollArea::horizontal()
         .id_salt("top_toolbar_scroll")
         .auto_shrink([false, false])
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
         .show(ui, |ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(6.0, 2.0);
+            ui.spacing_mut().item_spacing = egui::vec2(0.0, 2.0);
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                let row_start_x = ui.cursor().min.x;
+
                 // =========================================================================
-                // Group 1: Project & Cursor Tools (New, Open, Save | Undo, Redo | Select, Pan)
+                // LEFT ZONE — Group 1: Project, History & Cursor Tools
+                // (New, Open, Save + dirty dot | Undo, Redo | Select, Pan)
                 // =========================================================================
                 cad_toolbar_group(ui, palette, |ui| {
                     // New File
@@ -232,13 +363,18 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                         app.request_open_program();
                     }
 
-                    // Save File
+                    // Save File (with crisp 5px unsaved-changes dot indicator)
                     let (save_lbl, save_w) = if show_file_labels {
                         ("Save", 54.0)
                     } else {
                         ("", CAD_ICON_BTN_WIDTH)
                     };
-                    if modern_tool_button(
+                    let save_tooltip = if app.doc.is_dirty {
+                        "Save Program (Unsaved changes) [Ctrl+S]"
+                    } else {
+                        "Save Program [Ctrl+S]"
+                    };
+                    let save_resp = modern_tool_button(
                         ui,
                         Some(VectorIcon::SaveFile),
                         save_lbl,
@@ -249,9 +385,18 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                         save_w,
                         palette,
                     )
-                    .on_hover_text("Save Program [Ctrl+S]")
-                    .clicked()
-                    {
+                    .on_hover_text(save_tooltip);
+                    if app.doc.is_dirty && ui.is_rect_visible(save_resp.rect) {
+                        let dot_center =
+                            egui::pos2(save_resp.rect.max.x - 4.5, save_resp.rect.min.y + 4.5);
+                        ui.painter().circle(
+                            dot_center,
+                            2.5,
+                            palette.accent_warn,
+                            Stroke::new(1.0, palette.pill_bg),
+                        );
+                    }
+                    if save_resp.clicked() {
                         app.save_or_save_as();
                     }
 
@@ -368,21 +513,24 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     }
                 });
 
+                // Dynamic Left <-> Center spacer (centers Center zone between Left and Right)
+                let actual_left_w = ui.cursor().min.x - row_start_x;
+                let left_spacer =
+                    ((avail_width - actual_left_w - center_est_w - right_est_w) * 0.5)
+                        .max(ZONE_MIN_GAP);
+                ui.add_space(left_spacer);
+
                 // =========================================================================
-                // Group 2: 3-Way Operating Mode Switcher (Edit | Simulator | Online PLC)
+                // CENTER ZONE — Group 2: 3-Way Operating Mode Switcher
+                // (Edit | Simulator | Online PLC)
                 // =========================================================================
                 cad_toolbar_group(ui, palette, |ui| {
                     let cur_mode = app.work_mode;
 
                     // 1. Edit Mode Button
-                    let (edit_lbl, edit_w) = if is_compact {
-                        ("✏ Edit", 54.0)
-                    } else {
-                        ("✏ Edit Mode", 80.0)
-                    };
                     if cad_hero_button(
                         ui,
-                        None,
+                        Some(VectorIcon::EditPencil),
                         edit_lbl,
                         palette.accent_heading,
                         cur_mode == WorkMode::Edit,
@@ -399,14 +547,9 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     }
 
                     // 2. Simulator Mode Button
-                    let (sim_lbl, sim_w) = if is_compact {
-                        ("💻 Sim", 54.0)
-                    } else {
-                        ("💻 Simulator", 84.0)
-                    };
                     if cad_hero_button(
                         ui,
-                        None,
+                        Some(VectorIcon::MonitorSim),
                         sim_lbl,
                         palette.accent_ok,
                         cur_mode == WorkMode::Simulator,
@@ -423,10 +566,6 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     }
 
                     // 3. Online PLC Debug Mode Button
-                    let is_hw_conn = app.is_hw_online_connected();
-                    let is_matched = app
-                        .online_program_match_info()
-                        .map_or(true, |(m, _, _, _, _)| m);
                     let online_accent = if cur_mode == WorkMode::OnlineDebug {
                         if !is_hw_conn || !is_matched {
                             palette.accent_warn
@@ -436,14 +575,9 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     } else {
                         palette.accent_warn
                     };
-                    let (on_lbl, on_w) = if is_compact {
-                        ("🔌 PLC", 54.0)
-                    } else {
-                        ("🔌 Online PLC", 90.0)
-                    };
                     if cad_hero_button(
                         ui,
-                        None,
+                        Some(VectorIcon::PlugLink),
                         on_lbl,
                         online_accent,
                         cur_mode == WorkMode::OnlineDebug,
@@ -453,8 +587,8 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     )
                     .on_hover_text(format!(
                         "3. Hardware Online Debug Mode: Connect to physical {} PLC ({}) for live monitoring & Force I/O [F7 / Ctrl+M]",
-                        app.plc_target().mcu_name(),
-                        app.plc_target().link_description()
+                        target.mcu_name(),
+                        target.link_description()
                     ))
                     .clicked()
                     {
@@ -462,44 +596,17 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     }
                 });
 
+                ui.add_space(CENTER_GROUP_GAP);
+
                 // =========================================================================
-                // Group 3: Contextual Execution & PLC Controls (Adapts to active WorkMode)
+                // CENTER ZONE — Group 3: Contextual Execution & PLC Controls
                 // =========================================================================
                 cad_toolbar_group(ui, palette, |ui| match app.work_mode {
                     WorkMode::Edit => {
-                        // Quick Start Simulation button
-                        let (sim_run_lbl, sim_run_w) = if is_compact {
-                            ("Sim", 52.0)
-                        } else {
-                            ("Simulate", 74.0)
-                        };
-                        if cad_hero_button(
-                            ui,
-                            Some(VectorIcon::Play),
-                            sim_run_lbl,
-                            palette.accent_ok,
-                            false,
-                            true,
-                            sim_run_w,
-                            palette,
-                        )
-                        .on_hover_text("Start Local PC Simulation immediately [F5]")
-                        .clicked()
-                        {
-                            app.set_work_mode(WorkMode::Simulator);
-                        }
-
-                        toolbar_divider(ui, palette);
-
                         // Update / Download to PLC
-                        let (plc_lbl, plc_w) = if is_compact {
-                            ("Update", 64.0)
-                        } else {
-                            ("Update PLC", 88.0)
-                        };
                         if modern_tool_button(
                             ui,
-                            Some(VectorIcon::SerialComm),
+                            Some(plc_icon),
                             plc_lbl,
                             palette.accent_warn,
                             app.show_update_plc,
@@ -510,7 +617,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                         )
                         .on_hover_text(format!(
                             "Compile IL to 32-bit Micro-VM Bytecode & Download to {} PLC Flash",
-                            app.plc_target().mcu_name()
+                            target.mcu_name()
                         ))
                         .clicked()
                         {
@@ -519,14 +626,9 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
 
                         // Read / Upload from PLC
                         if !is_ultra_compact {
-                            let (read_lbl, read_w) = if is_compact {
-                                ("Read", 46.0)
-                            } else {
-                                ("📥 Read PLC", 76.0)
-                            };
                             if cad_hero_button(
                                 ui,
-                                None,
+                                Some(VectorIcon::UploadFromPlc),
                                 read_lbl,
                                 palette.accent_heading,
                                 false,
@@ -536,7 +638,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                             )
                             .on_hover_text(format!(
                                 "Read compiled bytecode from connected {} PLC and decompile into Ladder Diagram",
-                                app.plc_target().mcu_name()
+                                target.mcu_name()
                             ))
                             .clicked()
                             {
@@ -550,11 +652,6 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                         let is_step = app.doc.simulator.is_step();
 
                         // Distinct RUN Button (Green)
-                        let (run_lbl, run_w) = if is_compact {
-                            ("RUN", 52.0)
-                        } else {
-                            ("RUN", 58.0)
-                        };
                         if cad_hero_button(
                             ui,
                             Some(VectorIcon::Play),
@@ -578,11 +675,6 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                         }
 
                         // Distinct STOP Button (Red)
-                        let (stop_lbl, stop_w) = if is_compact {
-                            ("STOP", 54.0)
-                        } else {
-                            ("STOP", 60.0)
-                        };
                         if cad_hero_button(
                             ui,
                             Some(VectorIcon::Stop),
@@ -606,11 +698,6 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                         }
 
                         // Single Scan Step Button (Only enabled when not running continuously)
-                        let (step_lbl, step_w) = if is_compact {
-                            ("", CAD_ICON_BTN_WIDTH)
-                        } else {
-                            ("Step", 52.0)
-                        };
                         let can_step_sim = !is_running;
                         if modern_tool_button(
                             ui,
@@ -634,11 +721,6 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                         }
 
                         // Reset Simulation Button
-                        let (reset_lbl, reset_w) = if is_compact {
-                            ("", CAD_ICON_BTN_WIDTH)
-                        } else {
-                            ("Reset", 56.0)
-                        };
                         if modern_tool_button(
                             ui,
                             Some(VectorIcon::Reset),
@@ -650,7 +732,9 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                             reset_w,
                             palette,
                         )
-                        .on_hover_text("Reset Simulation & Clear All Coils/Timers/Counters [Shift+F5]")
+                        .on_hover_text(
+                            "Reset Simulation & Clear All Coils/Timers/Counters [Shift+F5]",
+                        )
                         .clicked()
                         {
                             app.doc.reset_simulation();
@@ -687,19 +771,14 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     }
 
                     WorkMode::OnlineDebug => {
-                        let is_hw_conn = app.is_hw_online_connected();
-                        let waiting_hover = format!("Waiting for {} connection ({})...", app.plc_target().mcu_name(), app.plc_target().link_description());
+                        let waiting_hover = format!(
+                            "Waiting for {} connection ({})...",
+                            target.mcu_name(),
+                            target.link_description()
+                        );
                         let is_running = is_hw_conn && app.plc_remote_running;
-                        let is_matched = app
-                            .online_program_match_info()
-                            .map_or(true, |(m, _, _, _, _)| m);
 
                         // Distinct Hardware RUN Button (Green)
-                        let (run_lbl, run_w) = if is_compact {
-                            ("RUN", 52.0)
-                        } else {
-                            ("RUN", 58.0)
-                        };
                         let run_active = is_hw_conn && is_running;
                         if cad_hero_button(
                             ui,
@@ -726,11 +805,6 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                         }
 
                         // Distinct Hardware STOP Button (Red)
-                        let (stop_lbl, stop_w) = if is_compact {
-                            ("STOP", 54.0)
-                        } else {
-                            ("STOP", 60.0)
-                        };
                         let stop_active = is_hw_conn && !is_running;
                         if cad_hero_button(
                             ui,
@@ -757,11 +831,6 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                         }
 
                         // Hardware Step Button (Only enabled when connected and STOPPED / not running)
-                        let (step_lbl, step_w) = if is_compact {
-                            ("", CAD_ICON_BTN_WIDTH)
-                        } else {
-                            ("Step", 52.0)
-                        };
                         let can_step_hw = is_hw_conn && !is_running;
                         if modern_tool_button(
                             ui,
@@ -807,21 +876,10 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                             cad_lcd_readout(ui, &time_text, text_color, palette);
                         }
 
-                        // Sync / Update PLC Button (Highlights when MISMATCH!)
-                        let (plc_lbl, plc_w) = if !is_matched && is_hw_conn {
-                            if is_compact {
-                                ("⚠ Sync", 58.0)
-                            } else {
-                                ("⚡ Sync PLC", 84.0)
-                            }
-                        } else if is_compact {
-                            ("Update", 64.0)
-                        } else {
-                            ("Update PLC", 88.0)
-                        };
+                        // Sync / Update PLC Button (Highlights with SyncAlert icon when MISMATCH!)
                         if modern_tool_button(
                             ui,
-                            Some(VectorIcon::SerialComm),
+                            Some(plc_icon),
                             plc_lbl,
                             palette.accent_warn,
                             app.show_update_plc || (!is_matched && is_hw_conn),
@@ -840,16 +898,50 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     }
                 });
 
+                // Dynamic Center <-> Right spacer (pins Right zone flush right, never overlapping)
+                let used_so_far = ui.cursor().min.x - row_start_x;
+                let right_spacer = (avail_width - used_so_far - right_est_w).max(ZONE_MIN_GAP);
+                ui.add_space(right_spacer);
+
                 // =========================================================================
-                // Group 4: View & Setup (Code Export, Schematic Style, Theme, Config)
+                // RIGHT ZONE — Group 4: Target MCU Badge, Code Export & Hardware Config
                 // =========================================================================
                 cad_toolbar_group(ui, palette, |ui| {
-                    // IEC 61131-3 IL Code Preview & Export
-                    let (code_lbl, code_w) = if is_compact {
-                        ("", CAD_ICON_BTN_WIDTH)
+                    // Clickable Target MCU Badge
+                    let mcu_accent = if is_hw_conn {
+                        palette.accent_ok
                     } else {
-                        ("Code", 54.0)
+                        palette.accent_heading
                     };
+                    if modern_tool_button(
+                        ui,
+                        Some(VectorIcon::CpuChip),
+                        mcu_lbl,
+                        mcu_accent,
+                        is_hw_conn,
+                        true,
+                        false,
+                        mcu_w,
+                        palette,
+                    )
+                    .on_hover_text(format!(
+                        "Target MCU: {} ({})\nClick to open Hardware & I/O Configuration",
+                        target.mcu_name(),
+                        target.link_description()
+                    ))
+                    .clicked()
+                    {
+                        if app.show_io_config && app.settings_tab == 1 {
+                            app.show_io_config = false;
+                        } else {
+                            app.settings_tab = 1;
+                            app.show_io_config = true;
+                        }
+                    }
+
+                    toolbar_divider(ui, palette);
+
+                    // IEC 61131-3 IL Code Preview & Export
                     if modern_tool_button(
                         ui,
                         Some(VectorIcon::ExportCode),
@@ -869,61 +961,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
 
                     toolbar_divider(ui, palette);
 
-                    // Schematic Style Selector
-                    let style_selected_text = if is_compact {
-                        match app.doc.schematic_style {
-                            SchematicStyle::IecStandard => "IEC",
-                            SchematicStyle::JicNema => "JIC",
-                            SchematicStyle::DinEuropean => "DIN",
-                            SchematicStyle::PushBtnPilot => "Panel",
-                        }
-                    } else {
-                        app.doc.schematic_style.short_name()
-                    };
-                    egui::ComboBox::from_id_salt("toolbar_schematic_style_combo")
-                        .selected_text(style_selected_text)
-                        .width(if is_compact { 62.0 } else { 96.0 })
-                        .show_ui(ui, |ui| {
-                            for st in SchematicStyle::ALL {
-                                let is_cur = app.doc.schematic_style == st;
-                                if ui
-                                    .selectable_label(is_cur, st.label())
-                                    .on_hover_text(st.description())
-                                    .clicked()
-                                {
-                                    app.doc.set_schematic_style(st);
-                                    app.save_settings();
-                                }
-                            }
-                        });
-
-                    toolbar_divider(ui, palette);
-
-                    // Compact Modern Theme Selector
-                    let theme_selected_text = if is_compact {
-                        app.theme.label().to_string()
-                    } else {
-                        format!("🎨 {}", app.theme.label())
-                    };
-                    egui::ComboBox::from_id_salt("toolbar_theme_combo")
-                        .selected_text(theme_selected_text)
-                        .width(if is_compact { 68.0 } else { 86.0 })
-                        .show_ui(ui, |ui| {
-                            for t in AppTheme::ALL {
-                                if ui.selectable_label(app.theme == t, t.label()).clicked() {
-                                    app.set_theme(t);
-                                }
-                            }
-                        });
-
-                    toolbar_divider(ui, palette);
-
                     // Settings & Hardware I/O Configuration
-                    let (cfg_lbl, cfg_w) = if is_compact {
-                        ("", CAD_ICON_BTN_WIDTH)
-                    } else {
-                        ("Config", 62.0)
-                    };
                     if modern_tool_button(
                         ui,
                         Some(VectorIcon::ConfigGear),
@@ -938,7 +976,12 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     .on_hover_text("Settings, Theme & Hardware Configuration")
                     .clicked()
                     {
-                        app.show_io_config = !app.show_io_config;
+                        if app.show_io_config {
+                            app.show_io_config = false;
+                        } else {
+                            app.settings_tab = 0;
+                            app.show_io_config = true;
+                        }
                     }
                 });
             });

@@ -183,10 +183,20 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
 
+    let initial_file = std::env::args().nth(1);
+
     eframe::run_native(
         "LaduinoPLC",
         native_options,
-        Box::new(|_cc| Ok(Box::new(CanvasApp::default()))),
+        Box::new(move |_cc| {
+            let mut app = CanvasApp::default();
+            if let Some(path) = initial_file.as_deref() {
+                if let Err(err) = app.open_path(std::path::Path::new(path)) {
+                    eprintln!("Failed to open '{}': {}", path, err);
+                }
+            }
+            Ok(Box::new(app))
+        }),
     )
 }
 

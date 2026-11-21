@@ -35,6 +35,13 @@ pub enum TypeTag {
     UartSend,
     UartRecv,
     MbMaster,
+    MbSlave,
+    Pwm,
+    Select,
+    InRange,
+    Toggle,
+    IncDec,
+    Return,
     /// PID controller FB (PV=fb.in1, SP=fb.in2, CV=target_reg, k=[Kp*100, Ki*100, Kd*100, out_max])
     Pid,
     /// Linear scaling FB (IN=fb.in1, OUT=target_reg, k=[in_min, in_max, out_min, out_max])
@@ -89,6 +96,13 @@ impl TypeTag {
             TypeTag::UartSend => "UART Send",
             TypeTag::UartRecv => "UART Recv",
             TypeTag::MbMaster => "MB_MASTER (Modbus RTU Master FB)",
+            TypeTag::MbSlave => "MB_SLAVE (Modbus RTU Slave FB)",
+            TypeTag::Pwm => "PWM (Analog / Duty Output)",
+            TypeTag::Select => "SEL (Binary Selector)",
+            TypeTag::InRange => "IN_RANGE (Window Compare)",
+            TypeTag::Toggle => "ALT (Toggle / Flip-Flop)",
+            TypeTag::IncDec => "INC / DEC (1-Shot Step)",
+            TypeTag::Return => "RET (Conditional Return)",
             TypeTag::Pid => "PID (Process Controller)",
             TypeTag::Scale => "SCALE (Linear Scaling)",
             TypeTag::Limit => "LIMIT (Clamp Min/Max)",
@@ -122,7 +136,13 @@ impl TypeTag {
                 | TypeTag::Limit
                 | TypeTag::Pid
                 | TypeTag::Bitwise
-                | TypeTag::UartRecv
+                | TypeTag::UartSend
+                | TypeTag::MbSlave
+                | TypeTag::Pwm
+                | TypeTag::Select
+                | TypeTag::Toggle
+                | TypeTag::IncDec
+                | TypeTag::Return
         )
     }
 }
@@ -615,6 +635,14 @@ impl LadderElement {
             TypeTag::ShiftRegReset => "reset".to_string(),
             TypeTag::UartSend => format!("{} ({})", fb.in1, if fb.mode == 1 { "ASCII" } else { "byte" }),
             TypeTag::UartRecv => format!("→ {}", self.target_reg),
+            TypeTag::MbMaster => format!("ID:{} FC:{} → {}", self.mb_slave_id, self.mb_function, self.target_reg),
+            TypeTag::MbSlave => format!("Slave ID:{}", self.mb_slave_id),
+            TypeTag::Pwm => format!("{} := {} (0..{})", self.name, fb.in1, self.preset_value.max(1)),
+            TypeTag::Select => format!("{} := SEL({}, {})", self.target_reg, fb.in1, fb.in2),
+            TypeTag::InRange => format!("{} ≤ {} ≤ {}", fb.k[0], fb.in1, fb.k[1]),
+            TypeTag::Toggle => format!("ALT {}", self.name),
+            TypeTag::IncDec => format!("{} {}", if fb.mode != 0 { "DEC" } else { "INC" }, self.name),
+            TypeTag::Return => "RET".to_string(),
             _ => return None,
         };
         Some(s)

@@ -2,6 +2,7 @@ pub mod app;
 pub mod canvas;
 pub mod firmware_flasher;
 pub mod icons;
+pub mod modbus_tcp;
 pub mod panels;
 pub mod serial;
 pub mod target;

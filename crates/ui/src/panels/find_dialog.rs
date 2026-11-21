@@ -70,7 +70,7 @@ pub fn render(ctx: &egui::Context, app: &mut CanvasApp) {
     let mut do_replace = false;
     let mut step: Option<isize> = None;
 
-    Window::new("🔍 Find / Replace")
+    Window::new("Find / Replace")
         .open(&mut open)
         .default_size([520.0, 360.0])
         .collapsible(false)
@@ -107,10 +107,10 @@ pub fn render(ctx: &egui::Context, app: &mut CanvasApp) {
                 ui.checkbox(&mut st.opts.match_case, "Match case");
                 ui.checkbox(&mut st.opts.whole_word, "Whole word");
                 ui.separator();
-                if ui.button("◀ Prev (Shift+F3)").clicked() {
+                if ui.button("< Prev (Shift+F3)").clicked() {
                     step = Some(-1);
                 }
-                if ui.button("Next (F3) ▶").clicked() {
+                if ui.button("Next (F3) >").clicked() {
                     step = Some(1);
                 }
                 if ui

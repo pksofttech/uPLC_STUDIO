@@ -228,17 +228,17 @@ impl AppUpdater {
 
         match res {
             Ok(releases) => {
-                if let Some(latest) = releases.first() {
-                    let latest_ver = Self::clean_version(&latest.version).to_string();
+                if let Some(latest) = releases.latest() {
+                    let latest_ver = Self::clean_version(latest.version()).to_string();
                     if Self::is_newer_version(cur_ver, &latest_ver) {
                         let target = Self::current_target();
                         let download_url = latest
                             .asset_for(target, None)
-                            .map(|a| a.download_url);
+                            .map(|a| a.download_url().to_string());
                         UpdateStatus::UpdateAvailable {
                             current_version: cur_ver.to_string(),
                             latest_version: latest_ver,
-                            notes: latest.body.clone().unwrap_or_default(),
+                            notes: latest.body().unwrap_or_default().to_string(),
                             download_url,
                         }
                     } else {
@@ -261,7 +261,7 @@ impl AppUpdater {
             return UpdateStatus::Error("Private Server Manifest URL is empty.".to_string());
         }
 
-        let tmp_dir = match self_update::TempDir::new() {
+        let tmp_dir = match tempfile::TempDir::new() {
             Ok(d) => d,
             Err(e) => return UpdateStatus::Error(format!("Failed to create temp dir: {}", e)),
         };
@@ -350,7 +350,7 @@ impl AppUpdater {
     }
 
     fn install_from_direct_url(target_version: &str, archive_url: &str) -> UpdateStatus {
-        let tmp_dir = match self_update::TempDir::new() {
+        let tmp_dir = match tempfile::TempDir::new() {
             Ok(d) => d,
             Err(e) => return UpdateStatus::Error(format!("Failed to create temp directory: {}", e)),
         };
@@ -430,7 +430,7 @@ pub fn render_update_dialog(ctx: &egui::Context, app: &mut CanvasApp) {
         Color32::from_rgb(24, 26, 30)
     };
 
-    Window::new("🔄 Software Update & Release Manager")
+    Window::new("Software Update & Release Manager")
         .order(egui::Order::Foreground)
         .open(&mut open_win)
         .default_width(580.0)
@@ -549,8 +549,8 @@ pub fn render_update_dialog(ctx: &egui::Context, app: &mut CanvasApp) {
                         ui.add_space(4.0);
 
                         for (is_custom, label) in [
-                            (false, "🐙 GitHub Releases"),
-                            (true, "🌐 Private Server (JSON)"),
+                            (false, "GitHub Releases"),
+                            (true, "Private Server (JSON)"),
                         ] {
                             let selected = app.updater.use_custom_server == is_custom;
                             let (btn_bg, btn_border, btn_fg) = if selected {
@@ -698,7 +698,7 @@ pub fn render_update_dialog(ctx: &egui::Context, app: &mut CanvasApp) {
                         ui.vertical(|ui| {
                             ui.horizontal(|ui| {
                                 ui.label(
-                                    RichText::new("⚠ Safety Lock Active")
+                                    RichText::new("Safety Lock Active")
                                         .size(11.5)
                                         .strong()
                                         .color(warn_title_fg),
@@ -711,7 +711,7 @@ pub fn render_update_dialog(ctx: &egui::Context, app: &mut CanvasApp) {
                                     };
                                     if app.online_mode {
                                         let btn = egui::Button::new(
-                                            RichText::new("🛑 Stop Online")
+                                            RichText::new("Stop Online")
                                                 .size(11.0)
                                                 .strong()
                                                 .color(warn_title_fg),
@@ -723,7 +723,7 @@ pub fn render_update_dialog(ctx: &egui::Context, app: &mut CanvasApp) {
                                         }
                                     } else if sim_active {
                                         let btn = egui::Button::new(
-                                            RichText::new("⏹ Stop Sim")
+                                            RichText::new("Stop Sim")
                                                 .size(11.0)
                                                 .strong()
                                                 .color(warn_title_fg),
@@ -735,7 +735,7 @@ pub fn render_update_dialog(ctx: &egui::Context, app: &mut CanvasApp) {
                                         }
                                     } else if app.doc.is_dirty {
                                         let btn = egui::Button::new(
-                                            RichText::new("💾 Save Project")
+                                            RichText::new("Save Project")
                                                 .size(11.0)
                                                 .strong()
                                                 .color(warn_title_fg),
@@ -818,7 +818,7 @@ pub fn render_update_dialog(ctx: &egui::Context, app: &mut CanvasApp) {
                     match &status_snapshot {
                         UpdateStatus::Idle => {
                             ui.label(
-                                RichText::new("ℹ Click 'Check for Updates' to query the release server.")
+                                RichText::new("Click 'Check for Updates' to query the release server.")
                                     .size(12.0)
                                     .color(palette.symbol_subtext),
                             );
@@ -837,7 +837,7 @@ pub fn render_update_dialog(ctx: &egui::Context, app: &mut CanvasApp) {
                         UpdateStatus::UpToDate { current_version } => {
                             ui.label(
                                 RichText::new(format!(
-                                    "✔ You are running the latest version (v{}).",
+                                    "You are running the latest version (v{}).",
                                     current_version
                                 ))
                                 .size(12.5)
@@ -854,7 +854,7 @@ pub fn render_update_dialog(ctx: &egui::Context, app: &mut CanvasApp) {
                             ui.add(
                                 egui::Label::new(
                                     RichText::new(format!(
-                                        "🎉 New Version Available: v{} (Current: v{})",
+                                        "New Version Available: v{} (Current: v{})",
                                         latest_version, current_version
                                     ))
                                     .size(13.0)
@@ -935,7 +935,7 @@ pub fn render_update_dialog(ctx: &egui::Context, app: &mut CanvasApp) {
                         UpdateStatus::ReadyToRestart { new_version } => {
                             ui.label(
                                 RichText::new(format!(
-                                    "✅ Successfully updated to v{}!",
+                                    "Successfully updated to v{}!",
                                     new_version
                                 ))
                                 .size(13.0)
@@ -950,7 +950,7 @@ pub fn render_update_dialog(ctx: &egui::Context, app: &mut CanvasApp) {
                         }
                         UpdateStatus::Error(err_msg) => {
                             ui.label(
-                                RichText::new("✖ Update Check / Install Error")
+                                RichText::new("Update Check / Install Error")
                                     .size(12.0)
                                     .strong()
                                     .color(palette.accent_danger),
@@ -990,7 +990,7 @@ pub fn render_update_dialog(ctx: &egui::Context, app: &mut CanvasApp) {
                 };
 
                 let check_btn = egui::Button::new(
-                    RichText::new("🔍 Check for Updates")
+                    RichText::new("Check for Updates")
                         .size(12.0)
                         .strong()
                         .color(check_fg),
@@ -1055,7 +1055,7 @@ pub fn render_update_dialog(ctx: &egui::Context, app: &mut CanvasApp) {
                     };
 
                     let restart_btn = egui::Button::new(
-                        RichText::new(format!("🔄 Restart into v{}", new_version))
+                        RichText::new(format!("Restart into v{}", new_version))
                             .size(12.0)
                             .strong()
                             .color(rst_fg),

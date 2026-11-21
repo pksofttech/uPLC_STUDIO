@@ -249,6 +249,14 @@ impl IlParser {
                         ));
                     }
                 }
+                TypeTag::MbSlave => {
+                    if declared.insert(el.name.clone()) {
+                        out.push_str(&format!(
+                            "    {} : MB_SLAVE; (* Slave: {} *)\n",
+                            el.name, el.mb_slave_id
+                        ));
+                    }
+                }
                 TypeTag::Rs => {
                     if declared.insert(el.name.clone()) {
                         out.push_str(&format!("    {} : RS;\n", el.name));
@@ -495,6 +503,13 @@ impl IlParser {
                     ));
                     first = false;
                 }
+                TypeTag::MbSlave => {
+                    out.push_str(&format!(
+                        "    CAL  {}(SLAVE := {}, BAUD := {})\n",
+                        el.name, el.mb_slave_id, el.preset_value
+                    ));
+                    first = false;
+                }
                 TypeTag::Sr => {
                     let r_target = if !el.target_reg.is_empty() { &el.target_reg } else { "FALSE" };
                     out.push_str(&format!("    CAL  {}(S1 := TRUE, R := {})\n", el.name, r_target));
@@ -590,6 +605,13 @@ impl IlParser {
             TypeTag::ShiftVariable => format!("    SHIFT_VAR {} {}", z(&el.name), z(&fb.in1)),
             TypeTag::UartSend => format!("    UART_SEND {}(IN := {}, MODE := {})", el.name, z(&fb.in1), fb.mode),
             TypeTag::UartRecv => format!("    UART_RECV {}(OUT => {})", el.name, z(&el.target_reg)),
+            TypeTag::MbSlave => format!("    CAL  {}(SLAVE := {}, BAUD := {})", el.name, el.mb_slave_id, el.preset_value),
+            TypeTag::Pwm => format!("    PWM  {} {} {}", z(&el.name), z(&fb.in1), el.preset_value.max(1)),
+            TypeTag::Select => format!("    SEL  {} {} {}", z(&el.target_reg), z(&fb.in1), z(&fb.in2)),
+            TypeTag::InRange => format!("    IN_RANGE {} {} {}", z(&fb.in1), fb.k[0], fb.k[1]),
+            TypeTag::Toggle => format!("    ALT  {}", z(&el.name)),
+            TypeTag::IncDec => format!("    {}  {}", if fb.mode != 0 { "DEC" } else { "INC" }, z(&el.name)),
+            TypeTag::Return => "    RET".to_string(),
             _ => String::new(),
         }
     }
@@ -683,6 +705,10 @@ impl IlParser {
             }
             TypeTag::UartRecv => {
                 el.target_reg = Self::param_str(&p, &["OUT"]);
+            }
+            TypeTag::MbSlave => {
+                el.mb_slave_id = Self::param_i32(&p, &["SLAVE", "ID"], 1).clamp(1, 247) as u8;
+                el.preset_value = Self::param_i32(&p, &["BAUD"], 9600);
             }
             _ => {}
         }
@@ -1142,7 +1168,7 @@ impl IlParser {
                     None
                 };
                 match declared_ty.or(param_ty) {
-                    Some(ty @ (TypeTag::Pid | TypeTag::Scale | TypeTag::Limit | TypeTag::UartSend | TypeTag::UartRecv)) => {
+                    Some(ty @ (TypeTag::Pid | TypeTag::Scale | TypeTag::Limit | TypeTag::UartSend | TypeTag::UartRecv | TypeTag::MbSlave)) => {
                         return Some(Self::build_param_fb(id, ty, cal_name, &rest));
                     }
                     _ => {}
@@ -1541,6 +1567,75 @@ impl IlParser {
                 let name = if name.is_empty() { default_name } else { name };
                 Some(Self::build_param_fb(id, ty, name, &rest))
             }
+            "PWM" => {
+                let target = parts.get(1).unwrap_or(&"%QW0").trim_end_matches(';').to_string();
+                let in1 = parts.get(2).unwrap_or(&"%MW0").trim_end_matches(';').to_string();
+                let max_val = parts.get(3).and_then(|s| parse_int_literal(s)).unwrap_or(1000) as i32;
+                Some(LadderElement {
+                    id,
+                    element_type: TypeTag::Pwm,
+                    name: target,
+                    symbol: "PWM".to_string(),
+                    preset_value: max_val.max(1),
+                    fb: FbParams { in1, ..Default::default() },
+                    ..Default::default()
+                })
+            }
+            "SEL" => {
+                let target = parts.get(1).unwrap_or(&"%MW0").trim_end_matches(';').to_string();
+                let in1 = parts.get(2).unwrap_or(&"0").trim_end_matches(';').to_string();
+                let in2 = parts.get(3).unwrap_or(&"1").trim_end_matches(';').to_string();
+                Some(LadderElement {
+                    id,
+                    element_type: TypeTag::Select,
+                    name: target.clone(),
+                    target_reg: target,
+                    symbol: "SEL".to_string(),
+                    fb: FbParams { in1, in2, ..Default::default() },
+                    ..Default::default()
+                })
+            }
+            "IN_RANGE" => {
+                let in1 = parts.get(1).unwrap_or(&"%MW0").trim_end_matches(';').to_string();
+                let mn = parts.get(2).and_then(|s| parse_int_literal(s)).unwrap_or(0) as i32;
+                let mx = parts.get(3).and_then(|s| parse_int_literal(s)).unwrap_or(100) as i32;
+                Some(LadderElement {
+                    id,
+                    element_type: TypeTag::InRange,
+                    name: in1.clone(),
+                    symbol: "IN_RANGE".to_string(),
+                    fb: FbParams { in1, k: [mn, mx, 0, 0], ..Default::default() },
+                    ..Default::default()
+                })
+            }
+            "ALT" => {
+                let target = parts.get(1).unwrap_or(&"%MX0.0").trim_end_matches(';').to_string();
+                Some(LadderElement {
+                    id,
+                    element_type: TypeTag::Toggle,
+                    name: target,
+                    symbol: "ALT".to_string(),
+                    ..Default::default()
+                })
+            }
+            "INC" | "DEC" => {
+                let target = parts.get(1).unwrap_or(&"%MW0").trim_end_matches(';').to_string();
+                Some(LadderElement {
+                    id,
+                    element_type: TypeTag::IncDec,
+                    name: target,
+                    symbol: op.to_string(),
+                    fb: FbParams { mode: u8::from(op == "DEC"), ..Default::default() },
+                    ..Default::default()
+                })
+            }
+            "RET" => Some(LadderElement {
+                id,
+                element_type: TypeTag::Return,
+                name: "RET".to_string(),
+                symbol: "RET".to_string(),
+                ..Default::default()
+            }),
             "SHORT" | "WIRE" => Some(LadderElement::new_wire(id)),
             "OPEN" => Some(LadderElement::new_open(id)),
             _ if op.ends_with(':') => {
@@ -1672,6 +1767,8 @@ impl IlParser {
                     fb_presets.insert(name, (TypeTag::Sr, 0));
                 } else if ty.starts_with("RS") {
                     fb_presets.insert(name, (TypeTag::Rs, 0));
+                } else if ty.starts_with("MB_SLAVE") {
+                    fb_presets.insert(name, (TypeTag::MbSlave, 0));
                 } else if ty.starts_with("MB_MASTER") || ty.starts_with("MODBUS") {
                     fb_presets.insert(name, (TypeTag::MbMaster, 0));
                 }

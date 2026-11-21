@@ -243,7 +243,7 @@ impl FirmwareFlasher {
     pub fn start_build_firmware(&mut self, ctx: egui::Context) {
         let Some(proj_dir) = Self::find_firmware_project_dir() else {
             self.status_is_error = true;
-            self.status_summary = "✖ Could not find 'firmware/rp2040-embassy' directory.".to_string();
+            self.status_summary = "Could not find 'firmware/rp2040-embassy' directory.".to_string();
             return;
         };
 
@@ -251,7 +251,7 @@ impl FirmwareFlasher {
         self.rx = Some(rx);
         self.is_busy = true;
         self.status_is_error = false;
-        self.status_summary = "🔨 Building RP2040 firmware (cargo build --release)...".to_string();
+        self.status_summary = "Building RP2040 firmware (cargo build --release)...".to_string();
         self.console_log.clear();
         self.append_log(format!("$ cd {} && cargo build --release", proj_dir.display()));
 
@@ -306,13 +306,13 @@ impl FirmwareFlasher {
 
                             let final_path = if uf2_path.exists() {
                                 let _ = tx.send(FlashWorkerMsg::LogLine(format!(
-                                    "✔ Generated UF2 image: {}",
+                                    "Generated UF2 image: {}",
                                     uf2_path.display()
                                 )));
                                 uf2_path
                             } else {
                                 let _ = tx.send(FlashWorkerMsg::LogLine(format!(
-                                    "✔ Built ELF image: {}",
+                                    "Built ELF image: {}",
                                     elf_path.display()
                                 )));
                                 elf_path
@@ -320,21 +320,21 @@ impl FirmwareFlasher {
 
                             let _ = tx.send(FlashWorkerMsg::Finished {
                                 success: true,
-                                summary: format!("✔ Firmware build succeeded ({})", final_path.display()),
+                                summary: format!("Firmware build succeeded ({})", final_path.display()),
                                 generated_fw_path: Some(final_path),
                             });
                         }
                         Ok(status) => {
                             let _ = tx.send(FlashWorkerMsg::Finished {
                                 success: false,
-                                summary: format!("✖ Firmware build failed (exit code {:?})", status.code()),
+                                summary: format!("Firmware build failed (exit code {:?})", status.code()),
                                 generated_fw_path: None,
                             });
                         }
                         Err(e) => {
                             let _ = tx.send(FlashWorkerMsg::Finished {
                                 success: false,
-                                summary: format!("✖ Failed waiting on cargo build: {}", e),
+                                summary: format!("Failed waiting on cargo build: {}", e),
                                 generated_fw_path: None,
                             });
                         }
@@ -343,7 +343,7 @@ impl FirmwareFlasher {
                 Err(e) => {
                     let _ = tx.send(FlashWorkerMsg::Finished {
                         success: false,
-                        summary: format!("✖ Could not start cargo build: {}", e),
+                        summary: format!("Could not start cargo build: {}", e),
                         generated_fw_path: None,
                     });
                 }
@@ -357,7 +357,7 @@ impl FirmwareFlasher {
         let fw_path = PathBuf::from(self.firmware_path.trim());
         if !fw_path.exists() {
             self.status_is_error = true;
-            self.status_summary = format!("✖ Firmware file not found: {}", fw_path.display());
+            self.status_summary = format!("Firmware file not found: {}", fw_path.display());
             return;
         }
 
@@ -366,7 +366,7 @@ impl FirmwareFlasher {
         self.rx = Some(rx);
         self.is_busy = true;
         self.status_is_error = false;
-        self.status_summary = "🔥 Flashing firmware to RP2040 via USB...".to_string();
+        self.status_summary = "Flashing firmware to RP2040 via USB...".to_string();
         self.console_log.clear();
 
         std::thread::spawn(move || {
@@ -387,13 +387,13 @@ impl FirmwareFlasher {
                     match std::fs::copy(&fw_path, &dest) {
                         Ok(bytes) => {
                             let _ = tx.send(FlashWorkerMsg::LogLine(format!(
-                                "✔ Transferred {} bytes to RPI-RP2. MCU is rebooting into PLC mode.",
+                                "Transferred {} bytes to RPI-RP2. MCU is rebooting into PLC mode.",
                                 bytes
                             )));
                             let _ = tx.send(FlashWorkerMsg::Finished {
                                 success: true,
                                 summary: format!(
-                                    "✔ Flashed {} bytes to {} — RP2040 is rebooting!",
+                                    "Flashed {} bytes to {} — RP2040 is rebooting!",
                                     bytes,
                                     drive.display()
                                 ),
@@ -404,7 +404,7 @@ impl FirmwareFlasher {
                         }
                         Err(e) => {
                             let _ = tx.send(FlashWorkerMsg::LogLine(format!(
-                                "⚠ Direct UF2 copy failed ({}), trying USB CLI tools...",
+                                "Direct UF2 copy failed ({}), trying USB CLI tools...",
                                 e
                             )));
                         }
@@ -440,7 +440,7 @@ impl FirmwareFlasher {
                     if output.status.success() {
                         let _ = tx.send(FlashWorkerMsg::Finished {
                             success: true,
-                            summary: format!("✔ Firmware flashed successfully via `{}`!", bin),
+                            summary: format!("Firmware flashed successfully via `{}`!", bin),
                             generated_fw_path: None,
                         });
                         ctx.request_repaint();
@@ -450,13 +450,13 @@ impl FirmwareFlasher {
             }
 
             let hint = if bootsel_drive.is_none() {
-                "RP2040 BOOTSEL drive (RPI-RP2) not detected. Click '🔄 Reboot PLC to BOOTSEL' or hold BOOTSEL while plugging in USB."
+                "RP2040 BOOTSEL drive (RPI-RP2) not detected. Click 'Reboot PLC to BOOTSEL' or hold BOOTSEL while plugging in USB."
             } else {
                 "Select a .uf2 file for direct USB copy, or install `elf2uf2-rs` / `picotool` for ELF files."
             };
             let _ = tx.send(FlashWorkerMsg::Finished {
                 success: false,
-                summary: format!("✖ Flash failed: {}", hint),
+                summary: format!("Flash failed: {}", hint),
                 generated_fw_path: None,
             });
             ctx.request_repaint();
@@ -529,14 +529,14 @@ impl FirmwareFlasher {
         let fw_path = PathBuf::from(self.stm32_firmware_path.trim());
         if !fw_path.exists() {
             self.status_is_error = true;
-            self.status_summary = format!("✖ Firmware file not found: {}", fw_path.display());
+            self.status_summary = format!("Firmware file not found: {}", fw_path.display());
             return;
         }
         let (tx, rx): (Sender<FlashWorkerMsg>, Receiver<FlashWorkerMsg>) = mpsc::channel();
         self.rx = Some(rx);
         self.is_busy = true;
         self.status_is_error = false;
-        self.status_summary = "🔥 Flashing STM32F103C6T6 via ST-Link V2 (SWD)...".to_string();
+        self.status_summary = "Flashing STM32F103C6T6 via ST-Link V2 (SWD)...".to_string();
         self.console_log.clear();
 
         std::thread::spawn(move || {
@@ -566,11 +566,11 @@ impl FirmwareFlasher {
                         .map(String::from)
                         .to_vec();
                     let _ = run("probe-rs", &reset_args);
-                    finish(true, "✔ STM32F103C6T6 flashed via ST-Link V2 — MCU reset, PLC program preserved".to_string());
+                    finish(true, "STM32F103C6T6 flashed via ST-Link V2 — MCU reset, PLC program preserved".to_string());
                     return;
                 }
-                Some(false) => log("⚠ probe-rs download failed".to_string()),
-                None => log("⚠ probe-rs not found (install: cargo install probe-rs-tools)".to_string()),
+                Some(false) => log("probe-rs download failed".to_string()),
+                None => log("probe-rs not found (install: cargo install probe-rs-tools)".to_string()),
             }
 
             let is_bin = fw_path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("bin"));
@@ -582,13 +582,13 @@ impl FirmwareFlasher {
                     "0x08000000".into(),
                 ];
                 if run("st-flash", &args) == Some(true) {
-                    finish(true, "✔ STM32F103C6T6 flashed via st-flash".to_string());
+                    finish(true, "STM32F103C6T6 flashed via st-flash".to_string());
                     return;
                 }
             }
             finish(
                 false,
-                "✖ ST-Link flash failed — check SWD wiring (SWDIO=PA13, SWCLK=PA14, GND, 3.3V); for clone chips hold RESET while flashing"
+                "ST-Link flash failed — check SWD wiring (SWDIO=PA13, SWCLK=PA14, GND, 3.3V); for clone chips hold RESET while flashing"
                     .to_string(),
             );
         });
@@ -611,7 +611,7 @@ fn render_stm32_stlink_dialog(ctx: &egui::Context, app: &mut CanvasApp) {
     let mut trigger_flash = false;
     let busy = app.firmware_flasher.is_busy;
 
-    Window::new("🔥 MCU Firmware Manager — STM32F103C6T6 (ST-Link V2)")
+    Window::new("MCU Firmware Manager — STM32F103C6T6 (ST-Link V2)")
         .order(egui::Order::Foreground)
         .open(&mut open_win)
         .min_size([560.0, 420.0])
@@ -623,17 +623,17 @@ fn render_stm32_stlink_dialog(ctx: &egui::Context, app: &mut CanvasApp) {
             ui.group(|ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("🔌 Debug Probe").size(13.0).strong().color(palette.accent_heading));
+                    ui.label(RichText::new("Debug Probe").size(13.0).strong().color(palette.accent_heading));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add_enabled(!busy, egui::Button::new("🔄 Detect ST-Link").small()).clicked() {
+                        if ui.add_enabled(!busy, egui::Button::new("Detect ST-Link").small()).clicked() {
                             app.firmware_flasher.stlink_probe = FirmwareFlasher::detect_stlink_probe();
                         }
                     });
                 });
                 match &app.firmware_flasher.stlink_probe {
-                    Some(p) => ui.label(RichText::new(format!("🟢 {}", p)).monospace().size(11.5).strong().color(palette.accent_ok)),
+                    Some(p) => ui.label(RichText::new(format!("● {}", p)).monospace().size(11.5).strong().color(palette.accent_ok)),
                     None => ui.label(
-                        RichText::new("⚪ No ST-Link found (needs `probe-rs` in PATH and udev rules on Linux)")
+                        RichText::new("○ No ST-Link found (needs `probe-rs` in PATH and udev rules on Linux)")
                             .size(11.5)
                             .color(palette.rung_text_dim),
                     ),
@@ -649,9 +649,9 @@ fn render_stm32_stlink_dialog(ctx: &egui::Context, app: &mut CanvasApp) {
             ui.group(|ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("📦 Firmware (.elf / .bin / .hex)").size(12.5).strong().color(palette.accent_heading));
+                    ui.label(RichText::new("Firmware (.elf / .bin / .hex)").size(12.5).strong().color(palette.accent_heading));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("📂 Browse...").clicked() {
+                        if ui.small_button("Browse...").clicked() {
                             if let Some(file) = rfd::FileDialog::new()
                                 .add_filter("STM32 Firmware (*.elf, *.bin, *.hex, *)", &["elf", "bin", "hex"])
                                 .pick_file()
@@ -659,7 +659,7 @@ fn render_stm32_stlink_dialog(ctx: &egui::Context, app: &mut CanvasApp) {
                                 app.firmware_flasher.stm32_firmware_path = file.display().to_string();
                             }
                         }
-                        if ui.small_button("📦 Use Bundled Firmware").clicked() {
+                        if ui.small_button("Use Bundled Firmware").clicked() {
                             if let Some(p) = FirmwareFlasher::find_stm32_firmware_path() {
                                 app.firmware_flasher.stm32_firmware_path = p.display().to_string();
                             }
@@ -673,7 +673,7 @@ fn render_stm32_stlink_dialog(ctx: &egui::Context, app: &mut CanvasApp) {
                         .desired_width(ui.available_width()),
                 );
                 ui.label(
-                    RichText::new("ℹ Only firmware pages are rewritten — Ladder program (0x0800_7800) & RETAIN (0x0800_7400) are preserved.")
+                    RichText::new("Only firmware pages are rewritten — Ladder program (0x0800_7800) & RETAIN (0x0800_7400) are preserved.")
                         .size(10.5)
                         .color(palette.rung_text_dim),
                 );
@@ -698,7 +698,7 @@ fn render_stm32_stlink_dialog(ctx: &egui::Context, app: &mut CanvasApp) {
                 .show(ui, |ui| {
                     let mut log_view = if app.firmware_flasher.console_log.is_empty() {
                         "Steps:\n1. Wire ST-Link V2 to the SWD pins (PA13/PA14/GND/3.3V).\n\
-                         2. Click '🔄 Detect ST-Link'.\n3. Click '🔥 Flash via ST-Link V2'.\n\
+                         2. Click 'Detect ST-Link'.\n3. Click 'Flash via ST-Link V2'.\n\
                          4. Connect a USB-TTL adapter to PA9/PA10 and select its port @ 115200 in Options."
                             .to_string()
                     } else {
@@ -717,7 +717,7 @@ fn render_stm32_stlink_dialog(ctx: &egui::Context, app: &mut CanvasApp) {
             ui.horizontal(|ui| {
                 let has_fw = !app.firmware_flasher.stm32_firmware_path.trim().is_empty();
                 let flash_btn = egui::Button::new(
-                    RichText::new("🔥 Flash via ST-Link V2").size(12.5).strong().color(Color32::WHITE),
+                    RichText::new("Flash via ST-Link V2").size(12.5).strong().color(Color32::WHITE),
                 )
                 .fill(Color32::from_rgb(24, 130, 90))
                 .corner_radius(CornerRadius::same(6))
@@ -776,7 +776,7 @@ pub fn render_firmware_flasher_dialog(ctx: &egui::Context, app: &mut CanvasApp) 
     let detected_plc_port = CanvasApp::detect_uplc_usb_port();
     let detected_bootsel = app.firmware_flasher.bootsel_drive_path.clone();
 
-    Window::new("🔥 MCU Firmware Manager & USB Flasher (RP2040)")
+    Window::new("MCU Firmware Manager & USB Flasher (RP2040)")
         .order(egui::Order::Foreground)
         .open(&mut open_win)
         .min_size([560.0, 440.0])
@@ -799,13 +799,13 @@ pub fn render_firmware_flasher_dialog(ctx: &egui::Context, app: &mut CanvasApp) 
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
                         ui.label(
-                            RichText::new("🔌 USB Target Device Status")
+                            RichText::new("USB Target Device Status")
                                 .size(13.0)
                                 .strong()
                                 .color(palette.accent_heading),
                         );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("🔄 Rescan USB").clicked() {
+                            if ui.small_button("Rescan USB").clicked() {
                                 trigger_rescan = true;
                             }
                         });
@@ -817,7 +817,7 @@ pub fn render_firmware_flasher_dialog(ctx: &egui::Context, app: &mut CanvasApp) 
                     ui.horizontal(|ui| {
                         if let Some(ref port) = detected_plc_port {
                             ui.label(
-                                RichText::new(format!("🟢 PLC Serial Port: {} (Running Micro-VM)", port))
+                                RichText::new(format!("● PLC Serial Port: {} (Running Micro-VM)", port))
                                     .monospace()
                                     .size(11.5)
                                     .strong()
@@ -825,7 +825,7 @@ pub fn render_firmware_flasher_dialog(ctx: &egui::Context, app: &mut CanvasApp) 
                             );
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 let bootsel_btn = egui::Button::new(
-                                    RichText::new("⚡ Reboot PLC to BOOTSEL Mode")
+                                    RichText::new("Reboot PLC to BOOTSEL Mode")
                                         .size(11.0)
                                         .strong()
                                         .color(Color32::WHITE),
@@ -844,7 +844,7 @@ pub fn render_firmware_flasher_dialog(ctx: &egui::Context, app: &mut CanvasApp) 
                             });
                         } else {
                             ui.label(
-                                RichText::new("⚪ PLC Serial Port: Not detected (or currently in BOOTSEL mode)")
+                                RichText::new("○ PLC Serial Port: Not detected (or currently in BOOTSEL mode)")
                                     .size(11.5)
                                     .color(palette.rung_text_dim),
                             );
@@ -858,7 +858,7 @@ pub fn render_firmware_flasher_dialog(ctx: &egui::Context, app: &mut CanvasApp) 
                         if let Some(ref drive) = detected_bootsel {
                             ui.label(
                                 RichText::new(format!(
-                                    "🟡 USB BOOTSEL Drive Ready: {}",
+                                    "● USB BOOTSEL Drive Ready: {}",
                                     drive.display()
                                 ))
                                 .monospace()
@@ -869,7 +869,7 @@ pub fn render_firmware_flasher_dialog(ctx: &egui::Context, app: &mut CanvasApp) 
                         } else {
                             ui.label(
                                 RichText::new(
-                                    "⚪ USB BOOTSEL Drive (RPI-RP2): Waiting for BOOTSEL mode...",
+                                    "○ USB BOOTSEL Drive (RPI-RP2): Waiting for BOOTSEL mode...",
                                 )
                                 .size(11.5)
                                 .color(palette.rung_text_dim),
@@ -878,7 +878,7 @@ pub fn render_firmware_flasher_dialog(ctx: &egui::Context, app: &mut CanvasApp) 
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui
-                                .small_button("📂 Locate RPI-RP2...")
+                                .small_button("Locate RPI-RP2...")
                                 .on_hover_text("Manually select the mounted RPI-RP2 drive folder")
                                 .clicked()
                             {
@@ -899,7 +899,7 @@ pub fn render_firmware_flasher_dialog(ctx: &egui::Context, app: &mut CanvasApp) 
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new("📦 Firmware Binary (.uf2 / .elf)")
+                        RichText::new("Firmware Binary (.uf2 / .elf)")
                             .size(12.5)
                             .strong()
                             .color(palette.accent_heading),
@@ -917,7 +917,7 @@ pub fn render_firmware_flasher_dialog(ctx: &egui::Context, app: &mut CanvasApp) 
                         }
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("📂 Browse...").clicked() {
+                        if ui.small_button("Browse...").clicked() {
                             let mut dlg = rfd::FileDialog::new()
                                 .add_filter("RP2040 Firmware (*.uf2, *.elf, *)", &["uf2", "elf", "bin"]);
                             if let Some(proj) = FirmwareFlasher::find_firmware_project_dir() {
@@ -928,7 +928,7 @@ pub fn render_firmware_flasher_dialog(ctx: &egui::Context, app: &mut CanvasApp) 
                             }
                         }
                         if ui
-                            .small_button("📦 Use Bundled Firmware")
+                            .small_button("Use Bundled Firmware")
                             .on_hover_text("Select the official pre-built RP2040 firmware bundled with uPLC Studio")
                             .clicked()
                         {
@@ -948,7 +948,7 @@ pub fn render_firmware_flasher_dialog(ctx: &egui::Context, app: &mut CanvasApp) 
 
                 ui.label(
                     RichText::new(
-                        "ℹ Flashing firmware updates Sector 0.. (Micro-VM engine) while preserving Ladder Bytecode (Sector 510) & RETAIN memory (Sector 511).",
+                        "Flashing firmware updates Sector 0.. (Micro-VM engine) while preserving Ladder Bytecode (Sector 510) & RETAIN memory (Sector 511).",
                     )
                     .size(10.5)
                     .color(palette.rung_text_dim),
@@ -1003,9 +1003,9 @@ pub fn render_firmware_flasher_dialog(ctx: &egui::Context, app: &mut CanvasApp) 
                     let mut log_view = if app.firmware_flasher.console_log.is_empty() {
                         String::from(
                             "Steps to Flash Firmware via USB:\n\
-                             1. Click '⚡ Reboot PLC to BOOTSEL Mode' (or hold BOOTSEL on the Pico while plugging in USB).\n\
+                             1. Click 'Reboot PLC to BOOTSEL Mode' (or hold BOOTSEL on the Pico while plugging in USB).\n\
                              2. Verify 'USB BOOTSEL Drive Ready (RPI-RP2)' appears above.\n\
-                             3. Click '🔥 Flash Firmware via USB' below.",
+                             3. Click 'Flash Firmware via USB' below.",
                         )
                     } else {
                         app.firmware_flasher.console_log.clone()
@@ -1027,7 +1027,7 @@ pub fn render_firmware_flasher_dialog(ctx: &egui::Context, app: &mut CanvasApp) 
                 let has_fw_file = !app.firmware_flasher.firmware_path.trim().is_empty();
 
                 let flash_btn = egui::Button::new(
-                    RichText::new("🔥 Flash Firmware via USB")
+                    RichText::new("Flash Firmware via USB")
                         .size(12.5)
                         .strong()
                         .color(Color32::WHITE),
@@ -1064,7 +1064,7 @@ pub fn render_firmware_flasher_dialog(ctx: &egui::Context, app: &mut CanvasApp) 
         app.transmit_bytecode_to_plc(my_canvas_core::PlcSerialCommand::EnterBootsel);
         app.firmware_flasher.status_is_error = false;
         app.firmware_flasher.status_summary =
-            "⚡ Sent CMD 0x0A (Enter BOOTSEL) — Waiting for RP2040 to mount as RPI-RP2 drive...".to_string();
+            "Sent CMD 0x0A (Enter BOOTSEL) — Waiting for RP2040 to mount as RPI-RP2 drive...".to_string();
         app.firmware_flasher
             .append_log("Sent CMD_ENTER_BOOTSEL (0x0A) over USB Serial. Waiting for RPI-RP2 volume...");
     }
@@ -1082,7 +1082,7 @@ mod tests {
 
     #[test]
     fn test_bootsel_drive_validation_with_temp_dir() {
-        let tmp = self_update::TempDir::new().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
         assert!(!FirmwareFlasher::is_bootsel_drive(tmp.path()));
 
         // Create INFO_UF2.TXT to simulate an RPI-RP2 volume

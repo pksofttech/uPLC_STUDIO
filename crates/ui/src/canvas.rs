@@ -112,7 +112,7 @@ fn validate_placement(
         }
     }
 
-    // Rule 4: Cannot parallel an output coil across an input contact
+    // Rule 4: Cannot parallel an output coil across an input contact, or place outputs before contacts
     if target_elem.element_type == TypeTag::Contact && source_tag == TypeTag::Coil {
         if insert_pos == InsertPosition::TopParallel || insert_pos == InsertPosition::BottomParallel {
             return Err("Cannot parallel an output coil across an input contact");
@@ -121,15 +121,38 @@ fn validate_placement(
             return Err("Cannot place an output coil before an input contact");
         }
     }
+    if target_elem.element_type == TypeTag::Contact
+        && source_tag != TypeTag::Coil
+        && source_tag.is_right_aligned()
+        && insert_pos == InsertPosition::Left
+    {
+        return Err("Cannot place an output instruction before an input contact");
+    }
+    if target_elem.element_type != TypeTag::Coil
+        && target_elem.element_type.is_right_aligned()
+        && source_tag == TypeTag::Contact
+        && insert_pos == InsertPosition::Right
+    {
+        return Err("Cannot place an input contact after an output instruction");
+    }
 
-    // Rule 5: Cannot place a coil before a Function Block (TON/TOF/CTU)
-    if (target_elem.element_type == TypeTag::Ton
-        || target_elem.element_type == TypeTag::Tof
-        || target_elem.element_type == TypeTag::Tp
-        || target_elem.element_type == TypeTag::Ctu
-        || target_elem.element_type == TypeTag::Ctd
-        || target_elem.element_type == TypeTag::Ctud)
-        && source_tag == TypeTag::Coil
+    // Rule 5: Cannot place a coil before a Function Block
+    if matches!(
+        target_elem.element_type,
+        TypeTag::Ton
+            | TypeTag::Tof
+            | TypeTag::Tp
+            | TypeTag::Ctu
+            | TypeTag::Ctd
+            | TypeTag::Ctud
+            | TypeTag::Compare
+            | TypeTag::RTrig
+            | TypeTag::FTrig
+            | TypeTag::Sr
+            | TypeTag::Rs
+            | TypeTag::UartRecv
+            | TypeTag::InRange
+    ) && source_tag == TypeTag::Coil
         && insert_pos == InsertPosition::Left
     {
         return Err("Cannot place an output coil before a function block");
@@ -190,6 +213,48 @@ impl CanvasViewport {
     fn font_mono(&self, base_size: f32) -> FontId {
         let q = ((base_size * self.zoom) * 2.0).round() * 0.5;
         FontId::monospace(q.max(6.0))
+    }
+
+    /// Draw centered monospace text inside `clip_rect`, shrinking font slightly if needed
+    /// and truncating with `…` so long tag/parameter strings never overflow the card frame.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_fitted_card_text(
+        &self,
+        painter: &Painter,
+        clip_rect: Rect,
+        center_pos: Pos2,
+        text: &str,
+        base_size: f32,
+        max_w: f32,
+        color: Color32,
+    ) {
+        if text.is_empty() || max_w <= 4.0 {
+            return;
+        }
+        let mut galley = painter.layout_no_wrap(text.to_string(), self.font_mono(base_size), color);
+        if galley.size().x > max_w {
+            let small_size = (base_size * 0.82).max(6.5);
+            let small_font = self.font_mono(small_size);
+            galley = painter.layout_no_wrap(text.to_string(), small_font.clone(), color);
+            if galley.size().x > max_w {
+                let mut chars: Vec<char> = text.chars().collect();
+                while chars.len() > 1 {
+                    chars.pop();
+                    let mut candidate: String = chars.iter().collect();
+                    candidate.push('…');
+                    let g = painter.layout_no_wrap(candidate, small_font.clone(), color);
+                    galley = g;
+                    if galley.size().x <= max_w {
+                        break;
+                    }
+                }
+            }
+        }
+        let top_left = pos2(
+            center_pos.x - galley.size().x * 0.5,
+            center_pos.y - galley.size().y * 0.5,
+        );
+        painter.with_clip_rect(clip_rect).galley(top_left, galley, color);
     }
 
     pub fn start_tool_drag(&mut self, tool: ActiveTool, label: impl Into<String>) {
@@ -732,7 +797,7 @@ impl CanvasViewport {
 
                 // Prominent Flag Badge for Target Label
                 if let Some(lbl) = label_elem {
-                    let badge_text = format!("⚑ LBL {}", lbl.name);
+                    let badge_text = format!("LBL {}", lbl.name);
                     let badge_w = (badge_text.len() as f32 * 7.5 + 16.0) * self.zoom;
                     let badge_h = 16.5 * self.zoom;
                     let badge_rect = Rect::from_min_size(
@@ -829,7 +894,7 @@ impl CanvasViewport {
                 Stroke::new(1.5 * self.zoom, badge_border),
                 StrokeKind::Inside,
             );
-            let top_sub = if label_elem.is_some() { "⚑ TARGET" } else { "NETWORK" };
+            let top_sub = if label_elem.is_some() { "TARGET" } else { "NETWORK" };
             painter.text(
                 pos2(
                     r_badge_screen.center().x,
@@ -1121,11 +1186,11 @@ impl CanvasViewport {
 
             // Center Callout Banner
             let banner_msg = if let Some((_, ref lbl)) = self.dragging_tool {
-                format!("✨ Drop to create New Network #{:02} with {}", new_rung_idx + 1, lbl)
+                format!("Drop to create New Network #{:02} with {}", new_rung_idx + 1, lbl)
             } else if let Some((_, ref lbl)) = self.dragging_elem {
-                format!("✨ Drop to move {} into New Network #{:02}", lbl, new_rung_idx + 1)
+                format!("Drop to move {} into New Network #{:02}", lbl, new_rung_idx + 1)
             } else {
-                format!("✨ Drop here to create New Network #{:02}", new_rung_idx + 1)
+                format!("Drop here to create New Network #{:02}", new_rung_idx + 1)
             };
             painter.text(
                 pos2(new_rung_band_screen.center().x, new_rung_band_screen.center().y - 12.0 * self.zoom),
@@ -1331,107 +1396,6 @@ impl CanvasViewport {
                         }
                     }
                 }
-            } else if let (Some(_), Some(sel_id)) =
-                (doc.selected_rung_idx, doc.selected_element_id)
-            {
-                if let Some(sel_rect) = self.find_selected_rect_on_screen(
-                    doc,
-                    origin,
-                    margin_left,
-                    margin_top,
-                    margin_right,
-                    cell_w,
-                    cell_h,
-                    sel_id,
-                ) {
-                    let hud_w = 265.0;
-                    let hud_h = 24.0;
-                    let hud_y = if sel_rect.min.y - hud_h - 6.0 > viewport_rect.min.y + 40.0 {
-                        sel_rect.min.y - hud_h - 5.0
-                    } else {
-                        sel_rect.max.y + 5.0
-                    };
-                    let hud_cx = sel_rect.center().x.clamp(
-                        viewport_rect.min.x + hud_w * 0.5 + 8.0,
-                        (viewport_rect.max.x - hud_w * 0.5 - 8.0)
-                            .max(viewport_rect.min.x + hud_w * 0.5 + 8.0),
-                    );
-                    let hud_rect = Rect::from_center_size(
-                        pos2(hud_cx, hud_y + hud_h * 0.5),
-                        vec2(hud_w, hud_h),
-                    );
-                    if hover_pos.map_or(false, |hp| hud_rect.contains(hp)) {
-                        any_interactive_hovered = true;
-                    }
-
-                    painter.rect_filled(hud_rect, CornerRadius::same(6), palette.banner_bg);
-                    painter.rect_stroke(
-                        hud_rect,
-                        CornerRadius::same(6),
-                        Stroke::new(1.3, palette.rung_badge_sel_border),
-                        StrokeKind::Inside,
-                    );
-
-                    let hud_buttons: [(&str, Color32, CanvasAction); 5] = [
-                        (
-                            "Config",
-                            palette.accent_heading,
-                            CanvasAction::OpenConfigModal(sel_id),
-                        ),
-                        (
-                            "+∥ Par",
-                            palette.accent_ok,
-                            CanvasAction::AddParallelToSelection,
-                        ),
-                        (
-                            "+─ Ser",
-                            palette.accent_warn,
-                            CanvasAction::AddSeriesToSelection(true),
-                        ),
-                        (
-                            "Mode",
-                            palette.accent_heading,
-                            CanvasAction::ToggleElementMode(sel_id),
-                        ),
-                        (
-                            "Del",
-                            palette.accent_danger,
-                            CanvasAction::DeleteElement(sel_id),
-                        ),
-                    ];
-
-                    let btn_w = (hud_w - 10.0) / 5.0;
-                    for (i, (lbl, col, btn_act)) in hud_buttons.into_iter().enumerate() {
-                        let bx = hud_rect.min.x + 5.0 + i as f32 * btn_w;
-                        let b_rect = Rect::from_min_size(
-                            pos2(bx + 1.0, hud_rect.min.y + 3.0),
-                            vec2(btn_w - 2.0, hud_h - 6.0),
-                        );
-                        let b_hov = hover_pos.map_or(false, |hp| b_rect.contains(hp));
-                        if b_hov {
-                            painter.rect_filled(
-                                b_rect,
-                                CornerRadius::same(4),
-                                col.gamma_multiply(0.25),
-                            );
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                        }
-                        painter.text(
-                            b_rect.center(),
-                            Align2::CENTER_CENTER,
-                            lbl,
-                            FontId::proportional(10.5),
-                            if b_hov {
-                                if palette.is_light() { palette.text_primary } else { Color32::WHITE }
-                            } else {
-                                col
-                            },
-                        );
-                        if is_clicked && b_hov {
-                            action = Some(btn_act);
-                        }
-                    }
-                }
             }
         } else if (!self.is_edit_mode || sim_active) && !is_dragging {
             // --- Live Debug / Force Floating HUD Bar (Simulator & Online Hardware Modes) ---
@@ -1513,22 +1477,22 @@ impl CanvasViewport {
                         let debug_btns: [(&str, Color32, CanvasAction); 4] = if self.is_online_hw_mode {
                             [
                                 (
-                                    "⚡ Force 1",
+                                    "Force 1",
                                     palette.accent_ok,
                                     CanvasAction::DebugForceBit(elem_addr.clone(), true),
                                 ),
                                 (
-                                    "⚡ Force 0",
+                                    "Force 0",
                                     palette.accent_danger,
                                     CanvasAction::DebugForceBit(elem_addr.clone(), false),
                                 ),
                                 (
-                                    "🔓 Unforce",
+                                    "Unforce",
                                     palette.accent_warn,
                                     CanvasAction::DebugUnforceBit(elem_addr.clone()),
                                 ),
                                 (
-                                    "✏ Edit",
+                                    "Edit",
                                     palette.accent_heading,
                                     CanvasAction::SwitchToEditMode(Some(sel_id)),
                                 ),
@@ -1536,22 +1500,22 @@ impl CanvasViewport {
                         } else {
                             [
                                 (
-                                    "🔁 Toggle",
+                                    "Toggle",
                                     palette.accent_ok,
                                     CanvasAction::DebugToggleBit(elem_addr.clone()),
                                 ),
                                 (
-                                    "⚡ Force 1",
+                                    "Force 1",
                                     palette.accent_warn,
                                     CanvasAction::DebugForceBit(elem_addr.clone(), true),
                                 ),
                                 (
-                                    "🔓 Unforce",
+                                    "Unforce",
                                     palette.text_primary,
                                     CanvasAction::DebugUnforceBit(elem_addr.clone()),
                                 ),
                                 (
-                                    "✏ Edit",
+                                    "Edit",
                                     palette.accent_heading,
                                     CanvasAction::SwitchToEditMode(Some(sel_id)),
                                 ),
@@ -1710,9 +1674,9 @@ impl CanvasViewport {
                 );
                 let (sub_msg, sub_color) = if let Some(ref dt) = drop_target {
                     if let Some(ref err) = dt.validation_error {
-                        (format!("-> ❌ {}", err), palette.accent_danger)
+                        (format!("-> {}", err), palette.accent_danger)
                     } else if dt.create_new_rung {
-                        (format!("-> ✨ Create & Drop: {}", dt.target_label), palette.accent_ok)
+                        (format!("-> Create & Drop: {}", dt.target_label), palette.accent_ok)
                     } else {
                         (format!("-> Drop at: {}", dt.target_label), palette.accent_ok)
                     }
@@ -1955,9 +1919,9 @@ impl CanvasViewport {
             let mut close_menu = false;
             let menu_title = if !self.is_edit_mode || sim_active {
                 if self.is_online_hw_mode {
-                    "🔌 Online PLC Debug & Force Menu"
+                    "Online PLC Debug & Force Menu"
                 } else {
-                    "💻 Simulator Debug & Force Menu"
+                    "Simulator Debug & Force Menu"
                 }
             } else {
                 "Quick Element & Network Menu"
@@ -1988,7 +1952,7 @@ impl CanvasViewport {
                             if !self.is_online_hw_mode {
                                 if ui
                                     .button(
-                                        egui::RichText::new("🔁 Toggle Input State (ON ↔ OFF)")
+                                        egui::RichText::new("Toggle Input State (ON ↔ OFF)")
                                             .color(palette.accent_ok)
                                             .strong(),
                                     )
@@ -2000,7 +1964,7 @@ impl CanvasViewport {
                             }
                             if ui
                                 .button(
-                                    egui::RichText::new("⚡ Force ON (1)")
+                                    egui::RichText::new("Force ON (1)")
                                         .color(palette.accent_ok)
                                         .strong(),
                                 )
@@ -2011,7 +1975,7 @@ impl CanvasViewport {
                             }
                             if ui
                                 .button(
-                                    egui::RichText::new("⚡ Force OFF (0)")
+                                    egui::RichText::new("Force OFF (0)")
                                         .color(palette.accent_danger)
                                         .strong(),
                                 )
@@ -2022,7 +1986,7 @@ impl CanvasViewport {
                             }
                             if ui
                                 .button(
-                                    egui::RichText::new("🔓 Release Force (Normal)")
+                                    egui::RichText::new("Release Force (Normal)")
                                         .color(palette.accent_warn),
                                 )
                                 .clicked()
@@ -2033,7 +1997,7 @@ impl CanvasViewport {
                             ui.separator();
                         }
                         if !doc.simulator.forced_bits.is_empty() || self.is_online_hw_mode {
-                            if ui.button("🔓 Clear All Forced Bits").clicked() {
+                            if ui.button("Clear All Forced Bits").clicked() {
                                 action = Some(CanvasAction::DebugClearAllForces);
                                 close_menu = true;
                             }
@@ -2041,7 +2005,7 @@ impl CanvasViewport {
                         }
                         if ui
                             .button(
-                                egui::RichText::new("✏ Switch to Edit Mode to Modify Circuit")
+                                egui::RichText::new("Switch to Edit Mode to Modify Circuit")
                                     .color(palette.accent_heading)
                                     .strong(),
                             )
@@ -2850,7 +2814,7 @@ impl CanvasViewport {
                 Stroke::new(2.4 * self.zoom, highlight_color), // Thick distinct border
                 StrokeKind::Inside,
             );
-            // Distinct "🔗 REF" badge at top-right
+            // Distinct "REF" badge at top-right
             let badge_w = 34.0 * self.zoom;
             let badge_h = 13.0 * self.zoom;
             let badge_rect = Rect::from_min_size(
@@ -2865,7 +2829,7 @@ impl CanvasViewport {
             painter.text(
                 badge_rect.center(),
                 Align2::CENTER_CENTER,
-                "🔗 REF",
+                "REF",
                 FontId::monospace(8.0 * self.zoom),
                 Color32::BLACK,
             );
@@ -2889,21 +2853,21 @@ impl CanvasViewport {
             let (z_rect, z_label) = match zone {
                 InsertPosition::Left => (
                     Rect::from_min_max(rect_screen.min, pos2(x0 + w * 0.28, rect_screen.max.y)),
-                    if is_valid { "< Left" } else { "❌ Block" },
+                    if is_valid { "< Left" } else { "Block" },
                 ),
                 InsertPosition::Right => (
                     Rect::from_min_max(pos2(x0 + w * 0.72, y0), rect_screen.max),
-                    if is_valid { "Right >" } else { "❌ Block" },
+                    if is_valid { "Right >" } else { "Block" },
                 ),
                 InsertPosition::TopParallel => (
                     Rect::from_min_max(rect_screen.min, pos2(rect_screen.max.x, y0 + h * 0.30)),
-                    if is_valid { "^ Parallel" } else { "❌ Block" },
+                    if is_valid { "^ Parallel" } else { "Block" },
                 ),
                 InsertPosition::BottomParallel => (
                     Rect::from_min_max(pos2(x0, y0 + h * 0.70), rect_screen.max),
-                    if is_valid { "v Parallel" } else { "❌ Block" },
+                    if is_valid { "v Parallel" } else { "Block" },
                 ),
-                InsertPosition::AppendRung => (rect_screen, if is_valid { "+ Add" } else { "❌ Block" }),
+                InsertPosition::AppendRung => (rect_screen, if is_valid { "+ Add" } else { "Block" }),
             };
             let fill_col = if is_valid {
                 Color32::from_rgba_unmultiplied(35, 165, 240, 90)
@@ -3929,7 +3893,14 @@ impl CanvasViewport {
             | TypeTag::Pid
             | TypeTag::Scale
             | TypeTag::Limit
-            | TypeTag::Bitwise => {
+            | TypeTag::Bitwise
+            | TypeTag::MbSlave
+            | TypeTag::Pwm
+            | TypeTag::Select
+            | TypeTag::InRange
+            | TypeTag::Toggle
+            | TypeTag::IncDec
+            | TypeTag::Return => {
                 // Function Block / Instruction Card
                 let card_w = w - 18.0 * self.zoom;
                 let card_h = h - 20.0 * self.zoom;
@@ -4144,6 +4115,60 @@ impl CanvasViewport {
                             elem.symbol.clone()
                         },
                     ),
+                    TypeTag::MbSlave => (
+                        format!("MB_SLAVE : {}", elem.name),
+                        format!("ID:{} {}bps", elem.mb_slave_id, elem.preset_value),
+                        elem.symbol.clone(),
+                    ),
+                    TypeTag::Pwm => (
+                        format!("PWM : {}", elem.name),
+                        format!("IN:{} / {}", elem.fb.in1, elem.preset_value.max(1)),
+                        if sim_active {
+                            format!("DUTY: {}", elem.current_accum)
+                        } else {
+                            elem.symbol.clone()
+                        },
+                    ),
+                    TypeTag::Select => {
+                        let dst = if elem.target_reg.is_empty() { &elem.name } else { &elem.target_reg };
+                        (
+                            format!("SEL : {}", dst),
+                            format!("0:{} 1:{}", elem.fb.in1, elem.fb.in2),
+                            if sim_active {
+                                format!("OUT: {}", elem.current_accum)
+                            } else {
+                                elem.symbol.clone()
+                            },
+                        )
+                    }
+                    TypeTag::InRange => (
+                        "IN_RANGE".to_string(),
+                        format!("{} <= {} <= {}", elem.fb.k[0], elem.fb.in1, elem.fb.k[1]),
+                        if sim_active {
+                            format!("VAL: {}", elem.current_accum)
+                        } else {
+                            elem.symbol.clone()
+                        },
+                    ),
+                    TypeTag::Toggle => (
+                        "ALT (TOGGLE)".to_string(),
+                        elem.name.clone(),
+                        elem.symbol.clone(),
+                    ),
+                    TypeTag::IncDec => (
+                        if elem.fb.mode != 0 { "DEC (-1)" } else { "INC (+1)" }.to_string(),
+                        elem.name.clone(),
+                        if sim_active {
+                            format!("VAL: {}", elem.current_accum)
+                        } else {
+                            elem.symbol.clone()
+                        },
+                    ),
+                    TypeTag::Return => (
+                        "RET".to_string(),
+                        "Early Return".to_string(),
+                        elem.symbol.clone(),
+                    ),
                     _ => ("BLOCK".to_string(), elem.name.clone(), elem.symbol.clone()),
                 };
 
@@ -4177,26 +4202,36 @@ impl CanvasViewport {
                     if elem.is_energized && sim_active { palette.wire_energized } else { palette.rung_text_dim },
                 );
 
-                painter.text(
+                let clip_rect = card_rect.shrink(3.0 * self.zoom);
+                let full_max_w = (card_w - 8.0 * self.zoom).max(8.0);
+                let mid_max_w = (card_w - 36.0 * self.zoom).max(8.0);
+
+                self.draw_fitted_card_text(
+                    painter,
+                    clip_rect,
                     pos2(center.x, card_rect.min.y + 11.0 * self.zoom),
-                    Align2::CENTER_CENTER,
-                    hdr,
-                    self.font_mono(9.5),
+                    &hdr,
+                    9.5,
+                    full_max_w,
                     palette.accent_heading,
                 );
-                painter.text(
+                self.draw_fitted_card_text(
+                    painter,
+                    clip_rect,
                     pos2(center.x, card_rect.center().y + 1.0 * self.zoom),
-                    Align2::CENTER_CENTER,
-                    line1,
-                    self.font_mono(8.8),
+                    &line1,
+                    8.8,
+                    mid_max_w,
                     palette.text_primary,
                 );
                 if !line2.is_empty() {
-                    painter.text(
+                    self.draw_fitted_card_text(
+                        painter,
+                        clip_rect,
                         pos2(center.x, card_rect.max.y - 10.0 * self.zoom),
-                        Align2::CENTER_CENTER,
-                        line2,
-                        self.font_mono(8.2),
+                        &line2,
+                        8.2,
+                        full_max_w,
                         if sim_active {
                             palette.accent_ok
                         } else {
@@ -4420,7 +4455,7 @@ impl CanvasViewport {
                     StrokeKind::Inside,
                 );
 
-                let txt = format!("⚑ LBL {}", elem.name);
+                let txt = format!("LBL {}", elem.name);
                 painter.text(
                     center,
                     Align2::CENTER_CENTER,
@@ -4509,12 +4544,17 @@ impl CanvasViewport {
                     Color32::WHITE,
                 );
 
+                let clip_rect = card_rect.shrink(3.0 * self.zoom);
+                let max_w = (card_w - 8.0 * self.zoom).max(8.0);
+
                 // Center: Instance name
-                painter.text(
+                self.draw_fitted_card_text(
+                    painter,
+                    clip_rect,
                     pos2(center.x, center.y - 4.0 * self.zoom),
-                    Align2::CENTER_CENTER,
                     &elem.name,
-                    self.font_mono(13.0),
+                    13.0,
+                    max_w,
                     if is_selected {
                         if palette.is_light() {
                             palette.accent_heading
@@ -4528,11 +4568,13 @@ impl CanvasViewport {
 
                 // Bottom: Slave ID, Func, Buffer
                 let subtext = format!("ID:{} FC:{} -> {}", elem.mb_slave_id, elem.mb_function, elem.target_reg);
-                painter.text(
+                self.draw_fitted_card_text(
+                    painter,
+                    clip_rect,
                     pos2(center.x, y0 + h - 14.0 * self.zoom),
-                    Align2::CENTER_CENTER,
                     &subtext,
-                    self.font_mono(9.5),
+                    9.5,
+                    max_w,
                     palette.symbol_subtext,
                 );
             }
@@ -4649,6 +4691,18 @@ mod tests {
 
         // Rule 5: Cannot place an output coil before a function block
         assert!(validate_placement(TypeTag::Coil, &ton, InsertPosition::Left, false, false).is_err());
+
+        // Non-Coil right-aligned outputs (e.g. UartSend, MbMaster) vs Contact & Coil chaining
+        let mut uart_tx = LadderElement::new_wire(6);
+        uart_tx.element_type = TypeTag::UartSend;
+        let mut uart_rx = LadderElement::new_wire(7);
+        uart_rx.element_type = TypeTag::UartRecv;
+        assert!(validate_placement(TypeTag::Contact, &uart_tx, InsertPosition::Right, false, true).is_err());
+        assert!(validate_placement(TypeTag::UartSend, &contact, InsertPosition::Left, true, false).is_err());
+        // Chaining Coil after an output FB (e.g. UartSend / MbMaster -> Coil) remains allowed
+        assert!(validate_placement(TypeTag::Coil, &uart_tx, InsertPosition::Right, false, true).is_ok());
+        // Cannot place Coil before UartRecv
+        assert!(validate_placement(TypeTag::Coil, &uart_rx, InsertPosition::Left, false, false).is_err());
     }
 
     #[test]

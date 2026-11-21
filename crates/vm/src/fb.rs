@@ -42,6 +42,13 @@ pub const OP_LIMIT: u8 = 0x71;
 pub const OP_PID: u8 = 0x72;
 pub const OP_UTX: u8 = 0x74;
 pub const OP_URX: u8 = 0x75;
+pub const OP_MB_SLAVE: u8 = 0x76;
+pub const OP_PWM: u8 = 0x77;
+pub const OP_SEL: u8 = 0x78;
+pub const OP_IN_RANGE: u8 = 0x79;
+pub const OP_ALT: u8 = 0x7A;
+pub const OP_INC_DEC: u8 = 0x7B;
+pub const OP_RET: u8 = 0x7C;
 
 // --- OPND kinds ---
 pub const OPND_KIND_WORD: u8 = 0;
@@ -63,6 +70,13 @@ pub const fn opnd_word_count(op: u8) -> usize {
         OP_PID => 6,
         OP_UTX => 1,
         OP_URX => 0,
+        OP_MB_SLAVE => 0,
+        OP_PWM => 1,
+        OP_SEL => 2,
+        OP_IN_RANGE => 3,
+        OP_ALT => 0,
+        OP_INC_DEC => 0,
+        OP_RET => 0,
         _ => 0,
     }
 }

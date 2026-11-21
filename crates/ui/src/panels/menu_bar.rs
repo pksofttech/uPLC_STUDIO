@@ -91,7 +91,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 app.request_import_il();
                 ui.close();
             }
-            if ui.button("📥 Upload Program from Connected PLC...").clicked() {
+            if ui.button("Upload Program from Connected PLC...").clicked() {
                 app.request_upload_from_plc();
                 ui.close();
             }
@@ -107,7 +107,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
             let is_edit_mode = app.work_mode == WorkMode::Edit;
             if !is_edit_mode {
                 if ui
-                    .button(RichText::new("✏ Switch to Edit Mode to Modify Circuit").strong())
+                    .button(RichText::new("Switch to Edit Mode to Modify Circuit").strong())
                     .clicked()
                 {
                     app.set_work_mode(WorkMode::Edit);
@@ -293,7 +293,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 app.update_plc_tab = 2;
                 ui.close();
             }
-            if ui.button("⚡ Update to PLC (Compile IL → Bytecode)...").clicked() {
+            if ui.button("Update to PLC (Compile IL → Bytecode)...").clicked() {
                 app.show_update_plc = true;
                 ui.close();
             }
@@ -309,7 +309,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
             if ui
                 .selectable_label(
                     app.work_mode == WorkMode::Edit,
-                    "✏ 1. Edit Mode (Offline Circuit Editor)",
+                    "1. Edit Mode (Offline Circuit Editor)",
                 )
                 .clicked()
             {
@@ -319,7 +319,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
             if ui
                 .selectable_label(
                     app.work_mode == WorkMode::Simulator,
-                    "💻 2. Simulator Mode (Virtual PLC on PC) [F5]",
+                    "2. Simulator Mode (Virtual PLC on PC) [F5]",
                 )
                 .clicked()
             {
@@ -329,7 +329,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
             if ui
                 .selectable_label(
                     app.work_mode == WorkMode::OnlineDebug,
-                    format!("🔌 3. Online PLC Debug ({} Hardware) [F7 / Ctrl+M]", app.plc_target().mcu_name()),
+                    format!("3. Online PLC Debug ({} Hardware) [F7 / Ctrl+M]", app.plc_target().mcu_name()),
                 )
                 .clicked()
             {
@@ -347,21 +347,21 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 if is_running {
                     "■ Stop Hardware PLC Execution (F5)"
                 } else {
-                    "▶ Start / RUN Hardware PLC (F5)"
+                    "Start / RUN Hardware PLC (F5)"
                 }
             } else if is_running {
-                "⏸ Pause Simulation (F5)"
+                "Pause Simulation (F5)"
             } else {
-                "▶ Run Simulation (F5)"
+                "Run Simulation (F5)"
             };
             if ui.button(sim_label).clicked() {
                 app.toggle_run_mode();
                 ui.close();
             }
             let step_label = if is_hw {
-                "⏭ Single Scan Step Hardware PLC (F6)"
+                "Single Scan Step Hardware PLC (F6)"
             } else {
-                "⏭ Single Scan Step Simulator (F6)"
+                "Single Scan Step Simulator (F6)"
             };
             if ui.button(step_label).clicked() {
                 app.single_step_mode();
@@ -382,7 +382,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 app.update_plc_tab = 2;
                 ui.close();
             }
-            if ui.button("⚡ Update to PLC (Compile IL → Bytecode)...").clicked() {
+            if ui.button("Update to PLC (Compile IL → Bytecode)...").clicked() {
                 app.show_update_plc = true;
                 ui.close();
             }
@@ -424,7 +424,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
 
         // --- HELP MENU ---
         ui.menu_button("Help", |ui| {
-            if ui.button("🔄 Check for Updates...").clicked() {
+            if ui.button("Check for Updates...").clicked() {
                 app.updater.show_window = true;
                 if matches!(app.updater.status, crate::updater::UpdateStatus::Idle) {
                     app.updater.check_for_updates(ui.ctx().clone());
@@ -441,7 +441,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
         if let Some(new_ver) = app.updater.has_pending_update().map(|s| s.to_string()) {
             ui.separator();
             let badge_btn = egui::Button::new(
-                RichText::new(format!("🟢 Update v{} Available", new_ver))
+                RichText::new(format!("Update v{} Available", new_ver))
                     .size(11.0)
                     .strong()
                     .color(egui::Color32::WHITE),
@@ -464,17 +464,17 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
 fn io_pins_menu_label(app: &crate::app::CanvasApp) -> String {
     let target = app.plc_target();
     if target.supports_runtime_io_config() {
-        "🔧 Configure RP2040 Hardware I/O Pins...".to_string()
+        "Configure RP2040 Hardware I/O Pins...".to_string()
     } else {
-        format!("🔧 {} I/O Pin Map...", target.mcu_name())
+        format!("{} I/O Pin Map...", target.mcu_name())
     }
 }
 
 /// Hardware-menu label for the firmware flasher entry (USB UF2 for RP2040, ST-Link for STM32)
 fn flash_menu_label(app: &crate::app::CanvasApp) -> &'static str {
     if app.plc_target().supports_usb_bootsel() {
-        "🔥 Flash MCU Firmware (USB)..."
+        "Flash MCU Firmware (USB)..."
     } else {
-        "🔥 Flash MCU Firmware (ST-Link V2)..."
+        "Flash MCU Firmware (ST-Link V2)..."
     }
 }

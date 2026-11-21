@@ -354,6 +354,20 @@ pub enum VmOpcode {
     Utx = 0x74,
     /// `URX dst`
     Urx = 0x75,
+    /// `MB_SLAVE slave_id, imm = baud_code`
+    MbSlave = 0x76,
+    /// `PWM ch (0..15), imm = max_period` (+1 OPND: duty)
+    Pwm = 0x77,
+    /// `SEL dst` (+2 OPND: IN0, IN1)
+    Sel = 0x78,
+    /// `IN_RANGE` (+3 OPND: IN, MIN, MAX)
+    InRange = 0x79,
+    /// `ALT bit_addr, imm = edge_slot`
+    Alt = 0x7A,
+    /// `INC_DEC word_addr, imm = edge_slot | (is_dec << 15)`
+    IncDec = 0x7B,
+    /// `RET` (conditional early return)
+    Ret = 0x7C,
     End = 0xFF,
 }
 
@@ -426,6 +440,13 @@ impl VmOpcode {
             0x72 => Some(Self::Pid),
             0x74 => Some(Self::Utx),
             0x75 => Some(Self::Urx),
+            0x76 => Some(Self::MbSlave),
+            0x77 => Some(Self::Pwm),
+            0x78 => Some(Self::Sel),
+            0x79 => Some(Self::InRange),
+            0x7A => Some(Self::Alt),
+            0x7B => Some(Self::IncDec),
+            0x7C => Some(Self::Ret),
             0xFF => Some(Self::End),
             _ => None,
         }
@@ -499,6 +520,13 @@ impl VmOpcode {
             Self::Pid => "PID",
             Self::Utx => "UTX",
             Self::Urx => "URX",
+            Self::MbSlave => "MB_SLAVE",
+            Self::Pwm => "PWM",
+            Self::Sel => "SEL",
+            Self::InRange => "IN_RANGE",
+            Self::Alt => "ALT",
+            Self::IncDec => "INC_DEC",
+            Self::Ret => "RET",
             Self::End => "END",
         }
     }
@@ -567,6 +595,13 @@ impl VmOpcode {
             Self::Pid => "PID controller (CV = word_mem[addr], instance = imm)",
             Self::Utx => "UART send on rising edge (instance = addr, mode = imm)",
             Self::Urx => "UART receive byte into word_mem[addr] (acc = received)",
+            Self::MbSlave => "Enable Modbus RTU Slave (slave_id = addr, baud_code = imm)",
+            Self::Pwm => "PWM output duty to %QW[addr] (0..imm)",
+            Self::Sel => "Binary selector: word_mem[addr] = acc ? IN1 : IN0",
+            Self::InRange => "Window compare: acc = (MIN <= IN <= MAX)",
+            Self::Alt => "Toggle bit_mem[addr] on rising edge",
+            Self::IncDec => "Increment or decrement word_mem[addr] by 1 on rising edge",
+            Self::Ret => "Conditional early return from scan cycle",
             Self::MbMaster => "Modbus RTU Master Function Block (IEC 61131-3)",
             Self::MbParam1 => "Modbus Master Buffer & Register Address",
             Self::MbParam2 => "Modbus Master Mode Flags & Register Count",
@@ -582,7 +617,19 @@ impl VmOpcode {
 
     /// `true` for opcodes that need firmware feature level 2
     pub fn is_feature_level_2(&self) -> bool {
-        (*self as u8) == 0x6F || self.operand_words() > 0 || *self == Self::Urx
+        (*self as u8) == 0x6F
+            || self.operand_words() > 0
+            || matches!(
+                *self,
+                Self::Urx
+                    | Self::MbSlave
+                    | Self::Pwm
+                    | Self::Sel
+                    | Self::InRange
+                    | Self::Alt
+                    | Self::IncDec
+                    | Self::Ret
+            )
     }
 }
 
@@ -886,7 +933,9 @@ impl BytecodeProgram {
                 | VmOpcode::Scale
                 | VmOpcode::Limit
                 | VmOpcode::Pid
-                | VmOpcode::Urx => true,
+                | VmOpcode::Urx
+                | VmOpcode::Sel
+                | VmOpcode::IncDec => true,
                 _ => false,
             };
 
@@ -901,6 +950,9 @@ impl BytecodeProgram {
                     _ => (BytecodeCompiler::opnd_text(addr, imm), String::new(), MemoryRegion::None, 0, false),
                 },
                 VmOpcode::Utx => (format!("U{}", addr), String::new(), MemoryRegion::None, addr, false),
+                VmOpcode::MbSlave => (format!("MBS{}", addr), String::new(), MemoryRegion::None, addr, false),
+                VmOpcode::Pwm => (format!("%QW{}", addr), format!("%QW{}", addr), MemoryRegion::AnalogOutputAO, 0x10 + addr, true),
+                VmOpcode::InRange | VmOpcode::Ret => (String::new(), String::new(), MemoryRegion::None, 0, false),
                 _ => {
                     let (c, i, r) = BytecodeCompiler::format_address(addr, for_word);
                     (c, i, r, addr, for_word)
@@ -1258,6 +1310,35 @@ impl BytecodeProgram {
                 VmOpcode::Urx => {
                     urx_idx += 1;
                     out.push_str(&format!("{}UART_RECV URX{}(OUT => {})\n", indent, urx_idx, dst));
+                }
+                VmOpcode::MbSlave => {
+                    let baud = match ins.imm {
+                        1 => 19200,
+                        2 => 38400,
+                        3 => 57600,
+                        4 => 115200,
+                        _ => 9600,
+                    };
+                    out.push_str(&format!("{}CAL  MBS0(SLAVE := {}, BAUD := {})\n", indent, ins.addr, baud));
+                }
+                VmOpcode::Pwm => {
+                    out.push_str(&format!("{}PWM  %QW{} {} {}\n", indent, ins.addr, ops[0], ins.imm.max(1)));
+                }
+                VmOpcode::Sel => {
+                    out.push_str(&format!("{}SEL  {} {} {}\n", indent, dst, ops[0], ops[1]));
+                }
+                VmOpcode::InRange => {
+                    out.push_str(&format!("{}IN_RANGE {} {} {}\n", indent, ops[0], ops[1], ops[2]));
+                }
+                VmOpcode::Alt => {
+                    out.push_str(&format!("{}ALT  {}\n", indent, dst));
+                }
+                VmOpcode::IncDec => {
+                    let op_name = if (ins.imm & SHIFT_EDGE_FLAG) != 0 { "DEC" } else { "INC" };
+                    out.push_str(&format!("{}{}  {}\n", indent, op_name, dst));
+                }
+                VmOpcode::Ret => {
+                    out.push_str(&format!("{}RET\n", indent));
                 }
                 _ => {}
             }
@@ -2315,7 +2396,14 @@ impl BytecodeCompiler {
             | TypeTag::ShiftRight
             | TypeTag::ShiftVariable
             | TypeTag::UartSend
-            | TypeTag::UartRecv => {
+            | TypeTag::UartRecv
+            | TypeTag::MbSlave
+            | TypeTag::Pwm
+            | TypeTag::Select
+            | TypeTag::InRange
+            | TypeTag::Toggle
+            | TypeTag::IncDec
+            | TypeTag::Return => {
                 Self::ensure_rung_condition(first, instructions, io_mappings, mem_table);
                 Self::compile_fb_element(el, io_mappings, instructions, mem_table, ctx);
                 *first = false;
@@ -2555,6 +2643,112 @@ impl BytecodeCompiler {
                     canonical,
                     sym,
                     format!("URX {}", el.target_reg),
+                );
+            }
+            TypeTag::MbSlave => {
+                let baud_code: u16 = match el.preset_value {
+                    19200 => 1,
+                    38400 => 2,
+                    57600 => 3,
+                    115200 => 4,
+                    _ => 0,
+                };
+                Self::push_raw(
+                    instructions,
+                    VmOpcode::MbSlave,
+                    el.mb_slave_id.max(1),
+                    baud_code,
+                    MemoryRegion::None,
+                    el.name.clone(),
+                    el.symbol.clone(),
+                    format!("MB_SLAVE ID={}, BAUD={}", el.mb_slave_id.max(1), el.preset_value),
+                );
+            }
+            TypeTag::Pwm => {
+                let ch = Self::parse_direct_address(&el.name, true)
+                    .map(|(a, _, _)| if a >= 0x10 && a < 0x20 { a - 0x10 } else { a & 0x0F })
+                    .unwrap_or(0);
+                let max_val = el.preset_value.clamp(1, u16::MAX as i32) as u16;
+                Self::push_raw(
+                    instructions,
+                    VmOpcode::Pwm,
+                    ch,
+                    max_val,
+                    MemoryRegion::AnalogOutputAO,
+                    format!("AO{}", ch),
+                    el.symbol.clone(),
+                    format!("PWM %QW{} <- {} (0..{})", ch, fb.in1, max_val),
+                );
+                Self::push_operand(instructions, &fb.in1, false, &label, io_mappings, mem_table, ctx);
+            }
+            TypeTag::Select => {
+                let dst_name = if el.target_reg.is_empty() { &el.name } else { &el.target_reg };
+                let (addr, canonical, region, sym) = Self::word_dst(dst_name, &label, io_mappings, mem_table, ctx);
+                Self::push_raw(
+                    instructions,
+                    VmOpcode::Sel,
+                    addr,
+                    0,
+                    region,
+                    canonical,
+                    sym,
+                    format!("SEL {} := ({}, {})", dst_name, fb.in1, fb.in2),
+                );
+                Self::push_operand(instructions, &fb.in1, false, &label, io_mappings, mem_table, ctx);
+                Self::push_operand(instructions, &fb.in2, false, &label, io_mappings, mem_table, ctx);
+            }
+            TypeTag::InRange => {
+                Self::push_raw(
+                    instructions,
+                    VmOpcode::InRange,
+                    0,
+                    0,
+                    MemoryRegion::None,
+                    String::new(),
+                    el.symbol.clone(),
+                    format!("IN_RANGE {} [{}, {}]", fb.in1, fb.k[0], fb.k[1]),
+                );
+                Self::push_operand(instructions, &fb.in1, false, &label, io_mappings, mem_table, ctx);
+                Self::push_const_operand(instructions, fb.k[0] as i64, &label, ctx);
+                Self::push_const_operand(instructions, fb.k[1] as i64, &label, ctx);
+            }
+            TypeTag::Toggle => {
+                let slot = ctx.alloc_edge_slot(&label);
+                Self::push_bit_ins(
+                    instructions,
+                    VmOpcode::Alt,
+                    &el.name,
+                    io_mappings,
+                    mem_table,
+                    slot as u16,
+                    format!("ALT {}", el.name),
+                );
+            }
+            TypeTag::IncDec => {
+                let slot = ctx.alloc_edge_slot(&label) as u16;
+                let imm = if fb.mode != 0 { slot | SHIFT_EDGE_FLAG } else { slot };
+                let (addr, canonical, region, sym) = Self::word_dst(&el.name, &label, io_mappings, mem_table, ctx);
+                Self::push_raw(
+                    instructions,
+                    VmOpcode::IncDec,
+                    addr,
+                    imm,
+                    region,
+                    canonical,
+                    sym,
+                    format!("{} {}", if fb.mode != 0 { "DEC" } else { "INC" }, el.name),
+                );
+            }
+            TypeTag::Return => {
+                Self::push_raw(
+                    instructions,
+                    VmOpcode::Ret,
+                    0,
+                    0,
+                    MemoryRegion::None,
+                    String::new(),
+                    el.symbol.clone(),
+                    "RET".to_string(),
                 );
             }
             _ => {}

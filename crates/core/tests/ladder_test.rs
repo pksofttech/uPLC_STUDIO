@@ -420,6 +420,8 @@ fn test_plc_standard_ladder_elements_and_conduction() {
     assert!(TypeTag::Ctc.is_right_aligned());
     assert!(TypeTag::Move.is_right_aligned());
     assert!(TypeTag::Math.is_right_aligned());
+    assert!(TypeTag::UartSend.is_right_aligned());
+    assert!(!TypeTag::UartRecv.is_right_aligned());
     assert!(!TypeTag::Contact.is_right_aligned());
     assert!(!TypeTag::Branch.is_right_aligned());
 
@@ -580,6 +582,7 @@ fn test_load_all_example_il_files() {
         "14_counter_up_down_demo",
         "15_ctud_parking_lot_demo",
         "16_toggle_relay_demo",
+        "17_factory_io_from_a_to_b",
     ];
 
     for base in files {
@@ -3073,8 +3076,196 @@ END_PROGRAM
     }
 }
 
+#[test]
+fn test_simulator_mb_master_virtual_slave() {
+    let mut doc = Document::new_empty();
+    let mut r0 = my_canvas_core::ladder::Rung::new(0);
+    r0.elements.push(LadderElement::new_contact(1, "%IX0.0", "TRIG_TX", ContactMode::NormallyOpen));
+    r0.elements.push(LadderElement {
+        id: 2,
+        element_type: TypeTag::MbMaster,
+        name: "MB_TX".to_string(),
+        mb_slave_id: 1,
+        mb_function: 6, // FC06 Write Single Register
+        preset_value: 2, // Slave Holding Reg 2
+        preset_value1: 1,
+        target_reg: "%MW10".to_string(),
+        ..Default::default()
+    });
+    r0.elements.push(LadderElement::new_coil(3, "%QX0.0", "TX_DONE", CoilMode::SetLatch));
 
+    let mut r1 = my_canvas_core::ladder::Rung::new(1);
+    r1.elements.push(LadderElement::new_contact(4, "%IX0.1", "TRIG_RX", ContactMode::NormallyOpen));
+    r1.elements.push(LadderElement {
+        id: 5,
+        element_type: TypeTag::MbMaster,
+        name: "MB_RX".to_string(),
+        mb_slave_id: 1,
+        mb_function: 3, // FC03 Read Holding Registers
+        preset_value: 2, // Slave Holding Reg 2
+        preset_value1: 1,
+        target_reg: "%MW20".to_string(),
+        ..Default::default()
+    });
 
+    doc.program.rungs = vec![r0, r1];
+    doc.simulator.start(&mut doc.program);
+    doc.simulator.write_word("%MW10", 777);
+
+    // 1. Trigger FC06 Write to Virtual Slave 01 Addr 2
+    doc.simulator.set_var_value("%IX0.0", true);
+    doc.simulator.step(&mut doc.program, 20);
+    assert_eq!(doc.simulator.mb_slave_words[0x20 + 2], 777);
+    assert!(doc.simulator.get_var_value("%QX0.0"), "ENO 1-scan pulse should latch %QX0.0");
+
+    // 2. Trigger FC03 Read from Virtual Slave 01 Addr 2 into %MW20
+    doc.simulator.set_var_value("%IX0.1", true);
+    doc.simulator.step(&mut doc.program, 20);
+    assert_eq!(doc.simulator.read_word("%MW20"), 777);
+}
+
+#[test]
+fn test_new_iec_tags_simulator_vm_and_il_roundtrip() {
+    let il = "\
+PROGRAM MainProgram
+VAR
+    MBS0 : MB_SLAVE; (* Slave: 1 *)
+END_VAR
+(* Network 1 *)
+    LD   %SM0
+    CAL  MBS0(SLAVE := 1, BAUD := 9600)
+(* Network 2 *)
+    LD   %IX0.0
+    PWM  %QW0 %MW0 1000
+(* Network 3 *)
+    LD   %IX0.1
+    SEL  %MW1 10 20
+(* Network 4 *)
+    LD   %SM0
+    IN_RANGE %MW2 5 15
+    ST   %QX0.0
+(* Network 5 *)
+    LD   %IX0.2
+    ALT  %MX0.0
+(* Network 6 *)
+    LD   %IX0.3
+    INC  %MW3
+(* Network 7 *)
+    LD   %IX0.4
+    DEC  %MW3
+(* Network 8 *)
+    LD   %IX0.5
+    RET
+(* Network 9 *)
+    LD   %SM0
+    ST   %QX0.1
+END_PROGRAM
+";
+    let mut doc = Document::new_empty();
+    doc.load_from_il_str(il).expect("parse new tags IL");
+
+    // Verify IL roundtrip preserves all 7 new tags
+    let exported = doc.export_to_il_str();
+    let mut doc2 = Document::new_empty();
+    doc2.load_from_il_str(&exported).expect("roundtrip parse new tags IL");
+    assert_eq!(doc2.program.rungs.len(), doc.program.rungs.len());
+
+    // Compile to Micro-VM bytecode and run differential checks
+    let (bc, report) = my_canvas_core::bytecode::BytecodeCompiler::compile_program_with_report(&doc.program);
+    assert!(report.errors.is_empty(), "Unexpected compile errors: {:?}", report.errors);
+    let mut vm = uplc_vm::MicroVm::new();
+    vm.load_bytecode(&bc.to_raw_bytes()).expect("VM load_bytecode failed");
+
+    doc.simulator.start(&mut doc.program);
+    doc.simulator.write_word("%MW0", 1500); // clamped to 1000 by PWM
+    doc.simulator.write_word("%MW2", 10);   // inside [5, 15]
+    vm.bit_mem[0xA0] = 1; // %SM0 Always ON
+    vm.word_mem[0x20] = 1500;
+    vm.word_mem[0x22] = 10;
+
+    // Scan 1: IX0.0=1 (PWM), IX0.1=1 (SEL -> 20), IX0.2=1 (ALT -> 1), IX0.3=1 (INC -> 1)
+    for (idx, on) in [(0, true), (1, true), (2, true), (3, true), (4, false), (5, false)] {
+        doc.simulator.set_var_value(&format!("%IX0.{}", idx), on);
+        vm.bit_mem[idx] = u8::from(on);
+    }
+    doc.simulator.step(&mut doc.program, 20);
+    vm.step_scan(20);
+
+    assert_eq!(doc.simulator.mb_slave_id, 1);
+    assert_eq!(vm.mb_slave_id, 1);
+    assert_eq!(doc.simulator.read_word("%QW0"), 1000);
+    assert_eq!(vm.word_mem[0x10], 1000);
+    assert_eq!(doc.simulator.read_word("%MW1"), 20);
+    assert_eq!(vm.word_mem[0x21], 20);
+    assert!(doc.simulator.get_var_value("%QX0.0"));
+    assert_eq!(vm.bit_mem[0x20], 1);
+    assert!(doc.simulator.get_var_value("%MX0.0"));
+    assert_eq!(vm.bit_mem[0x40], 1);
+    assert_eq!(doc.simulator.read_word("%MW3"), 1);
+    assert_eq!(vm.word_mem[0x23], 1);
+    assert!(doc.simulator.get_var_value("%QX0.1"));
+    assert_eq!(vm.bit_mem[0x21], 1);
+
+    // Scan 2: IX0.2 stays 1 (ALT must NOT re-toggle), IX0.5=1 (RET skips setting QX0.1 if cleared)
+    doc.simulator.set_var_value("%QX0.1", false);
+    vm.bit_mem[0x21] = 0;
+    doc.simulator.set_var_value("%IX0.5", true);
+    vm.bit_mem[5] = 1;
+    doc.simulator.set_var_value("%IX0.1", false);
+    vm.bit_mem[1] = 0;
+    doc.simulator.step(&mut doc.program, 20);
+    vm.step_scan(20);
+
+    assert!(doc.simulator.get_var_value("%MX0.0"));
+    assert_eq!(vm.bit_mem[0x40], 1);
+    assert_eq!(doc.simulator.read_word("%MW1"), 10);
+    assert_eq!(vm.word_mem[0x21], 10);
+    assert!(!doc.simulator.get_var_value("%QX0.1"), "RET must skip remaining rungs");
+    assert_eq!(vm.bit_mem[0x21], 0, "VM OP_RET must skip remaining instructions");
+}
+
+#[test]
+fn test_factory_io_from_a_to_b_set_reset() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let il_path = manifest_dir
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("example/17_factory_io_from_a_to_b.il");
+    let il_content = std::fs::read_to_string(&il_path).expect("read 17_factory_io_from_a_to_b.il");
+    let prog = IlParser::parse(&il_content).expect("parse 17_factory_io_from_a_to_b.il");
+
+    let mut doc = Document::new_empty();
+    doc.program = prog;
+    doc.start_simulation();
+
+    // 1. Initial: Sensor A=0, Sensor B=0 -> Conveyor Y0=0
+    doc.simulator.set_var_value("X0", false);
+    doc.simulator.set_var_value("X1", false);
+    doc.step_simulation(20);
+    assert!(!doc.simulator.get_var_value("Y0"));
+
+    // 2. Box at Sensor A (X0=1) -> Set Conveyor Y0=1
+    doc.simulator.set_var_value("X0", true);
+    doc.step_simulation(20);
+    assert!(doc.simulator.get_var_value("Y0"));
+
+    // 3. Box leaves Sensor A (X0=0, X1=0) -> Conveyor Y0 stays latched ON
+    doc.simulator.set_var_value("X0", false);
+    doc.step_simulation(20);
+    assert!(doc.simulator.get_var_value("Y0"));
+
+    // 4. Box arrives at Sensor B (X1=1) -> Reset Conveyor Y0=0
+    doc.simulator.set_var_value("X1", true);
+    doc.step_simulation(20);
+    assert!(!doc.simulator.get_var_value("Y0"));
+
+    // 5. Box removed from Sensor B (X1=0) -> Conveyor Y0 stays OFF
+    doc.simulator.set_var_value("X1", false);
+    doc.step_simulation(20);
+    assert!(!doc.simulator.get_var_value("Y0"));
+}
 
 
 

@@ -12,7 +12,7 @@ pub fn render(ui: &mut Ui, app: &CanvasApp) {
                 let is_connected = app.is_hw_online_connected();
                 if !is_connected {
                     ui.label(
-                        RichText::new("⚠ MODE: ONLINE PLC (DISCONNECTED - AUTO-RECONNECTING...)")
+                        RichText::new("MODE: ONLINE PLC (DISCONNECTED - AUTO-RECONNECTING...)")
                             .color(palette.accent_warn)
                             .strong(),
                     );
@@ -21,7 +21,7 @@ pub fn render(ui: &mut Ui, app: &CanvasApp) {
                         Some((true, _, ide_crc, _, _)) => {
                             ui.label(
                                 RichText::new(format!(
-                                    "🔌 MODE: ONLINE PLC ({}) ✔ CODE MATCH [0x{:04X}]",
+                                    "MODE: ONLINE PLC ({}) · CODE MATCH [0x{:04X}]",
                                     app.plc_target().mcu_name(),
                                     ide_crc
                                 ))
@@ -32,7 +32,7 @@ pub fn render(ui: &mut Ui, app: &CanvasApp) {
                         Some((false, _, ide_crc, _, plc_crc)) => {
                             ui.label(
                                 RichText::new(format!(
-                                    "⚠ MODE: ONLINE PLC (CODE MISMATCH IDE:0x{:04X} ≠ PLC:0x{:04X})",
+                                    "MODE: ONLINE PLC (CODE MISMATCH IDE:0x{:04X} ≠ PLC:0x{:04X})",
                                     ide_crc, plc_crc
                                 ))
                                 .color(palette.accent_warn)
@@ -41,7 +41,7 @@ pub fn render(ui: &mut Ui, app: &CanvasApp) {
                         }
                         None => {
                             ui.label(
-                                RichText::new(format!("🔌 MODE: ONLINE PLC ({} MONITORING)", app.plc_target().mcu_name()))
+                                RichText::new(format!("MODE: ONLINE PLC ({} MONITORING)", app.plc_target().mcu_name()))
                                     .color(palette.accent_ok)
                                     .strong(),
                             );
@@ -52,21 +52,21 @@ pub fn render(ui: &mut Ui, app: &CanvasApp) {
             WorkMode::Simulator => match app.doc.simulator.state {
                 SimState::Running => {
                     ui.label(
-                        RichText::new("💻 MODE: SIMULATOR (● RUNNING)")
+                        RichText::new("MODE: SIMULATOR (● RUNNING)")
                             .color(palette.accent_ok)
                             .strong(),
                     );
                 }
                 SimState::Step => {
                     ui.label(
-                        RichText::new("💻 MODE: SIMULATOR (⏭ SINGLE STEP)")
+                        RichText::new("MODE: SIMULATOR (SINGLE STEP)")
                             .color(palette.accent_warn)
                             .strong(),
                     );
                 }
                 SimState::Stopped => {
                     ui.label(
-                        RichText::new("💻 MODE: SIMULATOR (⏸ PAUSED)")
+                        RichText::new("MODE: SIMULATOR (PAUSED)")
                             .color(palette.accent_heading)
                             .strong(),
                     );
@@ -74,7 +74,7 @@ pub fn render(ui: &mut Ui, app: &CanvasApp) {
             },
             WorkMode::Edit => {
                 ui.label(
-                    RichText::new("✏ MODE: EDIT (OFFLINE CIRCUIT DESIGN)")
+                    RichText::new("MODE: EDIT (OFFLINE CIRCUIT DESIGN)")
                         .color(palette.accent_heading)
                         .strong(),
                 );

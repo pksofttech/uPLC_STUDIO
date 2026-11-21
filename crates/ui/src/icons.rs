@@ -52,6 +52,13 @@ pub enum VectorIcon {
     ZoomOut,
     ZoomFit,
     HandPan,
+    // Toolbar Mode & Hardware Icons
+    EditPencil,
+    MonitorSim,
+    PlugLink,
+    CpuChip,
+    UploadFromPlc,
+    SyncAlert,
 }
 
 /// Draw a crisp, font-independent vector icon inside `rect`
@@ -622,6 +629,111 @@ pub fn paint_icon(painter: &Painter, rect: Rect, icon: VectorIcon, color: Color3
             painter.line_segment([pos2(c.x - r * 0.10, palm.y), f2], s);
             painter.line_segment([pos2(c.x + r * 0.10, palm.y), f3], s);
             painter.line_segment([pos2(c.x + r * 0.30, palm.y), f4], s);
+        }
+        VectorIcon::EditPencil => {
+            // Crisp diagonal drafting pencil pointing down-left
+            let tip = pos2(c.x - r * 0.80, c.y + r * 0.80);
+            let t1 = pos2(c.x - r * 0.64, c.y + r * 0.28);
+            let t2 = pos2(c.x - r * 0.28, c.y + r * 0.64);
+            let e1 = pos2(c.x + r * 0.36, c.y - r * 0.72);
+            let e2 = pos2(c.x + r * 0.72, c.y - r * 0.36);
+
+            painter.line_segment([tip, t1], s);
+            painter.line_segment([t1, e1], s);
+            painter.line_segment([e1, e2], s);
+            painter.line_segment([e2, t2], s);
+            painter.line_segment([t2, tip], s);
+            // Collar and eraser ferrule
+            painter.line_segment([t1, t2], s_thin);
+            painter.line_segment(
+                [pos2(c.x + r * 0.14, c.y - r * 0.50), pos2(c.x + r * 0.50, c.y - r * 0.14)],
+                s_thin,
+            );
+        }
+        VectorIcon::MonitorSim => {
+            // Clean desktop monitor / simulator screen with stand
+            let screen = Rect::from_min_max(
+                pos2(c.x - r * 0.85, c.y - r * 0.72),
+                pos2(c.x + r * 0.85, c.y + r * 0.32),
+            );
+            painter.rect_stroke(screen, 2.0, s, StrokeKind::Inside);
+            // Neck & stand base
+            painter.line_segment([pos2(c.x, c.y + r * 0.32), pos2(c.x, c.y + r * 0.72)], s_bold);
+            painter.line_segment(
+                [pos2(c.x - r * 0.48, c.y + r * 0.72), pos2(c.x + r * 0.48, c.y + r * 0.72)],
+                s_bold,
+            );
+        }
+        VectorIcon::PlugLink => {
+            // Industrial connector/plug with 2 prongs and cable stem
+            painter.line_segment(
+                [pos2(c.x - r * 0.36, c.y - r * 0.82), pos2(c.x - r * 0.36, c.y - r * 0.28)],
+                s_bold,
+            );
+            painter.line_segment(
+                [pos2(c.x + r * 0.36, c.y - r * 0.82), pos2(c.x + r * 0.36, c.y - r * 0.28)],
+                s_bold,
+            );
+            let body = Rect::from_min_max(
+                pos2(c.x - r * 0.62, c.y - r * 0.28),
+                pos2(c.x + r * 0.62, c.y + r * 0.34),
+            );
+            painter.rect_stroke(
+                body,
+                CornerRadius { nw: 1, ne: 1, sw: 4, se: 4 },
+                s,
+                StrokeKind::Inside,
+            );
+            painter.line_segment([pos2(c.x, c.y + r * 0.34), pos2(c.x, c.y + r * 0.85)], s_bold);
+        }
+        VectorIcon::CpuChip => {
+            // Square IC chip with pins on all 4 sides
+            let body = Rect::from_center_size(c, vec2(r * 1.15, r * 1.15));
+            painter.rect_stroke(body, 2.0, s, StrokeKind::Inside);
+            let die = Rect::from_center_size(c, vec2(r * 0.45, r * 0.45));
+            painter.rect_stroke(die, 1.0, s_thin, StrokeKind::Inside);
+            for offset in [-r * 0.28, r * 0.28] {
+                painter.line_segment(
+                    [pos2(c.x + offset, body.min.y), pos2(c.x + offset, c.y - r * 0.88)],
+                    s_thin,
+                );
+                painter.line_segment(
+                    [pos2(c.x + offset, body.max.y), pos2(c.x + offset, c.y + r * 0.88)],
+                    s_thin,
+                );
+                painter.line_segment(
+                    [pos2(body.min.x, c.y + offset), pos2(c.x - r * 0.88, c.y + offset)],
+                    s_thin,
+                );
+                painter.line_segment(
+                    [pos2(body.max.x, c.y + offset), pos2(c.x + r * 0.88, c.y + offset)],
+                    s_thin,
+                );
+            }
+        }
+        VectorIcon::UploadFromPlc => {
+            // Upward arrow exiting a horizontal tray/base
+            let ty = c.y + r * 0.72;
+            let tl = c.x - r * 0.78;
+            let tr = c.x + r * 0.78;
+            painter.line_segment([pos2(tl, c.y + r * 0.32), pos2(tl, ty)], s);
+            painter.line_segment([pos2(tl, ty), pos2(tr, ty)], s);
+            painter.line_segment([pos2(tr, ty), pos2(tr, c.y + r * 0.32)], s);
+
+            let tip = pos2(c.x, c.y - r * 0.78);
+            painter.line_segment([tip, pos2(c.x, c.y + r * 0.32)], s_bold);
+            painter.line_segment([tip, pos2(c.x - r * 0.45, tip.y + r * 0.45)], s_bold);
+            painter.line_segment([tip, pos2(c.x + r * 0.45, tip.y + r * 0.45)], s_bold);
+        }
+        VectorIcon::SyncAlert => {
+            // Crisp lightning bolt
+            let p0 = pos2(c.x + r * 0.25, c.y - r * 0.82);
+            let p1 = pos2(c.x - r * 0.42, c.y + r * 0.05);
+            let p2 = pos2(c.x + r * 0.42, c.y - r * 0.05);
+            let p3 = pos2(c.x - r * 0.25, c.y + r * 0.82);
+            painter.line_segment([p0, p1], s_bold);
+            painter.line_segment([p1, p2], s_bold);
+            painter.line_segment([p2, p3], s_bold);
         }
     }
 }
