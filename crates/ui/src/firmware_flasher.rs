@@ -595,6 +595,14 @@ impl FirmwareFlasher {
     }
 }
 
+fn fw_card(palette: crate::theme::ThemePalette) -> egui::Frame {
+    egui::Frame::new()
+        .fill(palette.card_bg)
+        .stroke(Stroke::new(1.0, palette.card_border))
+        .corner_radius(CornerRadius::same(6))
+        .inner_margin(egui::Margin::symmetric(12, 8))
+}
+
 /// Render the ST-Link V2 firmware window used when the project target is STM32F103C6T6.
 fn render_stm32_stlink_dialog(ctx: &egui::Context, app: &mut CanvasApp) {
     if !app.firmware_flasher.stlink_scanned {
@@ -611,19 +619,24 @@ fn render_stm32_stlink_dialog(ctx: &egui::Context, app: &mut CanvasApp) {
     let mut trigger_flash = false;
     let busy = app.firmware_flasher.is_busy;
 
-    Window::new("MCU Firmware Manager — STM32F103C6T6 (ST-Link V2)")
+    let max_w = (ctx.content_rect().width() - 32.0).max(460.0);
+    let target_w = 520.0_f32.min(max_w);
+
+    Window::new("Firmware Flasher — STM32F103C6T6")
         .order(egui::Order::Foreground)
         .open(&mut open_win)
-        .min_size([560.0, 420.0])
-        .max_width(640.0)
+        .min_width(target_w)
+        .default_width(target_w)
+        .max_width(max_w)
         .collapsible(false)
         .resizable(true)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .show(ctx, |ui| {
-            ui.group(|ui| {
+            // 1. Debug Probe Card
+            fw_card(palette).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Debug Probe").size(13.0).strong().color(palette.accent_heading));
+                    ui.label(RichText::new("Debug Probe").size(12.5).strong().color(palette.accent_heading));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.add_enabled(!busy, egui::Button::new("Detect ST-Link").small()).clicked() {
                             app.firmware_flasher.stlink_probe = FirmwareFlasher::detect_stlink_probe();
@@ -631,25 +644,50 @@ fn render_stm32_stlink_dialog(ctx: &egui::Context, app: &mut CanvasApp) {
                     });
                 });
                 match &app.firmware_flasher.stlink_probe {
-                    Some(p) => ui.label(RichText::new(format!("● {}", p)).monospace().size(11.5).strong().color(palette.accent_ok)),
+                    Some(p) => ui.label(
+                        RichText::new(format!("● {}", p))
+                            .monospace()
+                            .size(11.5)
+                            .strong()
+                            .color(palette.accent_ok),
+                    ),
                     None => ui.label(
-                        RichText::new("○ No ST-Link found (needs `probe-rs` in PATH and udev rules on Linux)")
+                        RichText::new("○ No ST-Link found")
                             .size(11.5)
                             .color(palette.rung_text_dim),
                     ),
                 };
                 ui.label(
-                    RichText::new("Wiring: SWDIO → PA13 • SWCLK → PA14 • GND → GND • 3.3V → 3.3V (BOOT0 = 0)")
+                    RichText::new("SWDIO=PA13 · SWCLK=PA14 · GND · 3.3V · BOOT0=0")
                         .size(10.5)
                         .color(palette.rung_text_dim),
                 );
             });
 
             ui.add_space(6.0);
-            ui.group(|ui| {
+
+            // 2. Firmware Image Card
+            fw_card(palette).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Firmware (.elf / .bin / .hex)").size(12.5).strong().color(palette.accent_heading));
+                    ui.label(
+                        RichText::new("Firmware Image (.elf / .bin / .hex)")
+                            .size(12.5)
+                            .strong()
+                            .color(palette.accent_heading),
+                    );
+                    let fw_p = Path::new(app.firmware_flasher.stm32_firmware_path.trim());
+                    if fw_p.exists() {
+                        if let Ok(meta) = std::fs::metadata(fw_p) {
+                            let kb = (meta.len() as f64) / 1024.0;
+                            ui.label(
+                                RichText::new(format!("({:.1} KB)", kb))
+                                    .monospace()
+                                    .size(11.0)
+                                    .color(palette.accent_ok),
+                            );
+                        }
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.small_button("Browse...").clicked() {
                             if let Some(file) = rfd::FileDialog::new()
@@ -659,7 +697,11 @@ fn render_stm32_stlink_dialog(ctx: &egui::Context, app: &mut CanvasApp) {
                                 app.firmware_flasher.stm32_firmware_path = file.display().to_string();
                             }
                         }
-                        if ui.small_button("Use Bundled Firmware").clicked() {
+                        if ui
+                            .small_button("Bundled")
+                            .on_hover_text("Select the pre-built STM32F103C6T6 firmware bundled with uPLC Studio")
+                            .clicked()
+                        {
                             if let Some(p) = FirmwareFlasher::find_stm32_firmware_path() {
                                 app.firmware_flasher.stm32_firmware_path = p.display().to_string();
                             }
@@ -673,66 +715,115 @@ fn render_stm32_stlink_dialog(ctx: &egui::Context, app: &mut CanvasApp) {
                         .desired_width(ui.available_width()),
                 );
                 ui.label(
-                    RichText::new("Only firmware pages are rewritten — Ladder program (0x0800_7800) & RETAIN (0x0800_7400) are preserved.")
+                    RichText::new("Preserves Ladder program (0x0800_7800) & RETAIN memory (0x0800_7400).")
                         .size(10.5)
                         .color(palette.rung_text_dim),
                 );
             });
 
             ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                if busy {
-                    ui.spinner();
-                }
-                ui.label(
-                    RichText::new(&app.firmware_flasher.status_summary)
-                        .size(11.5)
-                        .strong()
-                        .color(if app.firmware_flasher.status_is_error { palette.accent_danger } else { palette.text_primary }),
-                );
-            });
-            egui::ScrollArea::vertical()
-                .id_salt("fw_stlink_console_scroll")
-                .max_height(150.0)
-                .stick_to_bottom(true)
-                .show(ui, |ui| {
-                    let mut log_view = if app.firmware_flasher.console_log.is_empty() {
-                        "Steps:\n1. Wire ST-Link V2 to the SWD pins (PA13/PA14/GND/3.3V).\n\
-                         2. Click 'Detect ST-Link'.\n3. Click 'Flash via ST-Link V2'.\n\
-                         4. Connect a USB-TTL adapter to PA9/PA10 and select its port @ 115200 in Options."
-                            .to_string()
+
+            // 3. Status Strip + Smart Collapsible Console Output
+            egui::Frame::new()
+                .fill(if app.firmware_flasher.status_is_error {
+                    Color32::from_rgba_unmultiplied(180, 40, 40, 28)
+                } else {
+                    palette.pill_bg
+                })
+                .stroke(Stroke::new(
+                    1.0,
+                    if app.firmware_flasher.status_is_error {
+                        palette.accent_danger
                     } else {
-                        app.firmware_flasher.console_log.clone()
-                    };
-                    ui.add(
-                        egui::TextEdit::multiline(&mut log_view)
-                            .font(egui::TextStyle::Monospace)
-                            .desired_width(ui.available_width())
-                            .desired_rows(6)
-                            .interactive(false),
-                    );
+                        palette.card_border
+                    },
+                ))
+                .corner_radius(CornerRadius::same(5))
+                .inner_margin(egui::Margin::symmetric(10, 6))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        if busy {
+                            ui.spinner();
+                        }
+                        ui.label(
+                            RichText::new(&app.firmware_flasher.status_summary)
+                                .size(11.5)
+                                .strong()
+                                .color(if app.firmware_flasher.status_is_error {
+                                    palette.accent_danger
+                                } else {
+                                    palette.text_primary
+                                }),
+                        );
+                    });
                 });
 
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
+            ui.add_space(4.0);
+
+            egui::CollapsingHeader::new(
+                RichText::new("Console Output")
+                    .small()
+                    .strong()
+                    .color(palette.rung_text_dim),
+            )
+            .id_salt("fw_stlink_console_collapse")
+            .open(if busy || app.firmware_flasher.status_is_error {
+                Some(true)
+            } else {
+                None
+            })
+            .default_open(false)
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("fw_stlink_console_scroll")
+                    .max_height(140.0)
+                    .stick_to_bottom(true)
+                    .show(ui, |ui| {
+                        let mut log_view = if app.firmware_flasher.console_log.is_empty() {
+                            "Steps:\n1. Wire ST-Link V2 to the SWD pins (PA13/PA14/GND/3.3V).\n\
+                             2. Click 'Detect ST-Link'.\n3. Click 'Flash via ST-Link'.\n\
+                             4. Connect a USB-TTL adapter to PA9/PA10 and select its port @ 115200 in Settings → Hardware."
+                                .to_string()
+                        } else {
+                            app.firmware_flasher.console_log.clone()
+                        };
+                        ui.add(
+                            egui::TextEdit::multiline(&mut log_view)
+                                .font(egui::TextStyle::Monospace)
+                                .desired_width(ui.available_width())
+                                .desired_rows(5)
+                                .interactive(false),
+                        );
+                    });
+            });
+
+            ui.add_space(6.0);
+            ui.separator();
+            ui.add_space(4.0);
+
+            // 4. Unified Pro IDE Footer
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let has_fw = !app.firmware_flasher.stm32_firmware_path.trim().is_empty();
                 let flash_btn = egui::Button::new(
-                    RichText::new("Flash via ST-Link V2").size(12.5).strong().color(Color32::WHITE),
+                    RichText::new("Flash via ST-Link")
+                        .size(12.0)
+                        .strong()
+                        .color(Color32::WHITE),
                 )
                 .fill(Color32::from_rgb(24, 130, 90))
-                .corner_radius(CornerRadius::same(6))
-                .min_size(egui::vec2(210.0, 32.0));
+                .corner_radius(CornerRadius::same(5))
+                .min_size(egui::vec2(130.0, 28.0));
                 if ui.add_enabled(!busy && has_fw, flash_btn).clicked() {
                     trigger_flash = true;
                 }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let close_btn = egui::Button::new(RichText::new("Close").size(12.0))
-                        .corner_radius(CornerRadius::same(6))
-                        .min_size(egui::vec2(76.0, 32.0));
-                    if ui.add_enabled(!busy, close_btn).clicked() {
-                        close_win = true;
-                    }
-                });
+
+                let close_btn = egui::Button::new(RichText::new("Close").size(12.0))
+                    .corner_radius(CornerRadius::same(5))
+                    .min_size(egui::vec2(72.0, 28.0));
+                if ui.add_enabled(!busy, close_btn).clicked() {
+                    close_win = true;
+                }
             });
         });
 
@@ -761,145 +852,134 @@ pub fn render_firmware_flasher_dialog(ctx: &egui::Context, app: &mut CanvasApp) 
         return;
     }
 
-    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !app.firmware_flasher.is_busy {
-        app.firmware_flasher.show_window = false;
-        return;
-    }
-
     let palette = app.theme.palette();
     let mut open_win = app.firmware_flasher.show_window;
     let mut close_win = false;
     let mut trigger_enter_bootsel = false;
     let mut trigger_flash = false;
     let mut trigger_rescan = false;
+    let busy = app.firmware_flasher.is_busy;
 
     let detected_plc_port = CanvasApp::detect_uplc_usb_port();
     let detected_bootsel = app.firmware_flasher.bootsel_drive_path.clone();
 
-    Window::new("MCU Firmware Manager & USB Flasher (RP2040)")
+    let max_w = (ctx.content_rect().width() - 32.0).max(460.0);
+    let target_w = 520.0_f32.min(max_w);
+
+    Window::new("Firmware Flasher — RP2040")
         .order(egui::Order::Foreground)
         .open(&mut open_win)
-        .min_size([560.0, 440.0])
-        .max_width(620.0)
+        .min_width(target_w)
+        .default_width(target_w)
+        .max_width(max_w)
         .collapsible(false)
         .resizable(true)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .show(ctx, |ui| {
-            // 1. Target USB Device Status Card (PLC Serial Mode vs USB BOOTSEL Drive Mode)
-            egui::Frame::new()
-                .fill(if palette.is_light() {
-                    Color32::from_rgb(241, 245, 249)
-                } else {
-                    palette.card_bg
-                })
-                .stroke(Stroke::new(1.0, palette.card_border))
-                .corner_radius(CornerRadius::same(6))
-                .inner_margin(egui::Margin::symmetric(12, 10))
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new("USB Target Device Status")
-                                .size(13.0)
-                                .strong()
-                                .color(palette.accent_heading),
-                        );
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("Rescan USB").clicked() {
-                                trigger_rescan = true;
-                            }
-                        });
-                    });
-
-                    ui.separator();
-
-                    // Row A: PLC USB-CDC Serial Port
-                    ui.horizontal(|ui| {
-                        if let Some(ref port) = detected_plc_port {
-                            ui.label(
-                                RichText::new(format!("● PLC Serial Port: {} (Running Micro-VM)", port))
-                                    .monospace()
-                                    .size(11.5)
-                                    .strong()
-                                    .color(palette.accent_ok),
-                            );
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                let bootsel_btn = egui::Button::new(
-                                    RichText::new("Reboot PLC to BOOTSEL Mode")
-                                        .size(11.0)
-                                        .strong()
-                                        .color(Color32::WHITE),
-                                )
-                                .fill(Color32::from_rgb(217, 119, 6));
-
-                                if ui
-                                    .add_enabled(!app.firmware_flasher.is_busy, bootsel_btn)
-                                    .on_hover_text(
-                                        "Send USB command (0x0A) to safely save RETAIN variables and reboot RP2040 into RPI-RP2 BOOTSEL drive mode without pressing the physical button",
-                                    )
-                                    .clicked()
-                                {
-                                    trigger_enter_bootsel = true;
-                                }
-                            });
-                        } else {
-                            ui.label(
-                                RichText::new("○ PLC Serial Port: Not detected (or currently in BOOTSEL mode)")
-                                    .size(11.5)
-                                    .color(palette.rung_text_dim),
-                            );
+            // 1. Target Device Card (Serial vs BOOTSEL)
+            fw_card(palette).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("Target Device")
+                            .size(12.5)
+                            .strong()
+                            .color(palette.accent_heading),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("Rescan").clicked() {
+                            trigger_rescan = true;
                         }
                     });
+                });
 
-                    ui.add_space(4.0);
+                ui.add_space(2.0);
 
-                    // Row B: USB BOOTSEL Mass Storage Drive (`RPI-RP2`)
-                    ui.horizontal(|ui| {
-                        if let Some(ref drive) = detected_bootsel {
-                            ui.label(
-                                RichText::new(format!(
-                                    "● USB BOOTSEL Drive Ready: {}",
-                                    drive.display()
-                                ))
+                // Row A: Serial
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Serial").size(11.0).strong().color(palette.rung_text_dim));
+                    if let Some(ref port) = detected_plc_port {
+                        ui.label(
+                            RichText::new(format!("● {}", port))
+                                .monospace()
+                                .size(11.5)
+                                .strong()
+                                .color(palette.accent_ok),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let bootsel_btn = egui::Button::new(
+                                RichText::new("Reboot to BOOTSEL")
+                                    .size(11.0)
+                                    .strong()
+                                    .color(Color32::WHITE),
+                            )
+                            .fill(Color32::from_rgb(217, 119, 6))
+                            .corner_radius(CornerRadius::same(4));
+
+                            if ui
+                                .add_enabled(!busy, bootsel_btn)
+                                .on_hover_text(
+                                    "Send USB command (0x0A) to save RETAIN variables and reboot RP2040 into RPI-RP2 BOOTSEL mode",
+                                )
+                                .clicked()
+                            {
+                                trigger_enter_bootsel = true;
+                            }
+                        });
+                    } else {
+                        ui.label(
+                            RichText::new("○ Not detected")
+                                .size(11.5)
+                                .color(palette.rung_text_dim),
+                        );
+                    }
+                });
+
+                ui.add_space(2.0);
+
+                // Row B: BOOTSEL
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("BOOTSEL").size(11.0).strong().color(palette.rung_text_dim));
+                    if let Some(ref drive) = detected_bootsel {
+                        ui.label(
+                            RichText::new(format!("● {}", drive.display()))
                                 .monospace()
                                 .size(11.5)
                                 .strong()
                                 .color(Color32::from_rgb(245, 158, 11)),
-                            );
-                        } else {
-                            ui.label(
-                                RichText::new(
-                                    "○ USB BOOTSEL Drive (RPI-RP2): Waiting for BOOTSEL mode...",
-                                )
+                        );
+                    } else {
+                        ui.label(
+                            RichText::new("○ Waiting for RPI-RP2...")
                                 .size(11.5)
                                 .color(palette.rung_text_dim),
-                            );
-                        }
+                        );
+                    }
 
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui
-                                .small_button("Locate RPI-RP2...")
-                                .on_hover_text("Manually select the mounted RPI-RP2 drive folder")
-                                .clicked()
-                            {
-                                if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-                                    app.firmware_flasher.custom_bootsel_dir =
-                                        folder.display().to_string();
-                                    trigger_rescan = true;
-                                }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .small_button("Locate...")
+                            .on_hover_text("Manually select the mounted RPI-RP2 drive folder")
+                            .clicked()
+                        {
+                            if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                                app.firmware_flasher.custom_bootsel_dir =
+                                    folder.display().to_string();
+                                trigger_rescan = true;
                             }
-                        });
+                        }
                     });
                 });
+            });
 
             ui.add_space(6.0);
 
-            // 2. Firmware Image Selection Card
-            ui.group(|ui| {
+            // 2. Firmware Image Card
+            fw_card(palette).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new("Firmware Binary (.uf2 / .elf)")
+                        RichText::new("Firmware Image (.uf2 / .elf)")
                             .size(12.5)
                             .strong()
                             .color(palette.accent_heading),
@@ -928,7 +1008,7 @@ pub fn render_firmware_flasher_dialog(ctx: &egui::Context, app: &mut CanvasApp) 
                             }
                         }
                         if ui
-                            .small_button("Use Bundled Firmware")
+                            .small_button("Bundled")
                             .on_hover_text("Select the official pre-built RP2040 firmware bundled with uPLC Studio")
                             .clicked()
                         {
@@ -947,17 +1027,15 @@ pub fn render_firmware_flasher_dialog(ctx: &egui::Context, app: &mut CanvasApp) 
                 );
 
                 ui.label(
-                    RichText::new(
-                        "Flashing firmware updates Sector 0.. (Micro-VM engine) while preserving Ladder Bytecode (Sector 510) & RETAIN memory (Sector 511).",
-                    )
-                    .size(10.5)
-                    .color(palette.rung_text_dim),
+                    RichText::new("Preserves Ladder bytecode (Sector 510) & RETAIN memory (Sector 511).")
+                        .size(10.5)
+                        .color(palette.rung_text_dim),
                 );
             });
 
             ui.add_space(6.0);
 
-            // 3. Status Banner & Console Output Log
+            // 3. Status Strip + Smart Collapsible Console Output
             egui::Frame::new()
                 .fill(if app.firmware_flasher.status_is_error {
                     Color32::from_rgba_unmultiplied(180, 40, 40, 28)
@@ -977,7 +1055,7 @@ pub fn render_firmware_flasher_dialog(ctx: &egui::Context, app: &mut CanvasApp) 
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
-                        if app.firmware_flasher.is_busy {
+                        if busy {
                             ui.spinner();
                         }
                         ui.label(
@@ -995,46 +1073,62 @@ pub fn render_firmware_flasher_dialog(ctx: &egui::Context, app: &mut CanvasApp) 
 
             ui.add_space(4.0);
 
-            egui::ScrollArea::vertical()
-                .id_salt("fw_flasher_console_scroll")
-                .max_height(150.0)
-                .stick_to_bottom(true)
-                .show(ui, |ui| {
-                    let mut log_view = if app.firmware_flasher.console_log.is_empty() {
-                        String::from(
-                            "Steps to Flash Firmware via USB:\n\
-                             1. Click 'Reboot PLC to BOOTSEL Mode' (or hold BOOTSEL on the Pico while plugging in USB).\n\
-                             2. Verify 'USB BOOTSEL Drive Ready (RPI-RP2)' appears above.\n\
-                             3. Click 'Flash Firmware via USB' below.",
-                        )
-                    } else {
-                        app.firmware_flasher.console_log.clone()
-                    };
-                    ui.add(
-                        egui::TextEdit::multiline(&mut log_view)
-                            .font(egui::TextStyle::Monospace)
-                            .desired_width(ui.available_width())
-                            .desired_rows(6)
-                            .interactive(false),
-                    );
-                });
+            egui::CollapsingHeader::new(
+                RichText::new("Console Output")
+                    .small()
+                    .strong()
+                    .color(palette.rung_text_dim),
+            )
+            .id_salt("fw_rp2040_console_collapse")
+            .open(if busy || app.firmware_flasher.status_is_error {
+                Some(true)
+            } else {
+                None
+            })
+            .default_open(false)
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("fw_flasher_console_scroll")
+                    .max_height(140.0)
+                    .stick_to_bottom(true)
+                    .show(ui, |ui| {
+                        let mut log_view = if app.firmware_flasher.console_log.is_empty() {
+                            String::from(
+                                "Steps to Flash Firmware via USB:\n\
+                                 1. Click 'Reboot to BOOTSEL' (or hold BOOTSEL on the Pico while plugging in USB).\n\
+                                 2. Verify BOOTSEL drive (RPI-RP2) appears above.\n\
+                                 3. Click 'Flash Firmware' below.",
+                            )
+                        } else {
+                            app.firmware_flasher.console_log.clone()
+                        };
+                        ui.add(
+                            egui::TextEdit::multiline(&mut log_view)
+                                .font(egui::TextStyle::Monospace)
+                                .desired_width(ui.available_width())
+                                .desired_rows(5)
+                                .interactive(false),
+                        );
+                    });
+            });
 
-            ui.add_space(8.0);
+            ui.add_space(6.0);
+            ui.separator();
+            ui.add_space(4.0);
 
-            // 4. Bottom Action Bar (Product One-Click USB Flash)
-            ui.horizontal(|ui| {
-                let busy = app.firmware_flasher.is_busy;
+            // 4. Unified Pro IDE Footer
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let has_fw_file = !app.firmware_flasher.firmware_path.trim().is_empty();
 
                 let flash_btn = egui::Button::new(
-                    RichText::new("Flash Firmware via USB")
-                        .size(12.5)
+                    RichText::new("Flash Firmware")
+                        .size(12.0)
                         .strong()
                         .color(Color32::WHITE),
                 )
                 .fill(Color32::from_rgb(24, 130, 90))
-                .corner_radius(egui::CornerRadius::same(6))
-                .min_size(egui::vec2(210.0, 32.0));
+                .corner_radius(CornerRadius::same(5))
+                .min_size(egui::vec2(130.0, 28.0));
 
                 if ui
                     .add_enabled(!busy && has_fw_file, flash_btn)
@@ -1044,14 +1138,12 @@ pub fn render_firmware_flasher_dialog(ctx: &egui::Context, app: &mut CanvasApp) 
                     trigger_flash = true;
                 }
 
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let close_btn = egui::Button::new(RichText::new("Close").size(12.0))
-                        .corner_radius(CornerRadius::same(6))
-                        .min_size(egui::vec2(76.0, 32.0));
-                    if ui.add_enabled(!busy, close_btn).clicked() {
-                        close_win = true;
-                    }
-                });
+                let close_btn = egui::Button::new(RichText::new("Close").size(12.0))
+                    .corner_radius(CornerRadius::same(5))
+                    .min_size(egui::vec2(72.0, 28.0));
+                if ui.add_enabled(!busy, close_btn).clicked() {
+                    close_win = true;
+                }
             });
         });
 

@@ -75,6 +75,9 @@ impl AppTheme {
                 visuals.selection.bg_fill = Color32::from_rgb(58, 88, 122);
                 visuals.selection.stroke = Stroke::new(1.0, Color32::from_rgb(240, 245, 252));
 
+                visuals.window_corner_radius = CornerRadius::same(8);
+                visuals.window_stroke = Stroke::new(1.0, self.palette().card_border);
+
                 ctx.set_visuals(visuals);
             }
             AppTheme::Dark => {
@@ -82,7 +85,7 @@ impl AppTheme {
                 let text_col = Color32::from_rgb(230, 232, 238);
                 visuals.override_text_color = None;
                 visuals.weak_text_alpha = 0.68;
-                visuals.panel_fill = Color32::from_rgb(24, 24, 27);
+                visuals.panel_fill = Color32::from_rgb(22, 23, 27);
                 visuals.window_fill = Color32::from_rgb(28, 28, 32);
                 visuals.extreme_bg_color = Color32::from_rgb(15, 15, 17);
                 visuals.faint_bg_color = Color32::from_rgb(32, 32, 36);
@@ -91,37 +94,40 @@ impl AppTheme {
                 visuals.widgets.noninteractive.bg_stroke =
                     Stroke::new(1.0, Color32::from_rgb(52, 52, 58));
                 visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, text_col);
-                visuals.widgets.noninteractive.corner_radius = CornerRadius::same(4);
+                visuals.widgets.noninteractive.corner_radius = CornerRadius::same(5);
 
                 visuals.widgets.inactive.bg_fill = Color32::from_rgb(38, 38, 43);
                 visuals.widgets.inactive.bg_stroke =
                     Stroke::new(1.0, Color32::from_rgb(64, 64, 72));
                 visuals.widgets.inactive.fg_stroke =
                     Stroke::new(1.0, Color32::from_rgb(220, 222, 228));
-                visuals.widgets.inactive.corner_radius = CornerRadius::same(4);
+                visuals.widgets.inactive.corner_radius = CornerRadius::same(5);
 
                 visuals.widgets.hovered.bg_fill = Color32::from_rgb(54, 54, 62);
                 visuals.widgets.hovered.bg_stroke =
                     Stroke::new(1.2, Color32::from_rgb(160, 160, 175));
                 visuals.widgets.hovered.fg_stroke =
                     Stroke::new(1.0, Color32::from_rgb(246, 247, 250));
-                visuals.widgets.hovered.corner_radius = CornerRadius::same(4);
+                visuals.widgets.hovered.corner_radius = CornerRadius::same(5);
 
                 visuals.widgets.active.bg_fill = Color32::from_rgb(70, 95, 135);
                 visuals.widgets.active.bg_stroke =
                     Stroke::new(1.5, Color32::from_rgb(160, 195, 240));
                 visuals.widgets.active.fg_stroke = Stroke::new(1.2, Color32::WHITE);
-                visuals.widgets.active.corner_radius = CornerRadius::same(4);
+                visuals.widgets.active.corner_radius = CornerRadius::same(5);
 
                 visuals.widgets.open.bg_fill = Color32::from_rgb(46, 46, 54);
                 visuals.widgets.open.bg_stroke =
                     Stroke::new(1.2, Color32::from_rgb(140, 150, 170));
                 visuals.widgets.open.fg_stroke =
                     Stroke::new(1.0, Color32::from_rgb(246, 247, 250));
-                visuals.widgets.open.corner_radius = CornerRadius::same(4);
+                visuals.widgets.open.corner_radius = CornerRadius::same(5);
 
                 visuals.selection.bg_fill = Color32::from_rgb(65, 95, 145);
                 visuals.selection.stroke = Stroke::new(1.0, Color32::WHITE);
+
+                visuals.window_corner_radius = CornerRadius::same(8);
+                visuals.window_stroke = Stroke::new(1.0, self.palette().card_border);
 
                 ctx.set_visuals(visuals);
             }
@@ -171,6 +177,9 @@ impl AppTheme {
                 visuals.selection.bg_fill = Color32::from_rgb(30, 102, 198);
                 visuals.selection.stroke = Stroke::new(1.0, Color32::WHITE);
 
+                visuals.window_corner_radius = CornerRadius::same(8);
+                visuals.window_stroke = Stroke::new(1.0, self.palette().card_border);
+
                 ctx.set_visuals(visuals);
             }
         }
@@ -185,7 +194,7 @@ impl AppTheme {
                 banner_border: Color32::from_rgb(66, 70, 78),
                 banner_title: Color32::from_rgb(135, 180, 218),
                 banner_sub: Color32::from_rgb(140, 192, 158),
-                wire_idle: Color32::from_rgb(112, 118, 128),
+                wire_idle: Color32::from_rgb(124, 130, 142),
                 wire_energized: Color32::from_rgb(225, 105, 85),
                 wire_glow: Color32::from_rgba_unmultiplied(225, 105, 85, 45),
                 l1_rail: Color32::from_rgb(212, 142, 75),
@@ -211,13 +220,13 @@ impl AppTheme {
                 accent_heading: Color32::from_rgb(122, 172, 218),
                 accent_warn: Color32::from_rgb(218, 172, 95),
                 accent_ok: Color32::from_rgb(108, 188, 138),
-                accent_danger: Color32::from_rgb(215, 115, 110),
+                accent_danger: Color32::from_rgb(232, 122, 116),
                 text_primary: Color32::from_rgb(214, 218, 226),
             },
             AppTheme::Dark => ThemePalette {
-                canvas_bg: Color32::from_rgb(18, 18, 20),
+                canvas_bg: Color32::from_rgb(17, 18, 21),
                 grid_dot: Color32::from_rgb(38, 38, 42),
-                banner_bg: Color32::from_rgb(28, 28, 32),
+                banner_bg: Color32::from_rgb(29, 31, 37),
                 banner_border: Color32::from_rgb(60, 60, 68),
                 banner_title: Color32::from_rgb(230, 230, 235),
                 banner_sub: Color32::from_rgb(175, 180, 190),
@@ -238,9 +247,9 @@ impl AppTheme {
                 symbol_closed: Color32::from_rgb(60, 225, 105),
                 symbol_subtext: Color32::from_rgb(170, 175, 186),
                 coil_idle: Color32::from_rgb(120, 180, 245),
-                card_bg: Color32::from_rgb(26, 26, 30),
-                card_border: Color32::from_rgb(85, 88, 98),
-                pill_bg: Color32::from_rgb(30, 30, 35),
+                card_bg: Color32::from_rgb(31, 33, 39),
+                card_border: Color32::from_rgb(62, 65, 74),
+                pill_bg: Color32::from_rgb(26, 27, 32),
                 pill_active_bg: Color32::from_rgba_unmultiplied(40, 95, 55, 225),
                 comment_bg: Color32::from_rgba_unmultiplied(35, 60, 42, 165),
                 comment_fg: Color32::from_rgb(125, 225, 145),
@@ -271,18 +280,18 @@ impl AppTheme {
                 rung_text_num: Color32::from_rgb(24, 34, 50),
                 rung_text_sel: Color32::from_rgb(168, 82, 0),
                 symbol_idle: Color32::from_rgb(26, 38, 56),
-                symbol_closed: Color32::from_rgb(16, 145, 58),
+                symbol_closed: Color32::from_rgb(14, 124, 50),
                 symbol_subtext: Color32::from_rgb(68, 82, 106),
                 coil_idle: Color32::from_rgb(18, 94, 185),
                 card_bg: Color32::from_rgb(255, 255, 255),
-                card_border: Color32::from_rgb(135, 158, 190),
+                card_border: Color32::from_rgb(188, 199, 216),
                 pill_bg: Color32::from_rgb(236, 242, 250),
                 pill_active_bg: Color32::from_rgba_unmultiplied(22, 150, 68, 225),
                 comment_bg: Color32::from_rgba_unmultiplied(215, 242, 222, 220),
                 comment_fg: Color32::from_rgb(16, 108, 44),
                 accent_heading: Color32::from_rgb(16, 88, 178),
-                accent_warn: Color32::from_rgb(180, 102, 0),
-                accent_ok: Color32::from_rgb(16, 135, 55),
+                accent_warn: Color32::from_rgb(152, 80, 0),
+                accent_ok: Color32::from_rgb(14, 116, 48),
                 accent_danger: Color32::from_rgb(198, 32, 26),
                 text_primary: Color32::from_rgb(22, 28, 40),
             },
@@ -372,4 +381,61 @@ pub fn configure_fonts(ctx: &egui::Context) {
     }
 
     ctx.set_fonts(fonts);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn linearize_channel(c: u8) -> f64 {
+        let s = f64::from(c) / 255.0;
+        if s <= 0.04045 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        }
+    }
+
+    fn relative_luminance(c: Color32) -> f64 {
+        0.2126 * linearize_channel(c.r())
+            + 0.7152 * linearize_channel(c.g())
+            + 0.0722 * linearize_channel(c.b())
+    }
+
+    fn wcag_contrast_ratio(a: Color32, b: Color32) -> f64 {
+        let la = relative_luminance(a);
+        let lb = relative_luminance(b);
+        let (lighter, darker) = if la >= lb { (la, lb) } else { (lb, la) };
+        (lighter + 0.05) / (darker + 0.05)
+    }
+
+    #[test]
+    fn all_themes_meet_wcag_aa_contrast() {
+        for theme in AppTheme::ALL {
+            let p = theme.palette();
+            let foregrounds = [
+                ("text_primary", p.text_primary),
+                ("rung_text_dim", p.rung_text_dim),
+                ("accent_heading", p.accent_heading),
+                ("accent_warn", p.accent_warn),
+                ("accent_ok", p.accent_ok),
+                ("accent_danger", p.accent_danger),
+            ];
+            let backgrounds = [("card_bg", p.card_bg), ("banner_bg", p.banner_bg)];
+
+            for (bg_name, bg) in backgrounds {
+                for (fg_name, fg) in foregrounds {
+                    let ratio = wcag_contrast_ratio(fg, bg);
+                    assert!(
+                        ratio >= 4.5,
+                        "Theme {:?}: {} on {} has contrast {:.2} (< 4.5 WCAG AA)",
+                        theme,
+                        fg_name,
+                        bg_name,
+                        ratio
+                    );
+                }
+            }
+        }
+    }
 }

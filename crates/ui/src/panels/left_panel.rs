@@ -7,10 +7,30 @@ use egui::{
     Vec2,
 };
 
+fn lp_card(palette: ThemePalette) -> egui::Frame {
+    egui::Frame::new()
+        .fill(palette.card_bg)
+        .stroke(Stroke::new(1.0, palette.card_border))
+        .corner_radius(CornerRadius::same(6))
+        .inner_margin(egui::Margin::symmetric(8, 6))
+}
+
+fn accent_color(accent_kind: u8, palette: ThemePalette) -> Color32 {
+    match accent_kind {
+        0 => palette.accent_ok,
+        1 => palette.accent_warn,
+        2 => palette.accent_heading,
+        3 => palette.coil_idle,
+        4 => palette.accent_danger,
+        _ => palette.wire_idle,
+    }
+}
+
 pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
     let palette = app.theme.palette();
     let is_edit_mode = app.work_mode == WorkMode::Edit;
 
+    // --- Mode-Locked Banner (Simulator / Online PLC Debug) ---
     if !is_edit_mode {
         let (mode_title, mode_col) = match app.work_mode {
             WorkMode::Simulator => ("Simulator Mode", palette.accent_ok),
@@ -19,1062 +39,436 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
         };
         egui::Frame::new()
             .fill(mode_col.gamma_multiply(0.14))
-            .stroke(Stroke::new(1.2, mode_col))
+            .stroke(Stroke::new(1.0, mode_col))
             .corner_radius(CornerRadius::same(6))
-            .inner_margin(egui::Margin::symmetric(8, 6))
+            .inner_margin(egui::Margin::symmetric(8, 5))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.label(RichText::new(mode_title).color(mode_col).strong().size(11.5));
-                ui.label(
-                    RichText::new("Circuit editing is locked while testing.")
-                        .size(10.0)
-                        .color(palette.text_primary),
-                );
-                ui.add_space(4.0);
-                if ui
-                    .add_sized(
-                        [ui.available_width(), 24.0],
-                        egui::Button::new(
-                            RichText::new("Switch to Edit Mode")
-                                .strong()
-                                .size(11.0)
-                                .color(Color32::WHITE),
-                        )
-                        .fill(palette.accent_heading),
-                    )
-                    .clicked()
-                {
-                    app.set_work_mode(WorkMode::Edit);
-                }
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(mode_title).color(mode_col).strong().size(11.0));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new("Switch to Edit")
+                                        .strong()
+                                        .size(10.5)
+                                        .color(Color32::WHITE),
+                                )
+                                .fill(palette.accent_heading)
+                                .corner_radius(CornerRadius::same(4)),
+                            )
+                            .clicked()
+                        {
+                            app.set_work_mode(WorkMode::Edit);
+                        }
+                    });
+                });
             });
-        ui.add_space(6.0);
+        ui.add_space(5.0);
     }
 
     ui.add_enabled_ui(is_edit_mode, |ui| {
-    // --- 1. Top Box: Modern Icon Grid for Network Tools ---
-    ui.group(|ui| {
-        ui.set_width(ui.available_width());
+        // --- 1. Compact 1-Row Network Tools Card ---
+        lp_card(palette).show(ui, |ui| {
+            ui.set_width(ui.available_width());
 
-        let total_rungs = app.doc.program.rungs.len();
-        let cur_idx = app.doc.selected_rung_idx;
-        let can_move_up = cur_idx.map_or(false, |i| i > 0);
-        let can_move_dn = cur_idx.map_or(false, |i| i + 1 < total_rungs);
-        let has_rung = cur_idx.is_some();
+            let total_rungs = app.doc.program.rungs.len();
+            let cur_idx = app.doc.selected_rung_idx;
+            let can_move_up = cur_idx.map_or(false, |i| i > 0);
+            let can_move_dn = cur_idx.map_or(false, |i| i + 1 < total_rungs);
+            let has_rung = cur_idx.is_some();
 
-        // Header with Rung Status Badge
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new("Network Tools")
-                    .color(palette.accent_heading)
-                    .strong(),
-            );
+            // Header row: Network + Rung badge
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("Network")
+                        .size(11.5)
+                        .strong()
+                        .color(palette.accent_heading),
+                );
 
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if let Some(idx) = cur_idx {
-                    let badge_text = format!("#{}/{}", idx + 1, total_rungs);
-                    let pill_bg = if palette.is_light() {
-                        Color32::from_rgb(220, 235, 252)
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if let Some(idx) = cur_idx {
+                        let badge_text = format!("#{}/{}", idx + 1, total_rungs);
+                        let pill_bg = if palette.is_light() {
+                            Color32::from_rgb(220, 235, 252)
+                        } else {
+                            Color32::from_rgb(32, 50, 75)
+                        };
+                        let pill_border = if palette.is_light() {
+                            Color32::from_rgb(70, 130, 220)
+                        } else {
+                            Color32::from_rgb(80, 140, 230)
+                        };
+                        egui::Frame::new()
+                            .fill(pill_bg)
+                            .stroke(Stroke::new(1.0, pill_border))
+                            .corner_radius(CornerRadius::same(4))
+                            .inner_margin(egui::Margin::symmetric(5, 1))
+                            .show(ui, |ui| {
+                                ui.label(RichText::new(badge_text).size(10.0).strong().color(
+                                    if palette.is_light() {
+                                        Color32::from_rgb(20, 60, 140)
+                                    } else {
+                                        Color32::WHITE
+                                    },
+                                ));
+                            });
                     } else {
-                        Color32::from_rgb(32, 50, 75)
-                    };
-                    let pill_border = if palette.is_light() {
-                        Color32::from_rgb(70, 130, 220)
-                    } else {
-                        Color32::from_rgb(80, 140, 230)
-                    };
-                    egui::Frame::new()
-                        .fill(pill_bg)
-                        .stroke(Stroke::new(1.0, pill_border))
-                        .corner_radius(CornerRadius::same(4))
-                        .inner_margin(egui::Margin::symmetric(5, 1))
-                        .show(ui, |ui| {
-                            ui.label(RichText::new(badge_text).size(10.0).strong().color(
-                                if palette.is_light() {
-                                    Color32::from_rgb(20, 60, 140)
-                                } else {
-                                    Color32::WHITE
-                                },
-                            ));
-                        });
-                } else {
-                    ui.label(
-                        RichText::new(format!("{} Rungs", total_rungs))
-                            .size(10.5)
-                            .color(palette.rung_text_dim),
-                    );
-                }
-            });
-        });
-
-        ui.separator();
-
-        let copy_accent = if palette.is_light() {
-            Color32::from_rgb(115, 65, 185)
-        } else {
-            Color32::from_rgb(168, 148, 220)
-        };
-
-        let avail_w = ui.available_width();
-        let col_w = ((avail_w - 6.0) / 3.0).floor().max(42.0);
-
-        // Row 1: New Rung, Move Up, Move Down
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 3.0;
-
-            if network_action_tile(
-                ui,
-                VectorIcon::NewRung,
-                "New Rung",
-                palette.accent_ok,
-                true,
-                col_w,
-                palette,
-            )
-            .on_hover_text("Append a new network to the end of ladder program")
-            .clicked()
-            {
-                app.doc.add_rung();
-            }
-
-            if network_action_tile(
-                ui,
-                VectorIcon::MoveUp,
-                "Move Up",
-                palette.accent_heading,
-                can_move_up,
-                col_w,
-                palette,
-            )
-            .on_hover_text("Move selected network up")
-            .clicked()
-            {
-                if let Some(idx) = cur_idx {
-                    app.doc.move_rung_up(idx);
-                }
-            }
-
-            if network_action_tile(
-                ui,
-                VectorIcon::MoveDown,
-                "Move Dn",
-                palette.accent_heading,
-                can_move_dn,
-                col_w,
-                palette,
-            )
-            .on_hover_text("Move selected network down")
-            .clicked()
-            {
-                if let Some(idx) = cur_idx {
-                    app.doc.move_rung_down(idx);
-                }
-            }
-        });
-
-        ui.add_space(3.0);
-
-        // Row 2: Duplicate Below, Duplicate Above, Delete
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 3.0;
-
-            if network_action_tile(
-                ui,
-                VectorIcon::CopyDown,
-                "Duplicate",
-                copy_accent,
-                has_rung,
-                col_w,
-                palette,
-            )
-            .on_hover_text("Duplicate selected network below (copy & paste)")
-            .clicked()
-            {
-                if cur_idx.is_some() {
-                    app.paste_network_below();
-                }
-            }
-
-            if network_action_tile(
-                ui,
-                VectorIcon::CopyUp,
-                "Copy Up",
-                copy_accent,
-                has_rung,
-                col_w,
-                palette,
-            )
-            .on_hover_text("Duplicate selected network above current position")
-            .clicked()
-            {
-                if let Some(idx) = cur_idx {
-                    app.doc.copy_rung_at(idx, idx);
-                }
-            }
-
-            if network_action_tile(
-                ui,
-                VectorIcon::DeleteRung,
-                "Delete",
-                palette.accent_danger,
-                has_rung,
-                col_w,
-                palette,
-            )
-            .on_hover_text("Delete selected network (Delete)")
-            .clicked()
-            {
-                if let Some(idx) = cur_idx {
-                    app.doc.delete_rung(idx);
-                }
-            }
-        });
-    });
-
-    ui.add_space(6.0);
-
-    // --- 2. Bottom Box: Modern Components Palette with Quick Bar & Collapsing Accordion ---
-    ui.group(|ui| {
-        ui.set_width(ui.available_width());
-        ui.label(
-            RichText::new("Components")
-                .color(palette.accent_heading)
-                .strong(),
-        );
-        ui.separator();
-
-        // --- Quick Access Insert Bar ---
-        ui.label(
-            RichText::new("Quick Insert")
-                .size(11.0)
-                .color(palette.accent_heading)
-                .strong(),
-        );
-
-        let avail_w = ui.available_width();
-        let col_w = ((avail_w - 6.0) / 3.0).floor().max(42.0);
-
-        // Row 1: NO, NC, Coil
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 3.0;
-            quick_tool_tile(
-                ui,
-                app,
-                "-[ ]-",
-                "NO",
-                ActiveTool::ContactNo,
-                palette.accent_ok,
-                col_w,
-                palette,
-            );
-            quick_tool_tile(
-                ui,
-                app,
-                "-[/]-",
-                "NC",
-                ActiveTool::ContactNc,
-                palette.accent_warn,
-                col_w,
-                palette,
-            );
-            quick_tool_tile(
-                ui,
-                app,
-                "-( )-",
-                "Coil",
-                ActiveTool::CoilNormal,
-                palette.coil_idle,
-                col_w,
-                palette,
-            );
-        });
-        ui.add_space(3.0);
-
-        // Row 2: Set, Reset, TON
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 3.0;
-            quick_tool_tile(
-                ui,
-                app,
-                "-(S)-",
-                "Set",
-                ActiveTool::CoilSet,
-                palette.accent_heading,
-                col_w,
-                palette,
-            );
-            quick_tool_tile(
-                ui,
-                app,
-                "-(R)-",
-                "Reset",
-                ActiveTool::CoilReset,
-                palette.accent_warn,
-                col_w,
-                palette,
-            );
-            quick_tool_tile(
-                ui,
-                app,
-                "TON",
-                "Timer",
-                ActiveTool::Ton,
-                palette.accent_ok,
-                col_w,
-                palette,
-            );
-        });
-
-        ui.add_space(5.0);
-        ui.separator();
-        ui.add_space(3.0);
-
-        // --- Search / Filter bar ---
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            ui.label(RichText::new("Find:").size(10.5).color(palette.rung_text_dim));
-            let edit_w = (ui.available_width()
-                - if !app.component_filter.is_empty() {
-                    22.0
-                } else {
-                    0.0
-                })
-            .max(60.0);
-            ui.add(
-                egui::TextEdit::singleline(&mut app.component_filter)
-                    .hint_text("Filter components...")
-                    .desired_width(edit_w),
-            );
-            if !app.component_filter.is_empty() {
-                if ui.small_button("×").clicked() {
-                    app.component_filter.clear();
-                }
-            }
-        });
-
-        ui.add_space(4.0);
-
-        // --- Collapsing Accordion or Filtered Results ---
-        egui::ScrollArea::vertical()
-            .id_salt("left_components_scroll")
-            .show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 2.0;
-
-                let filter_query = app.component_filter.trim().to_lowercase();
-                if !filter_query.is_empty() {
-                    let mut match_count = 0;
-                    for comp in ALL_COMPONENTS {
-                        if comp.name.to_lowercase().contains(&filter_query)
-                            || comp.badge.to_lowercase().contains(&filter_query)
-                            || comp.category.to_lowercase().contains(&filter_query)
-                        {
-                            component_accordion_item(
-                                ui,
-                                app,
-                                comp.icon,
-                                comp.badge,
-                                comp.name,
-                                comp.tool,
-                                comp.accent(palette),
-                                palette,
-                            );
-                            match_count += 1;
-                        }
-                    }
-                    if match_count == 0 {
-                        ui.add_space(4.0);
                         ui.label(
-                            RichText::new("No matching components")
-                                .size(11.0)
+                            RichText::new(format!("{} Rungs", total_rungs))
+                                .size(10.0)
                                 .color(palette.rung_text_dim),
                         );
                     }
-                } else {
-                    // 1. IEC Bit Logic
-                    egui::CollapsingHeader::new(
-                        RichText::new("IEC Bit Logic")
-                            .size(11.5)
-                            .strong()
-                            .color(palette.accent_heading),
-                    )
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        ui.spacing_mut().item_spacing.y = 2.0;
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::ContactNo),
-                            "-[ ]-",
-                            "NO Contact [ ]",
-                            ActiveTool::ContactNo,
-                            palette.accent_ok,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::ContactNc),
-                            "-[/]-",
-                            "NC Contact [/]",
-                            ActiveTool::ContactNc,
-                            palette.accent_warn,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::PulseEdge),
-                            "-[P]-",
-                            "P Contact (Rising)",
-                            ActiveTool::ContactP,
-                            palette.accent_ok,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::PulseEdge),
-                            "-[N]-",
-                            "N Contact (Falling)",
-                            ActiveTool::ContactN,
-                            palette.accent_warn,
-                            palette,
-                        );
-                        ui.separator();
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::Coil),
-                            "-( )-",
-                            "Coil (Normal Out)",
-                            ActiveTool::CoilNormal,
-                            palette.coil_idle,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::Coil),
-                            "-(/)-",
-                            "Negated Coil (/)",
-                            ActiveTool::CoilNegated,
-                            palette.accent_danger,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::CoilSet),
-                            "-(S)-",
-                            "Set Latch Coil (S)",
-                            ActiveTool::CoilSet,
-                            palette.accent_heading,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::CoilReset),
-                            "-(R)-",
-                            "Reset Coil (R)",
-                            ActiveTool::CoilReset,
-                            palette.accent_warn,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::PulseEdge),
-                            "-(P)-",
-                            "Positive Edge Coil",
-                            ActiveTool::CoilP,
-                            palette.accent_ok,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::PulseEdge),
-                            "-(N)-",
-                            "Negative Edge Coil",
-                            ActiveTool::CoilN,
-                            palette.accent_warn,
-                            palette,
-                        );
-                        ui.separator();
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::FunctionBlock),
-                            "SR",
-                            "SR Bistable FB",
-                            ActiveTool::Sr,
-                            palette.accent_heading,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::FunctionBlock),
-                            "RS",
-                            "RS Bistable FB",
-                            ActiveTool::Rs,
-                            palette.accent_heading,
-                            palette,
-                        );
-                        ui.separator();
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::MasterRelay),
-                            "MCR",
-                            "Master Relay (MC)",
-                            ActiveTool::MasterRelay,
-                            palette.accent_warn,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::ParallelBranch),
-                            "-[∥]-",
-                            "Parallel Branch",
-                            ActiveTool::Branch,
-                            palette.accent_ok,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            None,
-                            "───",
-                            "Short Circuit Wire",
-                            ActiveTool::Wire,
-                            palette.wire_idle,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            None,
-                            "─ ─",
-                            "Open Circuit",
-                            ActiveTool::OpenCircuit,
-                            palette.accent_danger,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::FunctionBlock),
-                            "ALT",
-                            "ALT (Toggle / Flip-Flop)",
-                            ActiveTool::Toggle,
-                            palette.accent_warn,
-                            palette,
-                        );
-                    });
+                });
+            });
 
-                    // 2. IEC Timers & Counters
-                    egui::CollapsingHeader::new(
-                        RichText::new("IEC Timers & Counters")
-                            .size(11.5)
-                            .strong()
-                            .color(palette.accent_ok),
-                    )
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        ui.spacing_mut().item_spacing.y = 2.0;
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::Timer),
-                            "TON",
-                            "TON (On-Delay)",
-                            ActiveTool::Ton,
-                            palette.accent_ok,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::Timer),
-                            "TOF",
-                            "TOF (Off-Delay)",
-                            ActiveTool::Tof,
-                            palette.accent_ok,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::Timer),
-                            "TP",
-                            "TP (Pulse Timer)",
-                            ActiveTool::Tp,
-                            palette.accent_ok,
-                            palette,
-                        );
-                        ui.separator();
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::Counter),
-                            "CTU",
-                            "CTU (Count Up)",
-                            ActiveTool::Ctu,
-                            palette.accent_warn,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::Counter),
-                            "CTD",
-                            "CTD (Count Down)",
-                            ActiveTool::Ctd,
-                            palette.accent_warn,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::Counter),
-                            "CTUD",
-                            "CTUD (Up/Down)",
-                            ActiveTool::Ctud,
-                            palette.accent_warn,
-                            palette,
-                        );
-                    });
+            ui.add_space(4.0);
 
-                    // 3. IEC Edge Triggers
-                    egui::CollapsingHeader::new(
-                        RichText::new("IEC Edge Triggers")
-                            .size(11.5)
-                            .strong()
-                            .color(palette.accent_ok),
-                    )
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        ui.spacing_mut().item_spacing.y = 2.0;
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::PulseEdge),
-                            "R_TRG",
-                            "R_TRIG (Rising Edge)",
-                            ActiveTool::RTrig,
-                            palette.accent_ok,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::PulseEdge),
-                            "F_TRG",
-                            "F_TRIG (Falling Edge)",
-                            ActiveTool::FTrig,
-                            palette.accent_warn,
-                            palette,
-                        );
-                    });
+            let copy_accent = if palette.is_light() {
+                Color32::from_rgb(115, 65, 185)
+            } else {
+                Color32::from_rgb(168, 148, 220)
+            };
 
-                    // 4. IEC Math & Compare
-                    egui::CollapsingHeader::new(
-                        RichText::new("IEC Math & Compare")
-                            .size(11.5)
-                            .strong()
-                            .color(palette.accent_warn),
-                    )
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        ui.spacing_mut().item_spacing.y = 2.0;
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::FunctionBlock),
-                            ":=",
-                            "Move [:=]",
-                            ActiveTool::Move,
-                            palette.accent_heading,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::FunctionBlock),
-                            "CMP",
-                            "Compare [==, !=, ...]",
-                            ActiveTool::Compare,
-                            palette.accent_heading,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::FunctionBlock),
-                            "+=",
-                            "Add [+=]",
-                            ActiveTool::Add,
-                            palette.accent_ok,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::FunctionBlock),
-                            "-=",
-                            "Sub [-=]",
-                            ActiveTool::Sub,
-                            palette.accent_warn,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::FunctionBlock),
-                            "*=",
-                            "Mul [*=]",
-                            ActiveTool::Mul,
-                            palette.accent_heading,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::FunctionBlock),
-                            "/=",
-                            "Div [/=]",
-                            ActiveTool::Div,
-                            palette.accent_danger,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::FunctionBlock),
-                            "%=",
-                            "Mod [%=]",
-                            ActiveTool::Mod,
-                            palette.accent_heading,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::FunctionBlock),
-                            "RNG",
-                            "IN_RANGE (Window Compare)",
-                            ActiveTool::InRange,
-                            palette.accent_ok,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::FunctionBlock),
-                            "SEL",
-                            "SEL (Binary Selector)",
-                            ActiveTool::Sel,
-                            palette.accent_heading,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::FunctionBlock),
-                            "±1",
-                            "INC / DEC (1-Shot Step)",
-                            ActiveTool::IncDec,
-                            palette.accent_warn,
-                            palette,
-                        );
-                    });
+            let avail_w = ui.available_width();
+            let btn_w = ((avail_w - 15.0) / 6.0).floor().max(22.0);
 
-                    // 5. IEC Program Flow
-                    egui::CollapsingHeader::new(
-                        RichText::new("IEC Program Flow")
-                            .size(11.5)
-                            .strong()
-                            .color(palette.accent_heading),
-                    )
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        ui.spacing_mut().item_spacing.y = 2.0;
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::MoveDown),
-                            "JMP",
-                            "JMP (Jump to Label)",
-                            ActiveTool::Jump,
-                            palette.accent_heading,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::MoveUp),
-                            "LBL",
-                            "LBL (Target Label)",
-                            ActiveTool::Label,
-                            palette.accent_ok,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::FunctionBlock),
-                            "RET",
-                            "RET (Conditional Return)",
-                            ActiveTool::Return,
-                            palette.accent_danger,
-                            palette,
-                        );
-                    });
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 3.0;
 
-                    // 6. Process Control
-                    egui::CollapsingHeader::new(
-                        RichText::new("Process Control")
-                            .size(11.5)
-                            .strong()
-                            .color(palette.accent_ok),
-                    )
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        ui.spacing_mut().item_spacing.y = 2.0;
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::FunctionBlock),
-                            "PID",
-                            "PID Controller",
-                            ActiveTool::Pid,
-                            palette.accent_ok,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::FunctionBlock),
-                            "SCL",
-                            "Scale (Linear Map)",
-                            ActiveTool::Scale,
-                            palette.accent_heading,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::FunctionBlock),
-                            "LIM",
-                            "Limit (Clamp Min/Max)",
-                            ActiveTool::Limit,
-                            palette.accent_warn,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::FunctionBlock),
-                            "ADC",
-                            "A/D Converter Read",
-                            ActiveTool::Adc,
-                            palette.accent_heading,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::FunctionBlock),
-                            "PWM",
-                            "PWM Output (%QW)",
-                            ActiveTool::Pwm,
-                            palette.accent_ok,
-                            palette,
-                        );
-                    });
+                if network_icon_btn(
+                    ui,
+                    VectorIcon::NewRung,
+                    palette.accent_ok,
+                    true,
+                    btn_w,
+                    palette,
+                )
+                .on_hover_text("New Rung")
+                .clicked()
+                {
+                    app.doc.add_rung();
+                }
 
-                    // 7. Bitwise & Shift
-                    egui::CollapsingHeader::new(
-                        RichText::new("Bitwise & Shift")
-                            .size(11.5)
-                            .strong()
-                            .color(palette.accent_warn),
-                    )
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        ui.spacing_mut().item_spacing.y = 2.0;
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::FunctionBlock),
-                            "AND",
-                            "Bitwise AND [&]",
-                            ActiveTool::BitAnd,
-                            palette.accent_ok,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::FunctionBlock),
-                            "OR",
-                            "Bitwise OR [|]",
-                            ActiveTool::BitOr,
-                            palette.accent_heading,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::FunctionBlock),
-                            "XOR",
-                            "Bitwise XOR [^]",
-                            ActiveTool::BitXor,
-                            palette.accent_warn,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::FunctionBlock),
-                            "NOT",
-                            "Bitwise NOT [~]",
-                            ActiveTool::BitNot,
-                            palette.accent_danger,
-                            palette,
-                        );
-                        ui.separator();
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::ShiftReg),
-                            "SHL",
-                            "Shift Left (SHL)",
-                            ActiveTool::ShiftLeft,
-                            palette.accent_warn,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::ShiftReg),
-                            "SHR",
-                            "Shift Right (SHR)",
-                            ActiveTool::ShiftRight,
-                            palette.accent_warn,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::ShiftReg),
-                            "SFT",
-                            "Shift Register (Array)",
-                            ActiveTool::ShiftReg,
-                            palette.accent_warn,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::ShiftReg),
-                            "SBIT",
-                            "Bit Shift In (SFT_BIT)",
-                            ActiveTool::ShiftRegInbit,
-                            palette.accent_warn,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::ShiftReg),
-                            "SHV",
-                            "Shift Variable (SHV)",
-                            ActiveTool::ShiftVariable,
-                            palette.accent_warn,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::ShiftReg),
-                            "SRST",
-                            "Shift Reg Reset (SRST)",
-                            ActiveTool::ShiftRegReset,
-                            palette.accent_danger,
-                            palette,
-                        );
-                    });
+                if network_icon_btn(
+                    ui,
+                    VectorIcon::MoveUp,
+                    palette.accent_heading,
+                    can_move_up,
+                    btn_w,
+                    palette,
+                )
+                .on_hover_text("Move Rung Up")
+                .clicked()
+                {
+                    if let Some(idx) = cur_idx {
+                        app.doc.move_rung_up(idx);
+                    }
+                }
 
-                    // 8. Communication & Serial
-                    egui::CollapsingHeader::new(
-                        RichText::new("Communication")
-                            .size(11.5)
-                            .strong()
-                            .color(palette.accent_heading),
-                    )
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        ui.spacing_mut().item_spacing.y = 2.0;
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::SerialComm),
-                            "TX",
-                            "UART Send (TX)",
-                            ActiveTool::UartSend,
-                            palette.accent_heading,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::SerialComm),
-                            "RX",
-                            "UART Recv (RX)",
-                            ActiveTool::UartRecv,
-                            palette.accent_ok,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::SerialComm),
-                            "MB",
-                            "Modbus Master (RS-485)",
-                            ActiveTool::MbMaster,
-                            palette.accent_warn,
-                            palette,
-                        );
-                        component_accordion_item(
-                            ui,
-                            app,
-                            Some(VectorIcon::SerialComm),
-                            "MBS",
-                            "Modbus Slave (RS-485)",
-                            ActiveTool::MbSlave,
-                            palette.accent_ok,
-                            palette,
-                        );
-                    });
+                if network_icon_btn(
+                    ui,
+                    VectorIcon::MoveDown,
+                    palette.accent_heading,
+                    can_move_dn,
+                    btn_w,
+                    palette,
+                )
+                .on_hover_text("Move Rung Down")
+                .clicked()
+                {
+                    if let Some(idx) = cur_idx {
+                        app.doc.move_rung_down(idx);
+                    }
+                }
+
+                if network_icon_btn(
+                    ui,
+                    VectorIcon::CopyDown,
+                    copy_accent,
+                    has_rung,
+                    btn_w,
+                    palette,
+                )
+                .on_hover_text("Duplicate Rung Below")
+                .clicked()
+                {
+                    if cur_idx.is_some() {
+                        app.paste_network_below();
+                    }
+                }
+
+                if network_icon_btn(
+                    ui,
+                    VectorIcon::CopyUp,
+                    copy_accent,
+                    has_rung,
+                    btn_w,
+                    palette,
+                )
+                .on_hover_text("Duplicate Rung Above")
+                .clicked()
+                {
+                    if let Some(idx) = cur_idx {
+                        app.doc.copy_rung_at(idx, idx);
+                    }
+                }
+
+                if network_icon_btn(
+                    ui,
+                    VectorIcon::DeleteRung,
+                    palette.accent_danger,
+                    has_rung,
+                    btn_w,
+                    palette,
+                )
+                .on_hover_text("Delete Rung (Delete)")
+                .clicked()
+                {
+                    if let Some(idx) = cur_idx {
+                        app.doc.delete_rung(idx);
+                    }
                 }
             });
-    });
+        });
+
+        ui.add_space(5.0);
+
+        // --- 2. Components Palette Card: Smart Search + Quick Insert + Dynamic Accordion ---
+        lp_card(palette).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+
+            // Top Search Row
+            let mut search_has_focus = false;
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                ui.label(RichText::new("Find:").size(10.5).color(palette.rung_text_dim));
+                let edit_w = (ui.available_width()
+                    - if !app.component_filter.is_empty() {
+                        22.0
+                    } else {
+                        0.0
+                    })
+                .max(60.0);
+                let resp = ui.add(
+                    egui::TextEdit::singleline(&mut app.component_filter)
+                        .hint_text("Search (TON, PID, NC)...")
+                        .desired_width(edit_w),
+                );
+                search_has_focus = resp.has_focus();
+                if !app.component_filter.is_empty() {
+                    if ui
+                        .small_button("×")
+                        .on_hover_text("Clear search (Esc)")
+                        .clicked()
+                    {
+                        app.component_filter.clear();
+                    }
+                }
+            });
+
+            if search_has_focus && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                app.component_filter.clear();
+            }
+
+            let filter_query = app.component_filter.trim().to_lowercase();
+
+            if search_has_focus
+                && !filter_query.is_empty()
+                && ui.input(|i| i.key_pressed(egui::Key::Enter))
+            {
+                if let Some(first_match) = ALL_COMPONENTS.iter().find(|c| {
+                    c.name.to_lowercase().contains(&filter_query)
+                        || c.badge.to_lowercase().contains(&filter_query)
+                        || c.category.to_lowercase().contains(&filter_query)
+                }) {
+                    app.active_tool = first_match.tool;
+                }
+            }
+
+            ui.add_space(4.0);
+
+            // Compact 2x3 Quick Insert Grid (hidden while filtering so results get full height)
+            if filter_query.is_empty() {
+                ui.label(
+                    RichText::new("Quick Insert")
+                        .size(10.5)
+                        .color(palette.rung_text_dim)
+                        .strong(),
+                );
+                ui.add_space(2.0);
+
+                let avail_w = ui.available_width();
+                let col_w = ((avail_w - 6.0) / 3.0).floor().max(42.0);
+
+                // Row 1: NO, NC, Coil
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 3.0;
+                    quick_tool_tile(
+                        ui,
+                        app,
+                        "-[ ]-",
+                        "NO",
+                        ActiveTool::ContactNo,
+                        palette.accent_ok,
+                        col_w,
+                        palette,
+                    );
+                    quick_tool_tile(
+                        ui,
+                        app,
+                        "-[/]-",
+                        "NC",
+                        ActiveTool::ContactNc,
+                        palette.accent_warn,
+                        col_w,
+                        palette,
+                    );
+                    quick_tool_tile(
+                        ui,
+                        app,
+                        "-( )-",
+                        "Coil",
+                        ActiveTool::CoilNormal,
+                        palette.coil_idle,
+                        col_w,
+                        palette,
+                    );
+                });
+                ui.add_space(3.0);
+
+                // Row 2: Set, Reset, TON
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 3.0;
+                    quick_tool_tile(
+                        ui,
+                        app,
+                        "-(S)-",
+                        "Set",
+                        ActiveTool::CoilSet,
+                        palette.accent_heading,
+                        col_w,
+                        palette,
+                    );
+                    quick_tool_tile(
+                        ui,
+                        app,
+                        "-(R)-",
+                        "Reset",
+                        ActiveTool::CoilReset,
+                        palette.accent_warn,
+                        col_w,
+                        palette,
+                    );
+                    quick_tool_tile(
+                        ui,
+                        app,
+                        "TON",
+                        "Timer",
+                        ActiveTool::Ton,
+                        palette.accent_ok,
+                        col_w,
+                        palette,
+                    );
+                });
+
+                ui.add_space(4.0);
+                ui.separator();
+                ui.add_space(2.0);
+            }
+
+            // Collapsing Accordion or Filtered Results
+            egui::ScrollArea::vertical()
+                .id_salt("left_components_scroll")
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+
+                    if !filter_query.is_empty() {
+                        let matches: Vec<&ComponentDef> = ALL_COMPONENTS
+                            .iter()
+                            .filter(|c| {
+                                c.name.to_lowercase().contains(&filter_query)
+                                    || c.badge.to_lowercase().contains(&filter_query)
+                                    || c.category.to_lowercase().contains(&filter_query)
+                            })
+                            .collect();
+
+                        if matches.is_empty() {
+                            ui.add_space(4.0);
+                            ui.label(
+                                RichText::new("No matching components")
+                                    .size(10.5)
+                                    .color(palette.rung_text_dim),
+                            );
+                        } else {
+                            ui.label(
+                                RichText::new(format!("{} matches", matches.len()))
+                                    .size(10.0)
+                                    .color(palette.rung_text_dim),
+                            );
+                            ui.add_space(2.0);
+                            for comp in matches {
+                                component_accordion_item(
+                                    ui,
+                                    app,
+                                    comp.icon,
+                                    comp.badge,
+                                    comp.name,
+                                    comp.tool,
+                                    comp.accent(palette),
+                                    palette,
+                                );
+                            }
+                        }
+                    } else {
+                        for &(cat_key, label, accent_kind, default_open) in CATEGORIES {
+                            let count = ALL_COMPONENTS
+                                .iter()
+                                .filter(|c| c.category == cat_key)
+                                .count();
+                            egui::CollapsingHeader::new(
+                                RichText::new(format!("{} ({})", label, count))
+                                    .size(11.5)
+                                    .strong()
+                                    .color(accent_color(accent_kind, palette)),
+                            )
+                            .id_salt(format!("lp_cat_{}", cat_key))
+                            .default_open(default_open)
+                            .show(ui, |ui| {
+                                ui.spacing_mut().item_spacing.y = 2.0;
+                                for comp in ALL_COMPONENTS.iter().filter(|c| c.category == cat_key)
+                                {
+                                    component_accordion_item(
+                                        ui,
+                                        app,
+                                        comp.icon,
+                                        comp.badge,
+                                        comp.name,
+                                        comp.tool,
+                                        comp.accent(palette),
+                                        palette,
+                                    );
+                                }
+                            });
+                        }
+                    }
+                });
+        });
     });
 }
 
-fn network_action_tile(
+fn network_icon_btn(
     ui: &mut Ui,
     icon: VectorIcon,
-    label: &str,
     accent: Color32,
     enabled: bool,
     width: f32,
     palette: ThemePalette,
 ) -> egui::Response {
-    let height = 34.0;
+    let height = 26.0;
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
 
     if ui.is_rect_visible(rect) {
@@ -1104,45 +498,24 @@ fn network_action_tile(
         };
 
         let painter = ui.painter();
-        painter.rect_filled(rect, CornerRadius::same(5), bg);
+        painter.rect_filled(rect, CornerRadius::same(4), bg);
         painter.rect_stroke(
             rect,
-            CornerRadius::same(5),
-            Stroke::new(if hovered { 1.3 } else { 1.0 }, border_color),
+            CornerRadius::same(4),
+            Stroke::new(if hovered { 1.2 } else { 1.0 }, border_color),
             StrokeKind::Inside,
         );
 
-        // Icon color
         let icon_color = if !enabled {
             palette.rung_text_dim.gamma_multiply(0.35)
-        } else if hovered {
+        } else if hovered || pressed {
             accent
         } else {
             accent.gamma_multiply(0.85)
         };
 
-        // Top line: Icon
-        let icon_rect = Rect::from_center_size(
-            Pos2::new(rect.center().x, rect.min.y + 11.5),
-            Vec2::new(14.0, 14.0),
-        );
+        let icon_rect = Rect::from_center_size(rect.center(), Vec2::new(14.0, 14.0));
         paint_icon(painter, icon_rect, icon, icon_color);
-
-        // Bottom line: Label text
-        let lbl_color = if !enabled {
-            palette.rung_text_dim.gamma_multiply(0.4)
-        } else if hovered {
-            palette.text_primary
-        } else {
-            palette.rung_text_num
-        };
-        painter.text(
-            Pos2::new(rect.center().x, rect.min.y + 24.5),
-            Align2::CENTER_CENTER,
-            label,
-            FontId::proportional(9.5),
-            lbl_color,
-        );
     }
 
     response
@@ -1159,7 +532,7 @@ fn quick_tool_tile(
     palette: ThemePalette,
 ) -> egui::Response {
     let is_active = app.active_tool == tool;
-    let height = 35.0;
+    let height = 30.0;
     let (rect, response) =
         ui.allocate_exact_size(Vec2::new(width, height), Sense::click_and_drag());
 
@@ -1190,15 +563,15 @@ fn quick_tool_tile(
         };
 
         let painter = ui.painter();
-        painter.rect_filled(rect, CornerRadius::same(5), bg);
+        painter.rect_filled(rect, CornerRadius::same(4), bg);
         painter.rect_stroke(
             rect,
-            CornerRadius::same(5),
+            CornerRadius::same(4),
             Stroke::new(if is_active { 1.5 } else { 1.0 }, border_color),
             StrokeKind::Inside,
         );
 
-        // Top line: Symbol in monospace bold
+        // Top line: Symbol in monospace
         let sym_color = if is_active {
             if palette.is_light() {
                 Color32::from_rgb(18, 75, 175)
@@ -1209,10 +582,10 @@ fn quick_tool_tile(
             accent
         };
         painter.text(
-            Pos2::new(rect.center().x, rect.min.y + 11.0),
+            Pos2::new(rect.center().x, rect.min.y + 9.5),
             Align2::CENTER_CENTER,
             symbol,
-            FontId::monospace(11.0),
+            FontId::monospace(10.5),
             sym_color,
         );
 
@@ -1227,10 +600,10 @@ fn quick_tool_tile(
             palette.rung_text_dim
         };
         painter.text(
-            Pos2::new(rect.center().x, rect.min.y + 24.5),
+            Pos2::new(rect.center().x, rect.min.y + 21.5),
             Align2::CENTER_CENTER,
             label,
-            FontId::proportional(9.5),
+            FontId::proportional(9.0),
             lbl_color,
         );
     }
@@ -1388,6 +761,17 @@ fn component_accordion_item(
     response.on_hover_text(format!("{} (Click to select, drag to canvas)", tool.name()));
 }
 
+const CATEGORIES: &[(&str, &str, u8, bool)] = &[
+    ("Bit Logic", "Bit Logic", 2, true),
+    ("Timers & Counters", "Timers & Counters", 0, false),
+    ("Edge Triggers", "Edge Triggers", 0, false),
+    ("Math & Compare", "Math & Compare", 1, false),
+    ("Program Flow", "Program Flow", 2, false),
+    ("Process Control", "Process Control", 0, false),
+    ("Bitwise & Shift", "Bitwise & Shift", 1, false),
+    ("Communication", "Communication", 2, false),
+];
+
 struct ComponentDef {
     icon: Option<VectorIcon>,
     badge: &'static str,
@@ -1399,19 +783,12 @@ struct ComponentDef {
 
 impl ComponentDef {
     fn accent(&self, palette: ThemePalette) -> Color32 {
-        match self.accent_kind {
-            0 => palette.accent_ok,
-            1 => palette.accent_warn,
-            2 => palette.accent_heading,
-            3 => palette.coil_idle,
-            4 => palette.accent_danger,
-            _ => palette.wire_idle,
-        }
+        accent_color(self.accent_kind, palette)
     }
 }
 
 const ALL_COMPONENTS: &[ComponentDef] = &[
-    // Bit Logic
+    // Bit Logic (17)
     ComponentDef {
         icon: Some(VectorIcon::ContactNo),
         badge: "-[ ]-",
@@ -1540,7 +917,15 @@ const ALL_COMPONENTS: &[ComponentDef] = &[
         category: "Bit Logic",
         accent_kind: 4,
     },
-    // Timers & Counters
+    ComponentDef {
+        icon: Some(VectorIcon::FunctionBlock),
+        badge: "ALT",
+        name: "ALT (Toggle / Flip-Flop)",
+        tool: ActiveTool::Toggle,
+        category: "Bit Logic",
+        accent_kind: 1,
+    },
+    // Timers & Counters (6)
     ComponentDef {
         icon: Some(VectorIcon::Timer),
         badge: "TON",
@@ -1589,7 +974,7 @@ const ALL_COMPONENTS: &[ComponentDef] = &[
         category: "Timers & Counters",
         accent_kind: 1,
     },
-    // Edge Triggers
+    // Edge Triggers (2)
     ComponentDef {
         icon: Some(VectorIcon::PulseEdge),
         badge: "R_TRG",
@@ -1606,7 +991,7 @@ const ALL_COMPONENTS: &[ComponentDef] = &[
         category: "Edge Triggers",
         accent_kind: 1,
     },
-    // Math & Compare
+    // Math & Compare (10)
     ComponentDef {
         icon: Some(VectorIcon::FunctionBlock),
         badge: ":=",
@@ -1663,7 +1048,31 @@ const ALL_COMPONENTS: &[ComponentDef] = &[
         category: "Math & Compare",
         accent_kind: 2,
     },
-    // Program Flow
+    ComponentDef {
+        icon: Some(VectorIcon::FunctionBlock),
+        badge: "RNG",
+        name: "IN_RANGE (Window Compare)",
+        tool: ActiveTool::InRange,
+        category: "Math & Compare",
+        accent_kind: 0,
+    },
+    ComponentDef {
+        icon: Some(VectorIcon::FunctionBlock),
+        badge: "SEL",
+        name: "SEL (Binary Selector)",
+        tool: ActiveTool::Sel,
+        category: "Math & Compare",
+        accent_kind: 2,
+    },
+    ComponentDef {
+        icon: Some(VectorIcon::FunctionBlock),
+        badge: "±1",
+        name: "INC / DEC (1-Shot Step)",
+        tool: ActiveTool::IncDec,
+        category: "Math & Compare",
+        accent_kind: 1,
+    },
+    // Program Flow (3)
     ComponentDef {
         icon: Some(VectorIcon::MoveDown),
         badge: "JMP",
@@ -1680,7 +1089,15 @@ const ALL_COMPONENTS: &[ComponentDef] = &[
         category: "Program Flow",
         accent_kind: 0,
     },
-    // Process Control
+    ComponentDef {
+        icon: Some(VectorIcon::FunctionBlock),
+        badge: "RET",
+        name: "RET (Conditional Return)",
+        tool: ActiveTool::Return,
+        category: "Program Flow",
+        accent_kind: 4,
+    },
+    // Process Control (5)
     ComponentDef {
         icon: Some(VectorIcon::FunctionBlock),
         badge: "PID",
@@ -1713,7 +1130,15 @@ const ALL_COMPONENTS: &[ComponentDef] = &[
         category: "Process Control",
         accent_kind: 2,
     },
-    // Bitwise & Shift
+    ComponentDef {
+        icon: Some(VectorIcon::FunctionBlock),
+        badge: "PWM",
+        name: "PWM Output (%QW)",
+        tool: ActiveTool::Pwm,
+        category: "Process Control",
+        accent_kind: 0,
+    },
+    // Bitwise & Shift (10)
     ComponentDef {
         icon: Some(VectorIcon::FunctionBlock),
         badge: "AND",
@@ -1794,7 +1219,7 @@ const ALL_COMPONENTS: &[ComponentDef] = &[
         category: "Bitwise & Shift",
         accent_kind: 4,
     },
-    // Communication
+    // Communication (4)
     ComponentDef {
         icon: Some(VectorIcon::SerialComm),
         badge: "TX",
@@ -1817,7 +1242,7 @@ const ALL_COMPONENTS: &[ComponentDef] = &[
         name: "Modbus Master (RS-485)",
         tool: ActiveTool::MbMaster,
         category: "Communication",
-        accent_kind: 3,
+        accent_kind: 1,
     },
     ComponentDef {
         icon: Some(VectorIcon::SerialComm),
@@ -1826,53 +1251,5 @@ const ALL_COMPONENTS: &[ComponentDef] = &[
         tool: ActiveTool::MbSlave,
         category: "Communication",
         accent_kind: 0,
-    },
-    ComponentDef {
-        icon: Some(VectorIcon::FunctionBlock),
-        badge: "PWM",
-        name: "PWM Output (%QW)",
-        tool: ActiveTool::Pwm,
-        category: "Process Control",
-        accent_kind: 0,
-    },
-    ComponentDef {
-        icon: Some(VectorIcon::FunctionBlock),
-        badge: "SEL",
-        name: "SEL (Binary Selector)",
-        tool: ActiveTool::Sel,
-        category: "Math & Compare",
-        accent_kind: 2,
-    },
-    ComponentDef {
-        icon: Some(VectorIcon::FunctionBlock),
-        badge: "RNG",
-        name: "IN_RANGE (Window Compare)",
-        tool: ActiveTool::InRange,
-        category: "Math & Compare",
-        accent_kind: 0,
-    },
-    ComponentDef {
-        icon: Some(VectorIcon::FunctionBlock),
-        badge: "ALT",
-        name: "ALT (Toggle / Flip-Flop)",
-        tool: ActiveTool::Toggle,
-        category: "Bit Logic",
-        accent_kind: 3,
-    },
-    ComponentDef {
-        icon: Some(VectorIcon::FunctionBlock),
-        badge: "±1",
-        name: "INC / DEC (1-Shot Step)",
-        tool: ActiveTool::IncDec,
-        category: "Math & Compare",
-        accent_kind: 3,
-    },
-    ComponentDef {
-        icon: Some(VectorIcon::FunctionBlock),
-        badge: "RET",
-        name: "RET (Conditional Return)",
-        tool: ActiveTool::Return,
-        category: "Program Flow",
-        accent_kind: 1,
     },
 ];

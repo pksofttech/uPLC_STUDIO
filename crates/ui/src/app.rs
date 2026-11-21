@@ -2208,71 +2208,92 @@ impl CanvasApp {
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .fixed_size([460.0, 150.0])
+            .min_width(440.0)
+            .max_width(460.0)
             .show(ctx, |ui| {
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("!").size(28.0).strong().color(palette.accent_warn));
-                    ui.add_space(8.0);
-                    ui.vertical(|ui| {
-                        let prompt_title = if is_demo {
-                            format!("Save modified example \"{}\" as a new file?", file_name)
-                        } else {
-                            format!("Do you want to save changes to \"{}\"?", file_name)
-                        };
-                        let prompt_subtext = if is_demo {
-                            format!("This example has unsaved changes. Save it to a new file before {}?", action_desc)
-                        } else {
-                            format!("Your changes will be lost if you don't save them before {}.", action_desc)
-                        };
+                ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+                let prompt_title = if is_demo {
+                    format!("Save modified example \"{}\" as a new file?", file_name)
+                } else {
+                    format!("Save changes to \"{}\"?", file_name)
+                };
+                let prompt_subtext = if is_demo {
+                    format!(
+                        "This example has unsaved changes. Save it to a new file before {}?",
+                        action_desc
+                    )
+                } else {
+                    format!(
+                        "Your changes will be lost if you don't save them before {}.",
+                        action_desc
+                    )
+                };
 
-                        ui.label(
-                            RichText::new(prompt_title)
-                                .strong()
-                                .size(14.0)
-                                .color(palette.text_primary),
-                        );
-                        ui.add_space(4.0);
-                        ui.label(
-                            RichText::new(prompt_subtext)
-                                .size(11.5)
-                                .color(palette.symbol_subtext),
-                        );
-                    });
+                ui.horizontal(|ui| {
+                    egui::Frame::new()
+                        .fill(palette.accent_warn.gamma_multiply(0.16))
+                        .stroke(egui::Stroke::new(1.0, palette.accent_warn.gamma_multiply(0.45)))
+                        .corner_radius(egui::CornerRadius::same(4))
+                        .inner_margin(egui::Margin::symmetric(6, 2))
+                        .show(ui, |ui| {
+                            ui.label(
+                                RichText::new("UNSAVED")
+                                    .size(10.0)
+                                    .strong()
+                                    .color(palette.accent_warn),
+                            );
+                        });
+                    ui.label(
+                        RichText::new(prompt_title)
+                            .strong()
+                            .size(13.0)
+                            .color(palette.text_primary),
+                    );
                 });
 
-                ui.add_space(16.0);
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(prompt_subtext)
+                            .size(11.5)
+                            .color(palette.rung_text_dim),
+                    )
+                    .wrap(),
+                );
+
+                ui.add_space(4.0);
                 ui.separator();
-                ui.add_space(10.0);
 
                 ui.horizontal(|ui| {
-                    // Right aligned buttons: Cancel, Don't Save, Save
+                    let discard_btn = egui::Button::new(
+                        RichText::new("Don't Save").color(palette.accent_danger),
+                    )
+                    .min_size(egui::vec2(88.0, 28.0))
+                    .corner_radius(egui::CornerRadius::same(5));
+                    if ui.add(discard_btn).clicked() {
+                        do_discard = true;
+                    }
+
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Cancel").clicked()
-                            || ui.input(|i| i.key_pressed(egui::Key::Escape))
-                        {
-                            do_cancel = true;
-                        }
-
-                        let discard_btn = egui::Button::new(
-                            RichText::new("Don't Save").color(palette.accent_danger)
-                        );
-                        if ui.add(discard_btn).clicked() {
-                            do_discard = true;
-                        }
-
-                        let save_text = if is_demo {
-                            "Save As..."
-                        } else {
-                            "Save"
-                        };
+                        let save_text = if is_demo { "Save As..." } else { "Save" };
                         let save_btn = egui::Button::new(
-                            RichText::new(save_text).color(Color32::WHITE)
-                        ).fill(palette.accent_ok);
+                            RichText::new(save_text).strong().color(Color32::WHITE),
+                        )
+                        .fill(Color32::from_rgb(24, 130, 90))
+                        .min_size(egui::vec2(88.0, 28.0))
+                        .corner_radius(egui::CornerRadius::same(5));
                         if ui.add(save_btn).clicked()
                             || ui.input(|i| i.key_pressed(egui::Key::Enter))
                         {
                             do_save = true;
+                        }
+
+                        let cancel_btn = egui::Button::new("Cancel")
+                            .min_size(egui::vec2(72.0, 28.0))
+                            .corner_radius(egui::CornerRadius::same(5));
+                        if ui.add(cancel_btn).clicked()
+                            || ui.input(|i| i.key_pressed(egui::Key::Escape))
+                        {
+                            do_cancel = true;
                         }
                     });
                 });
@@ -2302,74 +2323,103 @@ impl CanvasApp {
         let mut do_continue = false;
         let mut do_cancel = false;
 
-        egui::Window::new("Live Hardware Connection Safety Warning")
+        egui::Window::new("Live Hardware Safety Warning")
             .order(egui::Order::Foreground)
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .fixed_size([500.0, 220.0])
+            .min_width(460.0)
+            .max_width(480.0)
             .show(ctx, |ui| {
-                ui.add_space(6.0);
+                ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("!").size(32.0).strong().color(palette.accent_warn));
-                    ui.add_space(8.0);
-                    ui.vertical(|ui| {
-                        ui.label(
-                            RichText::new("CAUTION: ENTERING LIVE HARDWARE ONLINE MODE")
-                                .strong()
-                                .size(14.0)
-                                .color(palette.accent_warn),
-                        );
-                        ui.add_space(6.0);
-                        ui.label(
-                            RichText::new(format!(
-                                "You are about to connect to a physical {} PLC controller on {}.",
-                                target_name, port_display
-                            ))
-                            .size(12.0)
+                    egui::Frame::new()
+                        .fill(palette.accent_warn.gamma_multiply(0.16))
+                        .stroke(egui::Stroke::new(1.0, palette.accent_warn.gamma_multiply(0.45)))
+                        .corner_radius(egui::CornerRadius::same(4))
+                        .inner_margin(egui::Margin::symmetric(6, 2))
+                        .show(ui, |ui| {
+                            ui.label(
+                                RichText::new("CAUTION")
+                                    .size(10.0)
+                                    .strong()
+                                    .color(palette.accent_warn),
+                            );
+                        });
+                    ui.label(
+                        RichText::new("Entering Live Hardware Online Mode")
+                            .strong()
+                            .size(13.0)
                             .color(palette.text_primary),
-                        );
-                        ui.add_space(4.0);
-                        ui.label(
-                            RichText::new("• Physical actuators, valves, motors, or machinery may respond immediately to PLC RUN/STOP commands.")
-                                .size(11.0)
-                                .color(palette.symbol_subtext),
-                        );
-                        ui.label(
-                            RichText::new("• Force I/O operations will override program logic and drive hardware output pins directly.")
-                                .size(11.0)
-                                .color(palette.symbol_subtext),
-                        );
-                        ui.label(
-                            RichText::new("• Verify that all personnel are in a safe area and that Emergency Stop (E-Stop) controls are accessible.")
-                                .size(11.0)
-                                .color(palette.symbol_subtext),
-                        );
-                    });
+                    );
                 });
 
-                ui.add_space(16.0);
+                egui::Frame::group(ui.style())
+                    .fill(palette.card_bg)
+                    .stroke(egui::Stroke::new(1.0, palette.card_border))
+                    .corner_radius(egui::CornerRadius::same(6))
+                    .inner_margin(egui::Margin::symmetric(12, 8))
+                    .show(ui, |ui| {
+                        ui.label(
+                            RichText::new(format!("Target: {} on {}", target_name, port_display))
+                                .size(11.5)
+                                .strong()
+                                .color(palette.text_primary),
+                        );
+                        ui.add_space(4.0);
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new("• Actuators, valves, and motors may respond immediately to RUN/STOP commands.")
+                                    .size(11.0)
+                                    .color(palette.rung_text_dim),
+                            )
+                            .wrap(),
+                        );
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new("• Force I/O overrides ladder logic and drives hardware output pins directly.")
+                                    .size(11.0)
+                                    .color(palette.rung_text_dim),
+                            )
+                            .wrap(),
+                        );
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new("• Ensure personnel are clear and Emergency Stop (E-Stop) controls are accessible.")
+                                    .size(11.0)
+                                    .color(palette.rung_text_dim),
+                            )
+                            .wrap(),
+                        );
+                    });
+
+                ui.add_space(4.0);
                 ui.separator();
-                ui.add_space(10.0);
 
                 ui.horizontal(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Cancel (Stay in Edit)").clicked()
-                            || ui.input(|i| i.key_pressed(egui::Key::Escape))
-                        {
-                            do_cancel = true;
-                        }
-
                         let proceed_btn = egui::Button::new(
                             RichText::new("Proceed to Online Mode")
                                 .strong()
                                 .color(Color32::WHITE),
                         )
-                        .fill(egui::Color32::from_rgb(217, 119, 6)); // Amber/Warning orange
+                        .fill(Color32::from_rgb(217, 119, 6))
+                        .min_size(egui::vec2(168.0, 28.0))
+                        .corner_radius(egui::CornerRadius::same(5));
                         if ui.add(proceed_btn).clicked()
                             || ui.input(|i| i.key_pressed(egui::Key::Enter))
                         {
                             do_continue = true;
+                        }
+
+                        let cancel_btn = egui::Button::new("Cancel")
+                            .min_size(egui::vec2(72.0, 28.0))
+                            .corner_radius(egui::CornerRadius::same(5));
+                        if ui.add(cancel_btn).clicked()
+                            || ui.input(|i| i.key_pressed(egui::Key::Escape))
+                        {
+                            do_cancel = true;
                         }
                     });
                 });
@@ -3336,13 +3386,24 @@ impl eframe::App for CanvasApp {
                     if modal_open {
                         ui.disable();
                     }
+                    let il_code = if self.online_mode || self.doc.simulator.is_active() {
+                        self.doc.generate_il_code_online()
+                    } else {
+                        self.doc.generate_il_code()
+                    };
+                    let line_count = il_code.lines().count();
                     ui.horizontal(|ui| {
                         ui.label(
-                            RichText::new("IEC 61131-3 IL CODE:")
-                                .color(palette.accent_heading)
-                                .strong(),
+                            RichText::new("IL Code")
+                                .size(11.5)
+                                .strong()
+                                .color(palette.accent_heading),
                         );
-                        ui.weak("(Live generated Instruction List for active rung / network)");
+                        ui.label(
+                            RichText::new(format!("{} lines", line_count))
+                                .size(10.5)
+                                .color(palette.rung_text_dim),
+                        );
                         if self.online_mode || self.doc.simulator.is_active() {
                             let acc_b = self
                                 .latest_snapshot
@@ -3352,29 +3413,36 @@ impl eframe::App for CanvasApp {
                                 .latest_snapshot
                                 .as_ref()
                                 .map_or(self.doc.simulator.acc_word, |s| s.acc_word);
+                            ui.separator();
                             ui.label(
                                 RichText::new(format!(
-                                    "LIVE ACC: Bit={} | Word={}",
+                                    "ACC: {} | {}",
                                     if acc_b { "1" } else { "0" },
                                     acc_w
                                 ))
                                 .monospace()
-                                .size(11.5)
+                                .size(11.0)
                                 .color(if acc_b { palette.accent_ok } else { palette.accent_heading }),
                             );
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("[x] Hide").clicked() {
+                            if ui
+                                .small_button("×")
+                                .on_hover_text("Hide IL Code Panel")
+                                .clicked()
+                            {
                                 self.show_il_code = false;
                                 self.save_settings();
                             }
+                            if ui
+                                .small_button("Copy")
+                                .on_hover_text("Copy IL code to clipboard")
+                                .clicked()
+                            {
+                                ui.ctx().copy_text(il_code.clone());
+                            }
                         });
                     });
-                    let il_code = if self.online_mode || self.doc.simulator.is_active() {
-                        self.doc.generate_il_code_online()
-                    } else {
-                        self.doc.generate_il_code()
-                    };
                     let dynamic_rows = ((ui.available_height() / 16.5).floor() as usize).max(3);
                     egui::ScrollArea::vertical()
                         .id_salt("il_code_scroll")
@@ -3383,7 +3451,8 @@ impl eframe::App for CanvasApp {
                             let mut code_view = il_code;
                             ui.add(
                                 egui::TextEdit::multiline(&mut code_view)
-                                    .font(egui::TextStyle::Monospace)
+                                    .code_editor()
+                                    .interactive(false)
                                     .desired_width(f32::INFINITY)
                                     .desired_rows(dynamic_rows),
                             );
@@ -3393,6 +3462,7 @@ impl eframe::App for CanvasApp {
 
         let mut banner_cmd = None;
         let mut open_upload_dialog = false;
+        let mut open_hw_settings = false;
         let mut request_mode_change: Option<WorkMode> = None;
 
         // Keep work_mode synchronized if simulator or online_mode was changed externally
@@ -3464,16 +3534,21 @@ impl eframe::App for CanvasApp {
                                         );
                                         ui.separator();
                                         ui.label(
-                                            RichText::new("Click any Contact on canvas to toggle ON/OFF • Right-click to Force")
+                                            RichText::new("Click contacts to toggle · Right-click to Force")
                                                 .color(palette.text_primary)
                                                 .size(11.0),
                                         );
                                         ui.add_space(6.0);
                                         if ui
-                                            .small_button(
-                                                RichText::new("Back to Edit")
-                                                    .strong()
-                                                    .color(palette.accent_heading),
+                                            .add(
+                                                egui::Button::new(
+                                                    RichText::new("Back to Edit")
+                                                        .size(11.0)
+                                                        .strong()
+                                                        .color(palette.accent_heading),
+                                                )
+                                                .corner_radius(egui::CornerRadius::same(4))
+                                                .min_size(egui::vec2(78.0, 22.0)),
                                             )
                                             .on_hover_text("Stop simulation and return to Circuit Edit Mode")
                                             .clicked()
@@ -3625,28 +3700,28 @@ impl eframe::App for CanvasApp {
                                             );
                                             ui.add_space(6.0);
                                             let sync_btn = egui::Button::new(
-                                                RichText::new("Sync / Download Now")
+                                                RichText::new("Sync Now")
                                                     .size(11.0)
                                                     .strong()
                                                     .color(egui::Color32::WHITE),
                                             )
-                                            .fill(egui::Color32::from_rgb(39, 174, 96))
-                                            .corner_radius(egui::CornerRadius::same(5));
+                                            .fill(egui::Color32::from_rgb(24, 130, 90))
+                                            .corner_radius(egui::CornerRadius::same(4))
+                                            .min_size(egui::vec2(78.0, 22.0));
                                             if ui
                                                 .add(sync_btn)
-                                                .on_hover_text("Compile current Ladder Diagram and download immediately to PLC Flash so live monitoring resumes")
+                                                .on_hover_text("Compile and download current Ladder program to PLC Flash")
                                                 .clicked()
                                             {
                                                 banner_cmd = Some(my_canvas_core::PlcSerialCommand::DownloadProgram);
                                             }
                                             let read_btn = egui::Button::new(
-                                                RichText::new("Read from PLC")
+                                                RichText::new("Read PLC")
                                                     .size(11.0)
-                                                    .strong()
-                                                    .color(egui::Color32::WHITE),
+                                                    .color(palette.text_primary),
                                             )
-                                            .fill(egui::Color32::from_rgb(41, 128, 185))
-                                            .corner_radius(egui::CornerRadius::same(5));
+                                            .corner_radius(egui::CornerRadius::same(4))
+                                            .min_size(egui::vec2(68.0, 22.0));
                                             if ui
                                                 .add(read_btn)
                                                 .on_hover_text("Read bytecode from connected PLC and decompile into Ladder Diagram")
@@ -3654,23 +3729,30 @@ impl eframe::App for CanvasApp {
                                             {
                                                 banner_cmd = Some(my_canvas_core::PlcSerialCommand::UploadProgram);
                                             }
+                                            let details_btn = egui::Button::new(
+                                                RichText::new("Details...")
+                                                    .size(11.0)
+                                                    .color(palette.text_primary),
+                                            )
+                                            .corner_radius(egui::CornerRadius::same(4))
+                                            .min_size(egui::vec2(64.0, 22.0));
                                             if ui
-                                                .button(
-                                                    RichText::new("Update Dialog...")
-                                                        .size(11.0)
-                                                        .color(palette.text_primary),
-                                                )
+                                                .add(details_btn)
                                                 .on_hover_text("Open Update to PLC dialog for full options")
                                                 .clicked()
                                             {
                                                 open_upload_dialog = true;
                                             }
+                                            let edit_btn = egui::Button::new(
+                                                RichText::new("Edit")
+                                                    .size(11.0)
+                                                    .strong()
+                                                    .color(palette.accent_heading),
+                                            )
+                                            .corner_radius(egui::CornerRadius::same(4))
+                                            .min_size(egui::vec2(46.0, 22.0));
                                             if ui
-                                                .small_button(
-                                                    RichText::new("Edit")
-                                                        .strong()
-                                                        .color(palette.accent_heading),
-                                                )
+                                                .add(edit_btn)
                                                 .on_hover_text("Return to Offline Circuit Edit Mode")
                                                 .clicked()
                                             {
@@ -3728,7 +3810,7 @@ impl eframe::App for CanvasApp {
                                                     .small_button(RichText::new("Port Settings").size(10.5))
                                                     .clicked()
                                                 {
-                                                    open_upload_dialog = true;
+                                                    open_hw_settings = true;
                                                 }
                                             }
                                             ui.add_space(6.0);
@@ -3754,7 +3836,7 @@ impl eframe::App for CanvasApp {
                         if req_level >= 2 {
                             if let Some(ref snap) = self.latest_snapshot {
                                 if !snap.firmware_supports(req_level) {
-                                    let y_off = if !is_matched { 52.0 } else { 14.0 };
+                                    let y_off = 48.0;
                                     let fw_banner_pos =
                                         egui::pos2(max_rect.center().x - 270.0, max_rect.min.y + y_off);
                                     egui::Area::new(egui::Id::unique("online_fw_feature_banner"))
@@ -3835,6 +3917,10 @@ impl eframe::App for CanvasApp {
         if open_upload_dialog {
             self.show_update_plc = true;
         }
+        if open_hw_settings {
+            self.settings_tab = 1;
+            self.show_io_config = true;
+        }
 
         // --- Full-Screen Frosted / Dimmed Modal Backdrop Shield for all In-App Dialogs ---
         if modal_open {
@@ -3856,233 +3942,137 @@ impl eframe::App for CanvasApp {
                 .open(&mut open_about)
                 .collapsible(false)
                 .resizable(false)
-                .default_width(550.0)
+                .min_width(440.0)
+                .max_width(440.0)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .show(ui.ctx(), |ui| {
-                    ui.spacing_mut().item_spacing.y = 8.0;
+                    ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
 
-                    // 1. HERO HEADER BANNER
-                    egui::Frame::new()
-                        .fill(if palette.is_light() {
-                            Color32::from_rgb(238, 243, 250)
-                        } else {
-                            Color32::from_rgb(20, 24, 33)
-                        })
-                        .corner_radius(egui::CornerRadius::same(10))
-                        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(14, 165, 233).gamma_multiply(0.5)))
-                        .inner_margin(egui::Margin::symmetric(14, 12))
+                    // 1. Header Card
+                    egui::Frame::group(ui.style())
+                        .fill(palette.card_bg)
+                        .stroke(egui::Stroke::new(1.0, palette.card_border))
+                        .corner_radius(egui::CornerRadius::same(6))
+                        .inner_margin(egui::Margin::symmetric(12, 10))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
                                 let logo_tex = self.about_logo_texture.get_or_insert_with(|| {
-                                    let img = image::load_from_memory(include_bytes!("../../../assets/laduinoplc_128.png")).expect("logo");
+                                    let img = image::load_from_memory(include_bytes!(
+                                        "../../../assets/laduinoplc_128.png"
+                                    ))
+                                    .expect("logo");
                                     let rgba = img.to_rgba8();
                                     let (w, h) = rgba.dimensions();
-                                    let color_image = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], rgba.as_raw());
-                                    ui.ctx().load_texture("laduinoplc_about_logo", color_image, Default::default())
+                                    let color_image = egui::ColorImage::from_rgba_unmultiplied(
+                                        [w as usize, h as usize],
+                                        rgba.as_raw(),
+                                    );
+                                    ui.ctx().load_texture(
+                                        "laduinoplc_about_logo",
+                                        color_image,
+                                        Default::default(),
+                                    )
                                 });
-                                ui.add(egui::Image::new(&*logo_tex).fit_to_exact_size(egui::vec2(62.0, 62.0)));
+                                ui.add(
+                                    egui::Image::new(&*logo_tex)
+                                        .fit_to_exact_size(egui::vec2(52.0, 52.0)),
+                                );
 
-                                ui.add_space(10.0);
+                                ui.add_space(6.0);
 
                                 ui.vertical(|ui| {
                                     ui.horizontal(|ui| {
                                         ui.label(
                                             RichText::new("LaduinoPLC")
-                                                .size(23.0)
+                                                .size(19.0)
                                                 .strong()
-                                                .color(if palette.is_light() {
-                                                    Color32::from_rgb(12, 74, 110)
-                                                } else {
-                                                    Color32::from_rgb(56, 189, 248)
-                                                }),
+                                                .color(palette.text_primary),
                                         );
-                                        ui.add_space(6.0);
-                                        // Version Tag Badge
                                         egui::Frame::new()
-                                            .fill(if palette.is_light() {
-                                                Color32::from_rgb(224, 231, 255)
-                                            } else {
-                                                Color32::from_rgb(30, 41, 59)
-                                            })
-                                            .corner_radius(egui::CornerRadius::same(5))
+                                            .fill(palette.pill_bg)
+                                            .stroke(egui::Stroke::new(1.0, palette.card_border))
+                                            .corner_radius(egui::CornerRadius::same(4))
                                             .inner_margin(egui::Margin::symmetric(6, 2))
                                             .show(ui, |ui| {
                                                 ui.label(
-                                                    RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
-                                                        .size(11.0)
-                                                        .strong()
-                                                        .color(if palette.is_light() {
-                                                            Color32::from_rgb(67, 56, 202)
-                                                        } else {
-                                                            Color32::from_rgb(129, 140, 248)
-                                                        }),
+                                                    RichText::new(format!(
+                                                        "v{}",
+                                                        env!("CARGO_PKG_VERSION")
+                                                    ))
+                                                    .size(10.5)
+                                                    .strong()
+                                                    .color(palette.accent_heading),
                                                 );
                                             });
                                     });
 
                                     ui.label(
-                                        RichText::new("Visual Ladder Logic IDE & Microcontroller PLC Engine")
-                                            .size(12.0)
-                                            .color(palette.text_primary),
+                                        RichText::new("IEC 61131-3 Ladder IDE & Micro-VM Runtime")
+                                            .size(11.5)
+                                            .color(palette.rung_text_dim),
                                     );
-
-                                    ui.add_space(2.0);
-
-                                    // Tag pills
-                                    ui.horizontal_wrapped(|ui| {
-                                        let tags = [
-                                            ("Rust 2021", Color32::from_rgb(234, 88, 12)),
-                                            ("IEC 61131-3", Color32::from_rgb(14, 165, 233)),
-                                            ("Arduino & RP2040", Color32::from_rgb(16, 185, 129)),
-                                            ("Modbus RTU", Color32::from_rgb(168, 85, 247)),
-                                        ];
-                                        for (tag_text, tag_color) in tags {
-                                            egui::Frame::new()
-                                                .fill(tag_color.gamma_multiply(0.12))
-                                                .corner_radius(egui::CornerRadius::same(4))
-                                                .stroke(egui::Stroke::new(1.0, tag_color.gamma_multiply(0.35)))
-                                                .inner_margin(egui::Margin::symmetric(5, 1))
-                                                .show(ui, |ui| {
-                                                    ui.label(RichText::new(tag_text).size(10.0).strong().color(tag_color));
-                                                });
-                                        }
-                                    });
                                 });
                             });
                         });
 
-                    // 2. MEANINGFUL EXPLANATION / CONCEPT
-                    egui::Frame::new()
-                        .fill(if palette.is_light() {
-                            Color32::from_rgb(243, 244, 246)
-                        } else {
-                            palette.card_bg
-                        })
-                        .corner_radius(egui::CornerRadius::same(8))
-                        .stroke(egui::Stroke::new(1.0, palette.card_border.gamma_multiply(0.6)))
-                        .inner_margin(egui::Margin::symmetric(12, 9))
-                        .show(ui, |ui| {
-                            ui.label(
-                                RichText::new("Concept & Mission")
-                                    .strong()
-                                    .color(palette.accent_heading),
-                            );
-                            ui.add_space(3.0);
-                            ui.label(
-                                RichText::new("LaduinoPLC (Ladder + Arduino + PLC) bridges industrial automation standards (IEC 61131-3) with open microcontroller platforms. It empowers engineers, technicians, educators, and makers to design Ladder Diagrams, run real-time simulations, and deploy compiled bytecode onto microcontroller hardware with zero expensive proprietary license fees.")
-                                    .size(11.5)
-                                    .color(palette.text_primary),
-                            );
-                        });
-
-                    // 3. PILLARS GRID (4 Core Architecture Pillars)
-                    egui::Grid::new("about_pillars_grid")
-                        .num_columns(2)
-                        .spacing([10.0, 8.0])
-                        .show(ui, |ui| {
-                            // Column 1 - Card 1: CAD & Power Flow
-                            egui::Frame::new()
-                                .fill(if palette.is_light() { Color32::from_rgb(248, 250, 252) } else { palette.pill_bg })
-                                .corner_radius(egui::CornerRadius::same(6))
-                                .stroke(egui::Stroke::new(1.0, palette.card_border.gamma_multiply(0.4)))
-                                .inner_margin(egui::Margin::symmetric(10, 8))
-                                .show(ui, |ui| {
-                                    ui.set_width(250.0);
-                                    ui.label(RichText::new("Visual Ladder CAD").strong().color(palette.accent_heading));
-                                    ui.label(RichText::new("CAD canvas with live power flow visualizer displaying real-time electrical conduction and coil energization (10ms cycle).").size(11.0).color(palette.rung_text_dim));
-                                });
-
-                            // Column 2 - Card 2: Micro-VM & Hardware
-                            egui::Frame::new()
-                                .fill(if palette.is_light() { Color32::from_rgb(248, 250, 252) } else { palette.pill_bg })
-                                .corner_radius(egui::CornerRadius::same(6))
-                                .stroke(egui::Stroke::new(1.0, palette.card_border.gamma_multiply(0.4)))
-                                .inner_margin(egui::Margin::symmetric(10, 8))
-                                .show(ui, |ui| {
-                                    ui.set_width(250.0);
-                                    ui.label(RichText::new("Embedded Micro-VM").strong().color(palette.accent_ok));
-                                    ui.label(RichText::new("Compiles ladder logic into compact 32-bit bytecode uploaded to Arduino UNO/Nano/Mega and RP2040 Pico (Embassy Async).").size(11.0).color(palette.rung_text_dim));
-                                });
-                            ui.end_row();
-
-                            // Column 1 - Card 3: Online Monitoring & Modbus
-                            egui::Frame::new()
-                                .fill(if palette.is_light() { Color32::from_rgb(248, 250, 252) } else { palette.pill_bg })
-                                .corner_radius(egui::CornerRadius::same(6))
-                                .stroke(egui::Stroke::new(1.0, palette.card_border.gamma_multiply(0.4)))
-                                .inner_margin(egui::Margin::symmetric(10, 8))
-                                .show(ui, |ui| {
-                                    ui.set_width(250.0);
-                                    ui.label(RichText::new("Live Telemetry & Modbus").strong().color(palette.accent_warn));
-                                    ui.label(RichText::new("USB online monitoring with real-time Data Watch Table, Force I/O, and integrated Modbus RTU master.").size(11.0).color(palette.rung_text_dim));
-                                });
-
-                            // Column 2 - Card 4: IEC 61131-3 & Interop
-                            egui::Frame::new()
-                                .fill(if palette.is_light() { Color32::from_rgb(248, 250, 252) } else { palette.pill_bg })
-                                .corner_radius(egui::CornerRadius::same(6))
-                                .stroke(egui::Stroke::new(1.0, palette.card_border.gamma_multiply(0.4)))
-                                .inner_margin(egui::Margin::symmetric(10, 8))
-                                .show(ui, |ui| {
-                                    ui.set_width(250.0);
-                                    ui.label(RichText::new("IEC 61131-3 Interop").strong().color(Color32::from_rgb(168, 85, 247)));
-                                    ui.label(RichText::new("Native Instruction List (.il) import and export fully compatible with OpenPLC and CODESYS.").size(11.0).color(palette.rung_text_dim));
-                                });
-                            ui.end_row();
-                        });
-
-                    // 4. HARDWARE COMPATIBILITY BADGES
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("Hardware:").size(11.0).color(palette.rung_text_dim));
-                        let hw_targets = [
-                            "Arduino UNO R3",
-                            "Arduino Nano",
-                            "Arduino Mega 2560",
-                            "RP2040 Pico",
-                            "ESP32",
+                    // 2. Tech / Hardware Pills Row
+                    ui.horizontal_wrapped(|ui| {
+                        let tags = [
+                            ("Rust", Color32::from_rgb(234, 88, 12)),
+                            ("IEC 61131-3", Color32::from_rgb(14, 165, 233)),
+                            ("RP2040", Color32::from_rgb(16, 185, 129)),
+                            ("STM32F103", Color32::from_rgb(59, 130, 246)),
+                            ("Modbus RTU/TCP", Color32::from_rgb(168, 85, 247)),
                         ];
-                        for hw in hw_targets {
+                        for (tag_text, tag_color) in tags {
                             egui::Frame::new()
-                                .fill(if palette.is_light() { Color32::from_rgb(230, 235, 245) } else { Color32::from_rgb(33, 37, 45) })
+                                .fill(tag_color.gamma_multiply(0.12))
                                 .corner_radius(egui::CornerRadius::same(4))
-                                .inner_margin(egui::Margin::symmetric(5, 1))
+                                .stroke(egui::Stroke::new(1.0, tag_color.gamma_multiply(0.35)))
+                                .inner_margin(egui::Margin::symmetric(6, 2))
                                 .show(ui, |ui| {
-                                    ui.label(RichText::new(hw).size(10.0).color(palette.text_primary));
+                                    ui.label(
+                                        RichText::new(tag_text)
+                                            .size(10.5)
+                                            .strong()
+                                            .color(tag_color),
+                                    );
                                 });
                         }
                     });
 
-                    ui.separator();
-
-                    // 5. FOOTER & CLOSE BUTTON
-                    ui.horizontal(|ui| {
-                        ui.vertical(|ui| {
-                            ui.label(
-                                RichText::new("Created & Developed by PksofttecH")
-                                    .size(11.0)
-                                    .strong()
-                                    .color(palette.rung_text_dim),
-                            );
-                            ui.label(
-                                RichText::new("Open-Source Automation • Built with Rust & egui")
-                                    .size(10.0)
-                                    .color(palette.rung_text_dim.gamma_multiply(0.8)),
+                    // 3. Concise Description Card
+                    egui::Frame::group(ui.style())
+                        .fill(palette.card_bg)
+                        .stroke(egui::Stroke::new(1.0, palette.card_border))
+                        .corner_radius(egui::CornerRadius::same(6))
+                        .inner_margin(egui::Margin::symmetric(12, 8))
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(
+                                        "Design IEC 61131-3 Ladder Diagrams, simulate real-time power flow, and deploy 32-bit Micro-VM bytecode to open microcontroller targets with live online monitoring.",
+                                    )
+                                    .size(11.5)
+                                    .color(palette.text_primary),
+                                )
+                                .wrap(),
                             );
                         });
 
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let close_btn = egui::Button::new(
-                                RichText::new("  Close (Esc)  ")
-                                    .strong()
-                                    .color(Color32::WHITE),
-                            )
-                            .fill(if palette.is_light() {
-                                Color32::from_rgb(14, 165, 233)
-                            } else {
-                                Color32::from_rgb(14, 116, 170)
-                            })
-                            .corner_radius(egui::CornerRadius::same(6));
+                    ui.separator();
 
+                    // 4. Footer
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new("PksofttecH · MIT / Apache-2.0")
+                                .size(11.0)
+                                .color(palette.rung_text_dim),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let close_btn = egui::Button::new("Close")
+                                .min_size(egui::vec2(72.0, 28.0))
+                                .corner_radius(egui::CornerRadius::same(5));
                             if ui.add(close_btn).clicked() {
                                 close_about = true;
                             }
@@ -4414,29 +4404,61 @@ impl eframe::App for CanvasApp {
             let mut open_code_export = self.show_code_export;
             let mut close_code_export = false;
             let code = self.doc.export_to_il_str();
-            Window::new("IEC 61131-3 IL Code Preview / Export")
+            let line_count = code.lines().count();
+            let max_w = (ui.ctx().content_rect().width() - 32.0).max(480.0);
+            let target_w = 560.0_f32.min(max_w);
+
+            Window::new("IEC 61131-3 IL Code")
                 .order(egui::Order::Foreground)
                 .open(&mut open_code_export)
-                .min_size([580.0, 420.0])
+                .min_width(target_w)
+                .default_width(target_w)
+                .max_width(max_w)
                 .collapsible(false)
+                .resizable(true)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .show(ui.ctx(), |ui| {
-                    ui.label("Generated IEC 61131-3 Instruction List (IL) Code (OpenPLC / CODESYS compatible):");
+                    ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+
+                    ui.label(
+                        RichText::new(format!(
+                            "{} lines · OpenPLC / CODESYS compatible",
+                            line_count
+                        ))
+                        .size(11.0)
+                        .color(palette.rung_text_dim),
+                    );
+
+                    egui::Frame::group(ui.style())
+                        .fill(palette.card_bg)
+                        .stroke(egui::Stroke::new(1.0, palette.card_border))
+                        .corner_radius(egui::CornerRadius::same(6))
+                        .inner_margin(egui::Margin::symmetric(8, 6))
+                        .show(ui, |ui| {
+                            egui::ScrollArea::both().max_height(320.0).show(ui, |ui| {
+                                let mut text = code.clone();
+                                ui.add(
+                                    egui::TextEdit::multiline(&mut text)
+                                        .code_editor()
+                                        .desired_width(f32::INFINITY),
+                                );
+                            });
+                        });
+
                     ui.separator();
-                    egui::ScrollArea::both().max_height(330.0).show(ui, |ui| {
-                        let mut text = code.clone();
-                        ui.add(
-                            egui::TextEdit::multiline(&mut text)
-                                .code_editor()
-                                .desired_width(f32::INFINITY),
-                        );
-                    });
-                    ui.separator();
+
                     ui.horizontal(|ui| {
-                        if ui.button("Copy to Clipboard").clicked() {
+                        let copy_btn = egui::Button::new("Copy")
+                            .min_size(egui::vec2(64.0, 28.0))
+                            .corner_radius(egui::CornerRadius::same(5));
+                        if ui.add(copy_btn).clicked() {
                             ui.ctx().copy_text(code.clone());
                         }
-                        if ui.button("Save .il File...").clicked() {
+
+                        let save_btn = egui::Button::new("Save .il...")
+                            .min_size(egui::vec2(84.0, 28.0))
+                            .corner_radius(egui::CornerRadius::same(5));
+                        if ui.add(save_btn).clicked() {
                             let mut dialog = rfd::FileDialog::new()
                                 .set_directory(self.dialog_directory())
                                 .add_filter("IEC 61131-3 Instruction List (*.il)", &["il"]);
@@ -4451,13 +4473,28 @@ impl eframe::App for CanvasApp {
                                 let _ = std::fs::write(path, &code);
                             }
                         }
-                        if ui.button("Compile Bytecode / Update to PLC...").clicked() {
-                            close_code_export = true;
-                            self.show_update_plc = true;
-                        }
-                        if ui.button("Close").clicked() {
-                            close_code_export = true;
-                        }
+
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let update_btn = egui::Button::new(
+                                RichText::new("Update to PLC...")
+                                    .strong()
+                                    .color(Color32::WHITE),
+                            )
+                            .fill(Color32::from_rgb(24, 130, 90))
+                            .min_size(egui::vec2(124.0, 28.0))
+                            .corner_radius(egui::CornerRadius::same(5));
+                            if ui.add(update_btn).clicked() {
+                                close_code_export = true;
+                                self.show_update_plc = true;
+                            }
+
+                            let close_btn = egui::Button::new("Close")
+                                .min_size(egui::vec2(72.0, 28.0))
+                                .corner_radius(egui::CornerRadius::same(5));
+                            if ui.add(close_btn).clicked() {
+                                close_code_export = true;
+                            }
+                        });
                     });
                 });
             if !open_code_export || close_code_export {

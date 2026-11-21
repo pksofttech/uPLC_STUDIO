@@ -5,6 +5,7 @@ use egui::{
 use my_canvas_core::{
     CoilMode, CoilStyle, ContactMode, ContactStyle, Document, InsertPosition, LadderElement, TypeTag,
 };
+use crate::icons::{paint_icon, VectorIcon};
 use crate::theme::ThemePalette;
 use crate::tools::ActiveTool;
 
@@ -28,6 +29,7 @@ pub struct CanvasViewport {
     pub target_zoom: f32,
     pub zoom_anchor: Option<Pos2>,
     pub context_menu_elem: Option<(usize, u64)>,
+    pub context_menu_pos: Option<Pos2>,
     pub drag_candidate: Option<(u64, String, Pos2)>,
     pub dragging_elem: Option<(u64, String)>,
     pub dragging_tool: Option<(ActiveTool, String)>,
@@ -46,6 +48,7 @@ impl Default for CanvasViewport {
             target_zoom: 1.0,
             zoom_anchor: None,
             context_menu_elem: None,
+            context_menu_pos: None,
             drag_candidate: None,
             dragging_elem: None,
             dragging_tool: None,
@@ -161,8 +164,96 @@ fn validate_placement(
     Ok(insert_pos)
 }
 
+fn draw_dashed_rect(painter: &Painter, rect: Rect, stroke: Stroke, dash: f32, gap: f32) {
+    let step = (dash + gap).max(1.0);
+    let draw_edge = |p0: Pos2, p1: Pos2| {
+        let delta = p1 - p0;
+        let len = delta.length();
+        if len <= 0.001 {
+            return;
+        }
+        let dir = delta / len;
+        let mut t = 0.0;
+        while t < len {
+            let t_end = (t + dash).min(len);
+            painter.line_segment([p0 + dir * t, p0 + dir * t_end], stroke);
+            t += step;
+        }
+    };
+    let tl = rect.min;
+    let tr = pos2(rect.max.x, rect.min.y);
+    let br = rect.max;
+    let bl = pos2(rect.min.x, rect.max.y);
+    draw_edge(tl, tr);
+    draw_edge(tr, br);
+    draw_edge(br, bl);
+    draw_edge(bl, tl);
+}
+
+fn type_tag_icon(tag: TypeTag) -> VectorIcon {
+    match tag {
+        TypeTag::Contact => VectorIcon::ContactNo,
+        TypeTag::Coil => VectorIcon::Coil,
+        TypeTag::Ton | TypeTag::Tof | TypeTag::Tp => VectorIcon::Timer,
+        TypeTag::Ctu | TypeTag::Ctd | TypeTag::Ctud => VectorIcon::Counter,
+        TypeTag::RTrig | TypeTag::FTrig => VectorIcon::PulseEdge,
+        TypeTag::MasterRelay => VectorIcon::MasterRelay,
+        TypeTag::ShiftRegisters
+        | TypeTag::ShiftRegInbit
+        | TypeTag::ShiftRegReset
+        | TypeTag::ShiftLeft
+        | TypeTag::ShiftRight
+        | TypeTag::ShiftVariable => VectorIcon::ShiftReg,
+        TypeTag::UartSend | TypeTag::UartRecv | TypeTag::MbMaster | TypeTag::MbSlave => {
+            VectorIcon::SerialComm
+        }
+        TypeTag::Comment => VectorIcon::Comment,
+        _ => VectorIcon::FunctionBlock,
+    }
+}
+
+fn ctx_menu_item(
+    ui: &mut Ui,
+    label: &str,
+    shortcut: &str,
+    text_color: Color32,
+    palette: ThemePalette,
+) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
+    if resp.hovered() {
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(4), palette.rung_badge_hov_bg);
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    ui.painter().text(
+        pos2(rect.min.x + 8.0, rect.center().y),
+        Align2::LEFT_CENTER,
+        label,
+        FontId::proportional(11.5),
+        text_color,
+    );
+    if !shortcut.is_empty() {
+        ui.painter().text(
+            pos2(rect.max.x - 8.0, rect.center().y),
+            Align2::RIGHT_CENTER,
+            shortcut,
+            FontId::monospace(10.0),
+            palette.rung_text_dim,
+        );
+    }
+    resp.clicked()
+}
+
+fn ctx_menu_sep(ui: &mut Ui, palette: ThemePalette) {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 7.0), Sense::hover());
+    let y = rect.center().y;
+    ui.painter().line_segment(
+        [pos2(rect.min.x + 4.0, y), pos2(rect.max.x - 4.0, y)],
+        Stroke::new(1.0, palette.card_border.gamma_multiply(0.7)),
+    );
+}
+
 enum CanvasAction {
-    ClearSelection,
     SelectRung(usize),
     SelectElement {
         rung_idx: usize,
@@ -194,6 +285,19 @@ impl CanvasViewport {
         self.zoom = 1.0;
         self.target_zoom = 1.0;
         self.zoom_anchor = None;
+    }
+
+    pub fn fit_to_viewport(&mut self, doc: &Document, viewport_size: Vec2) {
+        let world_sz = Self::compute_world_content_size(doc, viewport_size.x);
+        let world_w = world_sz.x.max(1.0);
+        let world_h = world_sz.y.max(1.0);
+        let usable_w = (viewport_size.x - 28.0).max(120.0);
+        let usable_h = (viewport_size.y - 32.0).max(120.0);
+        let fit_z = (usable_w / world_w).min(usable_h / world_h).clamp(0.45, 1.25);
+        self.zoom = fit_z;
+        self.target_zoom = fit_z;
+        self.zoom_anchor = None;
+        self.pan_offset = vec2(14.0, 16.0);
     }
 
     pub fn set_target_zoom(&mut self, new_zoom: f32, anchor: Option<Pos2>) {
@@ -341,7 +445,7 @@ impl CanvasViewport {
         }
     }
 
-    pub fn compute_content_size(&self, doc: &Document, viewport_width: f32) -> Vec2 {
+    fn compute_world_content_size(doc: &Document, viewport_width: f32) -> Vec2 {
         let cell_h = 88.0;
         let rung_header_w = 76.0;
         let margin_left = 14.0 + rung_header_w;
@@ -378,9 +482,14 @@ impl CanvasViewport {
         let total_world_w = margin_right + 80.0;
         let total_world_h = rail_bottom_y + 60.0;
 
+        vec2(total_world_w, total_world_h)
+    }
+
+    pub fn compute_content_size(&self, doc: &Document, viewport_width: f32) -> Vec2 {
+        let world_sz = Self::compute_world_content_size(doc, viewport_width);
         vec2(
-            (total_world_w * self.zoom) + self.pan_offset.x.max(0.0),
-            (total_world_h * self.zoom) + self.pan_offset.y.max(0.0),
+            (world_sz.x * self.zoom) + self.pan_offset.x.max(0.0),
+            (world_sz.y * self.zoom) + self.pan_offset.y.max(0.0),
         )
     }
 
@@ -420,6 +529,7 @@ impl CanvasViewport {
         let canvas_enabled = ui.is_enabled();
         if !canvas_enabled {
             self.context_menu_elem = None;
+            self.context_menu_pos = None;
             self.dragging_scrollbar = None;
         }
         let sense = if canvas_enabled {
@@ -558,7 +668,7 @@ impl CanvasViewport {
 
         let show_v_bar = pan_span_y > 4.0;
         let show_h_bar = pan_span_x > 4.0;
-        let bar_thickness = 11.0_f32;
+        let bar_thickness = 8.0_f32;
 
         let track_y_min = viewport_rect.min.y;
         let track_y_max = viewport_rect.max.y - (if show_h_bar { bar_thickness + 2.0 } else { 0.0 });
@@ -588,8 +698,8 @@ impl CanvasViewport {
         };
         let thumb_top_y = track_rect_v.min.y + fraction_y * travel_h;
         let thumb_rect_v = Rect::from_min_max(
-            pos2(track_rect_v.min.x + 1.5, thumb_top_y),
-            pos2(track_rect_v.max.x - 1.5, thumb_top_y + thumb_h),
+            pos2(track_rect_v.min.x + 1.0, thumb_top_y),
+            pos2(track_rect_v.max.x - 1.0, thumb_top_y + thumb_h),
         );
 
         let track_w = track_rect_h.width();
@@ -606,8 +716,8 @@ impl CanvasViewport {
         };
         let thumb_left_x = track_rect_h.min.x + fraction_x * travel_w;
         let thumb_rect_h = Rect::from_min_max(
-            pos2(thumb_left_x, track_rect_h.min.y + 1.5),
-            pos2(thumb_left_x + thumb_w, track_rect_h.max.y - 1.5),
+            pos2(thumb_left_x, track_rect_h.min.y + 1.0),
+            pos2(thumb_left_x + thumb_w, track_rect_h.max.y - 1.0),
         );
 
         let raw_mouse_pos = if canvas_enabled {
@@ -723,7 +833,13 @@ impl CanvasViewport {
             }
         }
 
-        let is_dragging = self.dragging_elem.is_some() || self.dragging_tool.is_some();
+        let mut is_dragging = self.dragging_elem.is_some() || self.dragging_tool.is_some();
+        if is_dragging && ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.dragging_elem = None;
+            self.dragging_tool = None;
+            self.drag_candidate = None;
+            is_dragging = false;
+        }
         let dragging_source_type: Option<TypeTag> = if let Some((tool, _)) = self.dragging_tool {
             tool.element_type()
         } else if let Some((drag_id, _)) = self.dragging_elem {
@@ -791,6 +907,29 @@ impl CanvasViewport {
                 let c_rect = Rect::from_two_pos(c_min, c_max);
                 let comment_hovered = hover_pos.map_or(false, |hp| c_rect.contains(hp));
                 painter.rect_filled(c_rect, 4.0 * self.zoom, palette.comment_bg);
+
+                let accent_bar = Rect::from_min_max(
+                    c_rect.min,
+                    pos2(c_rect.min.x + 2.5 * self.zoom, c_rect.max.y),
+                );
+                painter.rect_filled(
+                    accent_bar,
+                    1.5 * self.zoom,
+                    if is_rung_selected {
+                        palette.accent_heading
+                    } else {
+                        palette.card_border
+                    },
+                );
+                if comment_hovered {
+                    painter.rect_stroke(
+                        c_rect,
+                        4.0 * self.zoom,
+                        Stroke::new(1.0, palette.accent_heading.gamma_multiply(0.45)),
+                        StrokeKind::Inside,
+                    );
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
 
                 let first_line_y = self.to_screen(pos2(0.0, cur_y + 12.5), origin).y;
                 let mut text_x = c_rect.min.x + 8.0 * self.zoom;
@@ -931,6 +1070,7 @@ impl CanvasViewport {
             }
             if is_right_clicked && badge_hovered {
                 self.context_menu_elem = Some((r_idx, 0));
+                self.context_menu_pos = mouse_pos.or(hover_pos);
             }
 
             // Initial Lead-in from Left Power Rail
@@ -1071,22 +1211,37 @@ impl CanvasViewport {
                     self.to_screen(rung_band_world.max, origin),
                 );
                 if hover_pos.map_or(false, |hp| rung_band_screen.contains(hp)) {
-                    painter.rect_filled(
-                        rung_band_screen.shrink(3.0 * self.zoom),
-                        6.0 * self.zoom,
-                        Color32::from_rgba_unmultiplied(40, 180, 255, 32),
-                    );
-                    painter.rect_stroke(
-                        rung_band_screen.shrink(3.0 * self.zoom),
-                        6.0 * self.zoom,
-                        Stroke::new(2.0 * self.zoom, palette.accent_heading),
-                        StrokeKind::Inside,
-                    );
-                    let label = if let Some((_, ref lbl)) = self.dragging_tool {
-                        format!("[Drop New] Add {} to Network #{:02}", lbl, r_idx + 1)
+                    let mut append_err = None;
+                    if let Some(src_type) = dragging_source_type {
+                        if src_type == TypeTag::Label && !doc.program.rungs[r_idx].elements.is_empty() {
+                            append_err = Some("LBL must be placed at the start of an empty network".to_string());
+                        }
+                    }
+                    let slot_col = if append_err.is_some() {
+                        palette.accent_danger
                     } else {
-                        format!("[Drop Here] Move onto Network #{:02}", r_idx + 1)
+                        palette.accent_heading
                     };
+                    let slot_rect = rung_band_screen.shrink(3.0 * self.zoom);
+                    painter.rect_filled(
+                        slot_rect,
+                        CornerRadius::same(5),
+                        slot_col.gamma_multiply(0.10),
+                    );
+                    draw_dashed_rect(
+                        &painter,
+                        slot_rect,
+                        Stroke::new(1.6 * self.zoom, slot_col),
+                        6.0 * self.zoom,
+                        4.0 * self.zoom,
+                    );
+                    let item_lbl = self
+                        .dragging_tool
+                        .as_ref()
+                        .map(|(_, l)| l.as_str())
+                        .or_else(|| self.dragging_elem.as_ref().map(|(_, l)| l.as_str()))
+                        .unwrap_or("Element");
+                    let label = format!("Append {} · Network #{:02}", item_lbl, r_idx + 1);
                     painter.text(
                         pos2(
                             rung_band_screen.center().x,
@@ -1094,15 +1249,9 @@ impl CanvasViewport {
                         ),
                         Align2::CENTER_CENTER,
                         label,
-                        self.font_prop(11.5),
-                        palette.accent_heading,
+                        self.font_prop(11.0),
+                        slot_col,
                     );
-                    let mut append_err = None;
-                    if let Some(src_type) = dragging_source_type {
-                        if src_type == TypeTag::Label && !doc.program.rungs[r_idx].elements.is_empty() {
-                            append_err = Some("LBL must be placed at the start of an empty network".to_string());
-                        }
-                    }
                     drop_target = Some(DropTarget {
                         rung_idx: r_idx,
                         target_elem_id: None,
@@ -1140,14 +1289,19 @@ impl CanvasViewport {
 
         if empty_space_hovered {
             // Draw Ghost Preview for the New Network
-            let ghost_fill = Color32::from_rgba_unmultiplied(40, 180, 255, 26);
             let ghost_border = palette.accent_heading;
-            painter.rect_filled(new_rung_band_screen.shrink(2.0 * self.zoom), 6.0 * self.zoom, ghost_fill);
-            painter.rect_stroke(
-                new_rung_band_screen.shrink(2.0 * self.zoom),
+            let ghost_slot = new_rung_band_screen.shrink(2.0 * self.zoom);
+            painter.rect_filled(
+                ghost_slot,
+                CornerRadius::same(5),
+                ghost_border.gamma_multiply(0.09),
+            );
+            draw_dashed_rect(
+                &painter,
+                ghost_slot,
+                Stroke::new(1.6 * self.zoom, ghost_border),
                 6.0 * self.zoom,
-                Stroke::new(1.8 * self.zoom, ghost_border),
-                StrokeKind::Inside,
+                4.0 * self.zoom,
             );
 
             // Ghost Network Badge on Left
@@ -1185,18 +1339,18 @@ impl CanvasViewport {
             );
 
             // Center Callout Banner
-            let banner_msg = if let Some((_, ref lbl)) = self.dragging_tool {
-                format!("Drop to create New Network #{:02} with {}", new_rung_idx + 1, lbl)
-            } else if let Some((_, ref lbl)) = self.dragging_elem {
-                format!("Drop to move {} into New Network #{:02}", lbl, new_rung_idx + 1)
-            } else {
-                format!("Drop here to create New Network #{:02}", new_rung_idx + 1)
-            };
+            let item_lbl = self
+                .dragging_tool
+                .as_ref()
+                .map(|(_, l)| l.as_str())
+                .or_else(|| self.dragging_elem.as_ref().map(|(_, l)| l.as_str()))
+                .unwrap_or("Element");
+            let banner_msg = format!("+ New Network #{:02} · {}", new_rung_idx + 1, item_lbl);
             painter.text(
                 pos2(new_rung_band_screen.center().x, new_rung_band_screen.center().y - 12.0 * self.zoom),
                 Align2::CENTER_CENTER,
                 banner_msg,
-                self.font_prop(12.0),
+                self.font_prop(11.5),
                 palette.accent_heading,
             );
 
@@ -1274,131 +1428,8 @@ impl CanvasViewport {
             Stroke::new(3.0 * self.zoom, palette.l2_rail),
         );
 
-        // --- Floating Quick-Action HUD Bar above the Selected Element(s) ---
-        if self.is_edit_mode && !sim_active && !is_dragging && active_marquee_rect.is_none() {
-            if doc.selected_element_ids.len() > 1 {
-                // Multi-Selection HUD Bar
-                let mut group_rect: Option<Rect> = None;
-                for &(_, eid, erect) in &element_screen_bounds {
-                    if doc.selected_element_ids.contains(&eid) {
-                        group_rect = Some(match group_rect {
-                            Some(gr) => gr.union(erect),
-                            None => erect,
-                        });
-                    }
-                }
-                if let Some(sel_rect) = group_rect {
-                    let count = doc.selected_element_ids.len();
-                    let hud_w = 345.0;
-                    let hud_h = 26.0;
-                    let hud_y = if sel_rect.min.y - hud_h - 6.0 > viewport_rect.min.y + 40.0 {
-                        sel_rect.min.y - hud_h - 6.0
-                    } else {
-                        sel_rect.max.y + 6.0
-                    };
-                    let hud_cx = sel_rect.center().x.clamp(
-                        viewport_rect.min.x + hud_w * 0.5 + 8.0,
-                        (viewport_rect.max.x - hud_w * 0.5 - 8.0)
-                            .max(viewport_rect.min.x + hud_w * 0.5 + 8.0),
-                    );
-                    let hud_rect = Rect::from_center_size(
-                        pos2(hud_cx, hud_y + hud_h * 0.5),
-                        vec2(hud_w, hud_h),
-                    );
-                    if hover_pos.map_or(false, |hp| hud_rect.contains(hp)) {
-                        any_interactive_hovered = true;
-                    }
-
-                    painter.rect_filled(hud_rect, CornerRadius::same(6), palette.banner_bg);
-                    painter.rect_stroke(
-                        hud_rect,
-                        CornerRadius::same(6),
-                        Stroke::new(1.5, palette.accent_heading),
-                        StrokeKind::Inside,
-                    );
-
-                    // Count badge on left
-                    let badge_w = 78.0;
-                    let badge_rect = Rect::from_min_size(
-                        pos2(hud_rect.min.x + 4.0, hud_rect.min.y + 3.0),
-                        vec2(badge_w, hud_h - 6.0),
-                    );
-                    painter.rect_filled(
-                        badge_rect,
-                        CornerRadius::same(4),
-                        palette.accent_heading.gamma_multiply(0.22),
-                    );
-                    painter.text(
-                        badge_rect.center(),
-                        Align2::CENTER_CENTER,
-                        format!("{} Selected", count),
-                        FontId::proportional(10.5),
-                        palette.accent_heading,
-                    );
-
-                    let multi_btns: [(&str, Color32, CanvasAction); 5] = [
-                        (
-                            "+∥ Par",
-                            palette.accent_ok,
-                            CanvasAction::AddParallelToSelection,
-                        ),
-                        (
-                            "+─ Ser",
-                            palette.accent_warn,
-                            CanvasAction::AddSeriesToSelection(true),
-                        ),
-                        (
-                            "Mode",
-                            palette.accent_heading,
-                            CanvasAction::ToggleSelectedModes,
-                        ),
-                        (
-                            "Del All",
-                            palette.accent_danger,
-                            CanvasAction::DeleteSelectedElements,
-                        ),
-                        (
-                            "Clear",
-                            palette.text_primary,
-                            CanvasAction::ClearSelection,
-                        ),
-                    ];
-                    let rem_w = hud_w - badge_w - 10.0;
-                    let btn_w = rem_w / 5.0;
-                    for (i, (lbl, col, btn_act)) in multi_btns.into_iter().enumerate() {
-                        let bx = hud_rect.min.x + badge_w + 5.0 + i as f32 * btn_w;
-                        let b_rect = Rect::from_min_size(
-                            pos2(bx + 1.0, hud_rect.min.y + 3.0),
-                            vec2(btn_w - 2.0, hud_h - 6.0),
-                        );
-                        let b_hov = hover_pos.map_or(false, |hp| b_rect.contains(hp));
-                        if b_hov {
-                            painter.rect_filled(
-                                b_rect,
-                                CornerRadius::same(4),
-                                col.gamma_multiply(0.25),
-                            );
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                        }
-                        painter.text(
-                            b_rect.center(),
-                            Align2::CENTER_CENTER,
-                            lbl,
-                            FontId::proportional(10.5),
-                            if b_hov {
-                                if palette.is_light() { palette.text_primary } else { Color32::WHITE }
-                            } else {
-                                col
-                            },
-                        );
-                        if is_clicked && b_hov {
-                            action = Some(btn_act);
-                        }
-                    }
-                }
-            }
-        } else if (!self.is_edit_mode || sim_active) && !is_dragging {
-            // --- Live Debug / Force Floating HUD Bar (Simulator & Online Hardware Modes) ---
+        // --- Live Debug / Force Floating HUD Bar (Simulator & Online Hardware Modes) ---
+        if (!self.is_edit_mode || sim_active) && !is_dragging {
             if let (Some(_), Some(sel_id)) = (doc.selected_rung_idx, doc.selected_element_id) {
                 if let Some(sel_elem) = doc.element_by_id(sel_id).cloned() {
                     if let Some(sel_rect) = self.find_selected_rect_on_screen(
@@ -1412,7 +1443,7 @@ impl CanvasViewport {
                         sel_id,
                     ) {
                         let elem_addr = sel_elem.name.trim().to_string();
-                        let hud_w = 342.0;
+                        let hud_w = 356.0;
                         let hud_h = 26.0;
                         let hud_y = if sel_rect.min.y - hud_h - 6.0 > viewport_rect.min.y + 40.0 {
                             sel_rect.min.y - hud_h - 5.0
@@ -1441,13 +1472,13 @@ impl CanvasViewport {
                         painter.rect_stroke(
                             hud_rect,
                             CornerRadius::same(6),
-                            Stroke::new(1.4, mode_border_col),
+                            Stroke::new(1.0, mode_border_col),
                             StrokeKind::Inside,
                         );
 
                         // Address & Live State Badge on left
                         let is_on = doc.simulator.get_var_value(&elem_addr);
-                        let badge_w = 92.0;
+                        let badge_w = 104.0;
                         let badge_rect = Rect::from_min_size(
                             pos2(hud_rect.min.x + 4.0, hud_rect.min.y + 3.0),
                             vec2(badge_w, hud_h - 6.0),
@@ -1466,9 +1497,9 @@ impl CanvasViewport {
                             badge_rect.center(),
                             Align2::CENTER_CENTER,
                             format!(
-                                "{}={}",
+                                "{} · {}",
                                 elem_addr,
-                                if is_on { "ON(1)" } else { "OFF(0)" }
+                                if is_on { "ON" } else { "OFF" }
                             ),
                             FontId::monospace(9.5),
                             state_col,
@@ -1510,14 +1541,14 @@ impl CanvasViewport {
                                     CanvasAction::DebugForceBit(elem_addr.clone(), true),
                                 ),
                                 (
+                                    "Force 0",
+                                    palette.accent_danger,
+                                    CanvasAction::DebugForceBit(elem_addr.clone(), false),
+                                ),
+                                (
                                     "Unforce",
                                     palette.text_primary,
                                     CanvasAction::DebugUnforceBit(elem_addr.clone()),
-                                ),
-                                (
-                                    "Edit",
-                                    palette.accent_heading,
-                                    CanvasAction::SwitchToEditMode(Some(sel_id)),
                                 ),
                             ]
                         };
@@ -1562,6 +1593,28 @@ impl CanvasViewport {
                 }
             }
         }
+
+        // Precompute bottom-right Zoom & Fit CAD pill hit-box so clicking it never clears selection or starts marquee drag
+        let zoom_pill_rect: Option<Rect> =
+            if viewport_rect.width() >= 260.0 && !is_dragging && self.context_menu_elem.is_none() {
+                let pill_w = 148.0;
+                let pill_h = 24.0;
+                let offset_x = if show_v_bar { bar_thickness + 10.0 } else { 10.0 };
+                let offset_y = if show_h_bar { bar_thickness + 10.0 } else { 10.0 };
+                let rect = Rect::from_min_size(
+                    pos2(
+                        viewport_rect.max.x - pill_w - offset_x,
+                        viewport_rect.max.y - pill_h - offset_y,
+                    ),
+                    vec2(pill_w, pill_h),
+                );
+                if hover_pos.map_or(false, |hp| rect.contains(hp)) {
+                    any_interactive_hovered = true;
+                }
+                Some(rect)
+            } else {
+                None
+            };
 
         // --- Start Marquee Selection or Deselect when Pressing on Empty Space ---
         if primary_pressed && !pan_mode && !any_interactive_hovered && self.drag_candidate.is_none()
@@ -1639,55 +1692,116 @@ impl CanvasViewport {
 
         // --- Floating Ghost Preview while Dragging an Element or Tool ---
         let drag_info = if let Some((_, ref drag_label)) = self.dragging_elem {
-            Some(("Moving", drag_label.clone(), palette.accent_heading))
+            Some(("MOVE", drag_label.clone(), palette.accent_heading))
         } else if let Some((_, ref tool_label)) = self.dragging_tool {
-            Some(("Placing", tool_label.clone(), palette.accent_ok))
+            Some(("PLACE", tool_label.clone(), palette.accent_ok))
         } else {
             None
         };
 
-        if let Some((action_verb, label, accent_col)) = drag_info {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        if let Some((action_badge, label, accent_col)) = drag_info {
+            let val_err = drop_target.as_ref().and_then(|dt| dt.validation_error.as_ref());
+            ui.ctx().set_cursor_icon(if val_err.is_some() {
+                egui::CursorIcon::NoDrop
+            } else {
+                egui::CursorIcon::Grabbing
+            });
             if let Some(hp) = hover_pos {
-                let ghost_w = 225.0;
-                let ghost_x = (hp.x + 14.0).min((viewport_rect.max.x - ghost_w - 6.0).max(viewport_rect.min.x + 6.0));
-                let ghost_rect = Rect::from_min_size(pos2(ghost_x, hp.y + 14.0), vec2(ghost_w, 44.0));
-                painter.rect_filled(ghost_rect, CornerRadius::same(6), palette.card_bg);
-                let val_err = drop_target.as_ref().and_then(|dt| dt.validation_error.as_ref());
-                let ghost_border_col = if val_err.is_some() {
+                let ghost_w = 236.0;
+                let ghost_h = 44.0;
+                let ghost_x = (hp.x + 14.0)
+                    .min((viewport_rect.max.x - ghost_w - 6.0).max(viewport_rect.min.x + 6.0));
+                let ghost_y = (hp.y + 14.0)
+                    .min((viewport_rect.max.y - ghost_h - 6.0).max(viewport_rect.min.y + 6.0));
+                let ghost_rect = Rect::from_min_size(pos2(ghost_x, ghost_y), vec2(ghost_w, ghost_h));
+                let border_col = if val_err.is_some() {
                     palette.accent_danger
                 } else {
                     accent_col
                 };
+
+                painter.add(
+                    egui::Shadow {
+                        offset: [0, 4],
+                        blur: 12,
+                        spread: 0,
+                        color: Color32::from_black_alpha(if palette.is_light() { 38 } else { 110 }),
+                    }
+                    .as_shape(ghost_rect, CornerRadius::same(6)),
+                );
+                painter.rect_filled(ghost_rect, CornerRadius::same(6), palette.card_bg);
                 painter.rect_stroke(
                     ghost_rect,
                     CornerRadius::same(6),
-                    Stroke::new(1.5, ghost_border_col),
+                    Stroke::new(1.2, border_col),
                     StrokeKind::Inside,
                 );
+
+                // Left 30x30 tinted icon box
+                let icon_box = Rect::from_min_size(
+                    pos2(ghost_rect.min.x + 7.0, ghost_rect.min.y + 7.0),
+                    vec2(30.0, 30.0),
+                );
+                painter.rect_filled(
+                    icon_box,
+                    CornerRadius::same(4),
+                    border_col.gamma_multiply(0.14),
+                );
+                let drag_icon = dragging_source_type
+                    .map(type_tag_icon)
+                    .unwrap_or(VectorIcon::FunctionBlock);
+                paint_icon(&painter, icon_box.shrink(4.0), drag_icon, border_col);
+
+                // Right top row: compact uppercase pill badge + monospace label
+                let badge_text = if val_err.is_some() { "BLOCKED" } else { action_badge };
+                let badge_w = if val_err.is_some() { 50.0 } else { 38.0 };
+                let badge_rect = Rect::from_center_size(
+                    pos2(ghost_rect.min.x + 44.0 + badge_w * 0.5, ghost_rect.min.y + 14.0),
+                    vec2(badge_w, 14.0),
+                );
+                painter.rect_filled(badge_rect, CornerRadius::same(3), border_col);
                 painter.text(
-                    pos2(ghost_rect.min.x + 10.0, ghost_rect.min.y + 14.0),
+                    badge_rect.center(),
+                    Align2::CENTER_CENTER,
+                    badge_text,
+                    FontId::proportional(8.5),
+                    Color32::WHITE,
+                );
+
+                let label_clip = Rect::from_min_max(
+                    pos2(badge_rect.max.x + 6.0, ghost_rect.min.y + 2.0),
+                    pos2(ghost_rect.max.x - 8.0, ghost_rect.min.y + 24.0),
+                );
+                painter.with_clip_rect(label_clip).text(
+                    pos2(badge_rect.max.x + 6.0, ghost_rect.min.y + 14.0),
                     Align2::LEFT_CENTER,
-                    format!("[Drag] {}: {}", action_verb, label),
-                    FontId::proportional(12.0),
+                    &label,
+                    FontId::monospace(11.5),
                     palette.text_primary,
                 );
+
+                // Right bottom row: concise destination or validation error
                 let (sub_msg, sub_color) = if let Some(ref dt) = drop_target {
                     if let Some(ref err) = dt.validation_error {
-                        (format!("-> {}", err), palette.accent_danger)
-                    } else if dt.create_new_rung {
-                        (format!("-> Create & Drop: {}", dt.target_label), palette.accent_ok)
+                        (err.clone(), palette.accent_danger)
                     } else {
-                        (format!("-> Drop at: {}", dt.target_label), palette.accent_ok)
+                        (dt.target_label.clone(), palette.accent_ok)
                     }
                 } else {
-                    ("Hover target Network or Empty Space to place".to_string(), palette.accent_warn)
+                    (
+                        "Hover a network or empty space".to_string(),
+                        palette.text_primary.gamma_multiply(0.72),
+                    )
                 };
-                painter.text(
-                    pos2(ghost_rect.min.x + 10.0, ghost_rect.min.y + 31.0),
+                let sub_clip = Rect::from_min_max(
+                    pos2(ghost_rect.min.x + 44.0, ghost_rect.min.y + 22.0),
+                    pos2(ghost_rect.max.x - 8.0, ghost_rect.max.y - 2.0),
+                );
+                painter.with_clip_rect(sub_clip).text(
+                    pos2(ghost_rect.min.x + 44.0, ghost_rect.min.y + 31.0),
                     Align2::LEFT_CENTER,
                     sub_msg,
-                    FontId::proportional(10.5),
+                    FontId::proportional(10.0),
                     sub_color,
                 );
             }
@@ -1698,7 +1812,7 @@ impl CanvasViewport {
             let is_dragging_v = matches!(self.dragging_scrollbar, Some(ScrollbarDrag::Vertical { .. }));
             let is_thumb_hov = raw_hover_pos.map_or(false, |hp| thumb_rect_v.contains(hp));
             let track_bg = palette.canvas_bg.gamma_multiply(0.85);
-            painter.rect_filled(track_rect_v, CornerRadius::same(5), track_bg);
+            painter.rect_filled(track_rect_v, CornerRadius::same(4), track_bg);
             let thumb_bg = if is_dragging_v {
                 palette.accent_heading
             } else if is_thumb_hov {
@@ -1713,7 +1827,7 @@ impl CanvasViewport {
             let is_dragging_h = matches!(self.dragging_scrollbar, Some(ScrollbarDrag::Horizontal { .. }));
             let is_thumb_hov = raw_hover_pos.map_or(false, |hp| thumb_rect_h.contains(hp));
             let track_bg = palette.canvas_bg.gamma_multiply(0.85);
-            painter.rect_filled(track_rect_h, CornerRadius::same(5), track_bg);
+            painter.rect_filled(track_rect_h, CornerRadius::same(4), track_bg);
             let thumb_bg = if is_dragging_h {
                 palette.accent_heading
             } else if is_thumb_hov {
@@ -1724,64 +1838,42 @@ impl CanvasViewport {
             painter.rect_filled(thumb_rect_h, CornerRadius::same(4), thumb_bg);
         }
 
-        // --- Bottom-Right Floating Zoom Control HUD ([-], 100%, [+], [Reset]) ---
-        {
-            let zbar_w = 158.0;
-            let zbar_h = 26.0;
-            let offset_x = if show_v_bar { bar_thickness + 12.0 } else { 12.0 };
-            let offset_y = if show_h_bar { bar_thickness + 10.0 } else { 10.0 };
-            let zbar_rect = Rect::from_min_size(
-                pos2(
-                    viewport_rect.max.x - zbar_w - offset_x,
-                    viewport_rect.max.y - zbar_h - offset_y,
-                ),
-                vec2(zbar_w, zbar_h),
+        // --- Bottom-Right Floating Zoom & Fit CAD Pill ([-], 100%, [+], | [Fit]) ---
+        if let Some(pill_rect) = zoom_pill_rect {
+            painter.rect_filled(
+                pill_rect,
+                CornerRadius::same(5),
+                palette.card_bg.gamma_multiply(0.94),
             );
-            if raw_hover_pos.map_or(false, |hp| zbar_rect.contains(hp)) {
-                any_interactive_hovered = true;
-            }
-            painter.rect_filled(zbar_rect, CornerRadius::same(6), palette.banner_bg);
             painter.rect_stroke(
-                zbar_rect,
-                CornerRadius::same(6),
-                Stroke::new(1.0, palette.banner_border),
+                pill_rect,
+                CornerRadius::same(5),
+                Stroke::new(1.0, palette.card_border),
                 StrokeKind::Inside,
             );
 
-            let minus_rect = Rect::from_min_size(
-                pos2(zbar_rect.min.x + 3.0, zbar_rect.min.y + 3.0),
-                vec2(24.0, zbar_h - 6.0),
+            let btn_y = pill_rect.min.y + 2.0;
+            let btn_h = pill_rect.height() - 4.0;
+            let minus_rect = Rect::from_min_size(pos2(pill_rect.min.x + 3.0, btn_y), vec2(24.0, btn_h));
+            let pct_rect = Rect::from_min_size(pos2(minus_rect.max.x + 1.0, btn_y), vec2(48.0, btn_h));
+            let plus_rect = Rect::from_min_size(pos2(pct_rect.max.x + 1.0, btn_y), vec2(24.0, btn_h));
+            let div_x = plus_rect.max.x + 3.0;
+            painter.line_segment(
+                [pos2(div_x, pill_rect.min.y + 5.0), pos2(div_x, pill_rect.max.y - 5.0)],
+                Stroke::new(1.0, palette.card_border.gamma_multiply(0.8)),
             );
-            let pct_rect = Rect::from_min_size(
-                pos2(minus_rect.max.x + 2.0, zbar_rect.min.y + 3.0),
-                vec2(52.0, zbar_h - 6.0),
-            );
-            let plus_rect = Rect::from_min_size(
-                pos2(pct_rect.max.x + 2.0, zbar_rect.min.y + 3.0),
-                vec2(24.0, zbar_h - 6.0),
-            );
-            let fit_rect = Rect::from_min_size(
-                pos2(plus_rect.max.x + 2.0, zbar_rect.min.y + 3.0),
-                vec2(44.0, zbar_h - 6.0),
-            );
+            let fit_rect = Rect::from_min_size(pos2(div_x + 3.0, btn_y), vec2(38.0, btn_h));
 
+            let pct_label = format!("{:.0}%", self.zoom * 100.0);
             for (btn_r, lbl, kind) in [
-                (minus_rect, "−", -1i8),
-                (
-                    pct_rect,
-                    &format!("{:.0}%", self.zoom * 100.0),
-                    0i8,
-                ),
+                (minus_rect, "-", -1i8),
+                (pct_rect, pct_label.as_str(), 0i8),
                 (plus_rect, "+", 1i8),
-                (fit_rect, "Reset", 2i8),
+                (fit_rect, "Fit", 2i8),
             ] {
-                let is_hov = raw_hover_pos.map_or(false, |hp| btn_r.contains(hp));
+                let is_hov = hover_pos.map_or(false, |hp| btn_r.contains(hp));
                 if is_hov {
-                    painter.rect_filled(
-                        btn_r,
-                        CornerRadius::same(4),
-                        palette.accent_heading.gamma_multiply(0.22),
-                    );
+                    painter.rect_filled(btn_r, CornerRadius::same(4), palette.rung_badge_hov_bg);
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
                 painter.text(
@@ -1797,17 +1889,18 @@ impl CanvasViewport {
                         palette.text_primary
                     },
                 );
-                if raw_is_clicked && is_hov {
+                if is_clicked && is_hov {
                     match kind {
                         -1 => self.set_target_zoom(
-                            self.target_zoom / 1.18,
+                            self.target_zoom / 1.15,
                             Some(viewport_rect.center()),
                         ),
+                        0 => self.reset_view(),
                         1 => self.set_target_zoom(
-                            self.target_zoom * 1.18,
+                            self.target_zoom * 1.15,
                             Some(viewport_rect.center()),
                         ),
-                        _ => self.reset_view(),
+                        _ => self.fit_to_viewport(doc, viewport_rect.size()),
                     }
                     action = None;
                 }
@@ -1914,204 +2007,387 @@ impl CanvasViewport {
             self.marquee_start = None;
         }
 
-        // --- Context Menu Popup (Right-Click on Element or Network) ---
+        // --- Native Pro IDE Context Menu (Right-Click on Element or Network) ---
         if let Some((r_idx, el_id)) = self.context_menu_elem {
             let mut close_menu = false;
-            let menu_title = if !self.is_edit_mode || sim_active {
-                if self.is_online_hw_mode {
-                    "Online PLC Debug & Force Menu"
-                } else {
-                    "Simulator Debug & Force Menu"
-                }
-            } else {
-                "Quick Element & Network Menu"
-            };
-            egui::Window::new(menu_title)
-                .collapsible(false)
-                .resizable(false)
-                .default_pos(mouse_pos.unwrap_or(viewport_rect.center()))
+            let screen_rect = ui.ctx().content_rect();
+            let raw_pos = self
+                .context_menu_pos
+                .or(mouse_pos)
+                .unwrap_or(viewport_rect.center());
+            let menu_est_w = 224.0;
+            let menu_est_h = 260.0;
+            let clamped_pos = pos2(
+                raw_pos.x.clamp(
+                    screen_rect.min.x + 6.0,
+                    (screen_rect.max.x - menu_est_w - 6.0).max(screen_rect.min.x + 6.0),
+                ),
+                raw_pos.y.clamp(
+                    screen_rect.min.y + 6.0,
+                    (screen_rect.max.y - menu_est_h - 6.0).max(screen_rect.min.y + 6.0),
+                ),
+            );
+
+            let area_resp = egui::Area::new(egui::Id::unique("canvas_context_menu"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(clamped_pos)
                 .show(ui.ctx(), |ui| {
-                    if !self.is_edit_mode || sim_active {
-                        if let Some(el) = doc.element_by_id(el_id).cloned() {
-                            let addr = el.name.trim().to_string();
-                            let is_on = doc.simulator.get_var_value(&addr);
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    egui::RichText::new(format!("{} ({})", addr, el.element_type.display_name()))
-                                        .color(palette.accent_heading)
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(if is_on { "● ON (1)" } else { "○ OFF (0)" })
-                                        .monospace()
-                                        .strong()
-                                        .color(if is_on { palette.accent_ok } else { palette.rung_text_dim }),
-                                );
-                            });
-                            ui.separator();
-                            if !self.is_online_hw_mode {
-                                if ui
-                                    .button(
-                                        egui::RichText::new("Toggle Input State (ON ↔ OFF)")
-                                            .color(palette.accent_ok)
-                                            .strong(),
-                                    )
-                                    .clicked()
-                                {
-                                    action = Some(CanvasAction::DebugToggleBit(addr.clone()));
+                    egui::Frame::new()
+                        .fill(palette.card_bg)
+                        .stroke(Stroke::new(1.0, palette.card_border))
+                        .corner_radius(CornerRadius::same(6))
+                        .inner_margin(egui::Margin::symmetric(5, 5))
+                        .shadow(egui::Shadow {
+                            offset: [0, 4],
+                            blur: 12,
+                            spread: 0,
+                            color: Color32::from_black_alpha(if palette.is_light() {
+                                38
+                            } else {
+                                110
+                            }),
+                        })
+                        .show(ui, |ui| {
+                            ui.set_width(214.0);
+                            ui.spacing_mut().item_spacing.y = 1.0;
+
+                            if !self.is_edit_mode || sim_active {
+                                if el_id != 0 {
+                                    if let Some(el) = doc.element_by_id(el_id).cloned() {
+                                        let addr = el.name.trim().to_string();
+                                        let is_on = doc.simulator.get_var_value(&addr);
+                                        ui.horizontal(|ui| {
+                                            ui.add_space(6.0);
+                                            ui.label(
+                                                egui::RichText::new(&addr)
+                                                    .monospace()
+                                                    .size(11.5)
+                                                    .strong()
+                                                    .color(palette.accent_heading),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "· {}",
+                                                    el.element_type.display_name()
+                                                ))
+                                                .size(10.5)
+                                                .color(palette.rung_text_dim),
+                                            );
+                                            ui.with_layout(
+                                                egui::Layout::right_to_left(egui::Align::Center),
+                                                |ui| {
+                                                    ui.add_space(6.0);
+                                                    ui.label(
+                                                        egui::RichText::new(if is_on {
+                                                            "● ON"
+                                                        } else {
+                                                            "○ OFF"
+                                                        })
+                                                        .monospace()
+                                                        .size(10.5)
+                                                        .strong()
+                                                        .color(if is_on {
+                                                            palette.accent_ok
+                                                        } else {
+                                                            palette.rung_text_dim
+                                                        }),
+                                                    );
+                                                },
+                                            );
+                                        });
+                                        ctx_menu_sep(ui, palette);
+                                        if !self.is_online_hw_mode
+                                            && ctx_menu_item(
+                                                ui,
+                                                "Toggle State (ON / OFF)",
+                                                "Space",
+                                                palette.text_primary,
+                                                palette,
+                                            )
+                                        {
+                                            action = Some(CanvasAction::DebugToggleBit(addr.clone()));
+                                            close_menu = true;
+                                        }
+                                        if ctx_menu_item(
+                                            ui,
+                                            "Force ON (1)",
+                                            "",
+                                            palette.accent_ok,
+                                            palette,
+                                        ) {
+                                            action = Some(CanvasAction::DebugForceBit(
+                                                addr.clone(),
+                                                true,
+                                            ));
+                                            close_menu = true;
+                                        }
+                                        if ctx_menu_item(
+                                            ui,
+                                            "Force OFF (0)",
+                                            "",
+                                            palette.accent_danger,
+                                            palette,
+                                        ) {
+                                            action = Some(CanvasAction::DebugForceBit(
+                                                addr.clone(),
+                                                false,
+                                            ));
+                                            close_menu = true;
+                                        }
+                                        if ctx_menu_item(
+                                            ui,
+                                            "Release Force",
+                                            "",
+                                            palette.accent_warn,
+                                            palette,
+                                        ) {
+                                            action = Some(CanvasAction::DebugUnforceBit(addr));
+                                            close_menu = true;
+                                        }
+                                        ctx_menu_sep(ui, palette);
+                                    }
+                                }
+                                if !doc.simulator.forced_bits.is_empty() || self.is_online_hw_mode {
+                                    if ctx_menu_item(
+                                        ui,
+                                        "Clear All Forced Bits",
+                                        "",
+                                        palette.text_primary,
+                                        palette,
+                                    ) {
+                                        action = Some(CanvasAction::DebugClearAllForces);
+                                        close_menu = true;
+                                    }
+                                    ctx_menu_sep(ui, palette);
+                                }
+                                if ctx_menu_item(
+                                    ui,
+                                    "Switch to Edit Mode",
+                                    "",
+                                    palette.accent_heading,
+                                    palette,
+                                ) {
+                                    let open_id = if el_id != 0 { Some(el_id) } else { None };
+                                    action = Some(CanvasAction::SwitchToEditMode(open_id));
+                                    close_menu = true;
+                                }
+                            } else {
+                                let is_multi = doc.selected_element_ids.len() > 1
+                                    && doc.selected_element_ids.contains(&el_id);
+                                if is_multi {
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(6.0);
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "Selected ({} elements)",
+                                                doc.selected_element_ids.len()
+                                            ))
+                                            .size(11.0)
+                                            .strong()
+                                            .color(palette.accent_heading),
+                                        );
+                                    });
+                                    ctx_menu_sep(ui, palette);
+                                    if ctx_menu_item(
+                                        ui,
+                                        "Add Parallel (Below)",
+                                        "",
+                                        palette.text_primary,
+                                        palette,
+                                    ) {
+                                        action = Some(CanvasAction::AddParallelToSelection);
+                                        close_menu = true;
+                                    }
+                                    if ctx_menu_item(
+                                        ui,
+                                        "Add Series (After)",
+                                        "",
+                                        palette.text_primary,
+                                        palette,
+                                    ) {
+                                        action = Some(CanvasAction::AddSeriesToSelection(true));
+                                        close_menu = true;
+                                    }
+                                    if ctx_menu_item(
+                                        ui,
+                                        "Add Series (Before)",
+                                        "",
+                                        palette.text_primary,
+                                        palette,
+                                    ) {
+                                        action = Some(CanvasAction::AddSeriesToSelection(false));
+                                        close_menu = true;
+                                    }
+                                    ctx_menu_sep(ui, palette);
+                                    if ctx_menu_item(
+                                        ui,
+                                        "Invert Mode",
+                                        "",
+                                        palette.text_primary,
+                                        palette,
+                                    ) {
+                                        action = Some(CanvasAction::ToggleSelectedModes);
+                                        close_menu = true;
+                                    }
+                                    if ctx_menu_item(
+                                        ui,
+                                        "Delete Selected",
+                                        "Del",
+                                        palette.accent_danger,
+                                        palette,
+                                    ) {
+                                        action = Some(CanvasAction::DeleteSelectedElements);
+                                        close_menu = true;
+                                    }
+                                    ctx_menu_sep(ui, palette);
+                                } else if el_id != 0 {
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(6.0);
+                                        if let Some(el) = doc.element_by_id(el_id) {
+                                            ui.label(
+                                                egui::RichText::new(&el.name)
+                                                    .monospace()
+                                                    .size(11.5)
+                                                    .strong()
+                                                    .color(palette.accent_heading),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "· {}",
+                                                    el.element_type.display_name()
+                                                ))
+                                                .size(10.5)
+                                                .color(palette.rung_text_dim),
+                                            );
+                                        } else {
+                                            ui.label(
+                                                egui::RichText::new(format!("Element #{}", el_id))
+                                                    .monospace()
+                                                    .size(11.5)
+                                                    .strong()
+                                                    .color(palette.accent_heading),
+                                            );
+                                        }
+                                    });
+                                    ctx_menu_sep(ui, palette);
+                                    if ctx_menu_item(
+                                        ui,
+                                        "Configure Element...",
+                                        "Enter",
+                                        palette.accent_heading,
+                                        palette,
+                                    ) {
+                                        action = Some(CanvasAction::OpenConfigModal(el_id));
+                                        close_menu = true;
+                                    }
+                                    ctx_menu_sep(ui, palette);
+                                    if ctx_menu_item(
+                                        ui,
+                                        "Add Parallel (Below)",
+                                        "",
+                                        palette.text_primary,
+                                        palette,
+                                    ) {
+                                        doc.set_single_selection(Some(r_idx), el_id);
+                                        action = Some(CanvasAction::AddParallelToSelection);
+                                        close_menu = true;
+                                    }
+                                    if ctx_menu_item(
+                                        ui,
+                                        "Add Series (After)",
+                                        "",
+                                        palette.text_primary,
+                                        palette,
+                                    ) {
+                                        doc.set_single_selection(Some(r_idx), el_id);
+                                        action = Some(CanvasAction::AddSeriesToSelection(true));
+                                        close_menu = true;
+                                    }
+                                    if ctx_menu_item(
+                                        ui,
+                                        "Add Series (Before)",
+                                        "",
+                                        palette.text_primary,
+                                        palette,
+                                    ) {
+                                        doc.set_single_selection(Some(r_idx), el_id);
+                                        action = Some(CanvasAction::AddSeriesToSelection(false));
+                                        close_menu = true;
+                                    }
+                                    ctx_menu_sep(ui, palette);
+                                    if ctx_menu_item(
+                                        ui,
+                                        "Invert Mode",
+                                        "Space",
+                                        palette.text_primary,
+                                        palette,
+                                    ) {
+                                        action = Some(CanvasAction::ToggleElementMode(el_id));
+                                        close_menu = true;
+                                    }
+                                    if ctx_menu_item(
+                                        ui,
+                                        "Delete Element",
+                                        "Del",
+                                        palette.accent_danger,
+                                        palette,
+                                    ) {
+                                        action = Some(CanvasAction::DeleteElement(el_id));
+                                        close_menu = true;
+                                    }
+                                    ctx_menu_sep(ui, palette);
+                                }
+
+                                ui.horizontal(|ui| {
+                                    ui.add_space(6.0);
+                                    ui.label(
+                                        egui::RichText::new(format!("Network #{:02}", r_idx + 1))
+                                            .size(10.5)
+                                            .strong()
+                                            .color(palette.rung_text_dim),
+                                    );
+                                });
+                                if ctx_menu_item(
+                                    ui,
+                                    "Duplicate Network Below",
+                                    "",
+                                    palette.text_primary,
+                                    palette,
+                                ) {
+                                    action = Some(CanvasAction::DuplicateRung(r_idx));
+                                    close_menu = true;
+                                }
+                                if ctx_menu_item(
+                                    ui,
+                                    "Delete Network",
+                                    "",
+                                    palette.accent_danger,
+                                    palette,
+                                ) {
+                                    action = Some(CanvasAction::DeleteRung(r_idx));
                                     close_menu = true;
                                 }
                             }
-                            if ui
-                                .button(
-                                    egui::RichText::new("Force ON (1)")
-                                        .color(palette.accent_ok)
-                                        .strong(),
-                                )
-                                .clicked()
-                            {
-                                action = Some(CanvasAction::DebugForceBit(addr.clone(), true));
-                                close_menu = true;
-                            }
-                            if ui
-                                .button(
-                                    egui::RichText::new("Force OFF (0)")
-                                        .color(palette.accent_danger)
-                                        .strong(),
-                                )
-                                .clicked()
-                            {
-                                action = Some(CanvasAction::DebugForceBit(addr.clone(), false));
-                                close_menu = true;
-                            }
-                            if ui
-                                .button(
-                                    egui::RichText::new("Release Force (Normal)")
-                                        .color(palette.accent_warn),
-                                )
-                                .clicked()
-                            {
-                                action = Some(CanvasAction::DebugUnforceBit(addr));
-                                close_menu = true;
-                            }
-                            ui.separator();
-                        }
-                        if !doc.simulator.forced_bits.is_empty() || self.is_online_hw_mode {
-                            if ui.button("Clear All Forced Bits").clicked() {
-                                action = Some(CanvasAction::DebugClearAllForces);
-                                close_menu = true;
-                            }
-                            ui.separator();
-                        }
-                        if ui
-                            .button(
-                                egui::RichText::new("Switch to Edit Mode to Modify Circuit")
-                                    .color(palette.accent_heading)
-                                    .strong(),
-                            )
-                            .clicked()
-                        {
-                            let open_id = if el_id != 0 { Some(el_id) } else { None };
-                            action = Some(CanvasAction::SwitchToEditMode(open_id));
-                            close_menu = true;
-                        }
-                        ui.separator();
-                        if ui.button("Close").clicked() {
-                            close_menu = true;
-                        }
-                    } else {
-                        let is_multi = doc.selected_element_ids.len() > 1 && doc.selected_element_ids.contains(&el_id);
-                        if is_multi {
-                            ui.label(egui::RichText::new(format!("Selected Group ({} Elements)", doc.selected_element_ids.len())).color(palette.accent_heading).strong());
-                            ui.separator();
-                            if ui.button("+ Add in Parallel (Below)").clicked() {
-                                action = Some(CanvasAction::AddParallelToSelection);
-                                close_menu = true;
-                            }
-                            if ui.button("+ Add in Series (Right / After)").clicked() {
-                                action = Some(CanvasAction::AddSeriesToSelection(true));
-                                close_menu = true;
-                            }
-                            if ui.button("+ Add in Series (Left / Before)").clicked() {
-                                action = Some(CanvasAction::AddSeriesToSelection(false));
-                                close_menu = true;
-                            }
-                            if ui.button("Toggle Contact / Coil Modes").clicked() {
-                                action = Some(CanvasAction::ToggleSelectedModes);
-                                close_menu = true;
-                            }
-                            if ui
-                                .button(egui::RichText::new("Delete Selected Elements").color(palette.accent_danger))
-                                .clicked()
-                            {
-                                action = Some(CanvasAction::DeleteSelectedElements);
-                                close_menu = true;
-                            }
-                            ui.separator();
-                        } else if el_id != 0 {
-                            ui.label(egui::RichText::new(format!("Element ID #{}", el_id)).strong());
-                            ui.separator();
-                            if ui
-                                .button(
-                                    egui::RichText::new("Configure Element... (Enter)")
-                                        .color(palette.accent_heading)
-                                        .strong(),
-                                )
-                                .clicked()
-                            {
-                                action = Some(CanvasAction::OpenConfigModal(el_id));
-                                close_menu = true;
-                            }
-                            if ui.button("+ Add in Parallel (Below)").clicked() {
-                                doc.set_single_selection(Some(r_idx), el_id);
-                                action = Some(CanvasAction::AddParallelToSelection);
-                                close_menu = true;
-                            }
-                            if ui.button("+ Add in Series (Right / After)").clicked() {
-                                doc.set_single_selection(Some(r_idx), el_id);
-                                action = Some(CanvasAction::AddSeriesToSelection(true));
-                                close_menu = true;
-                            }
-                            if ui.button("+ Add in Series (Left / Before)").clicked() {
-                                doc.set_single_selection(Some(r_idx), el_id);
-                                action = Some(CanvasAction::AddSeriesToSelection(false));
-                                close_menu = true;
-                            }
-                            if ui.button("Toggle Contact / Coil Mode").clicked() {
-                                action = Some(CanvasAction::ToggleElementMode(el_id));
-                                close_menu = true;
-                            }
-                            if ui
-                                .button(
-                                    egui::RichText::new("Delete Element").color(palette.accent_danger),
-                                )
-                                .clicked()
-                            {
-                                action = Some(CanvasAction::DeleteElement(el_id));
-                                close_menu = true;
-                            }
-                            ui.separator();
-                        }
-                        ui.label(egui::RichText::new(format!("Network #{:02}", r_idx + 1)).strong());
-                        if ui.button("Duplicate Network Below").clicked() {
-                            action = Some(CanvasAction::DuplicateRung(r_idx));
-                            close_menu = true;
-                        }
-                        if ui
-                            .button(egui::RichText::new("Delete Network").color(palette.accent_danger))
-                            .clicked()
-                        {
-                            action = Some(CanvasAction::DeleteRung(r_idx));
-                            close_menu = true;
-                        }
-                        ui.separator();
-                        if ui.button("Close").clicked() {
-                            close_menu = true;
-                        }
-                    }
+                        });
                 });
+
+            if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
+                close_menu = true;
+            }
+            if !close_menu && !is_right_clicked {
+                let clicked_outside = ui.ctx().input(|i| {
+                    i.pointer.any_pressed()
+                        && i.pointer
+                            .interact_pos()
+                            .map_or(true, |p| !area_resp.response.rect.contains(p))
+                });
+                if clicked_outside {
+                    close_menu = true;
+                }
+            }
             if close_menu {
                 self.context_menu_elem = None;
+                self.context_menu_pos = None;
             }
         }
 
@@ -2120,9 +2396,6 @@ impl CanvasViewport {
         // --- Process Canvas Actions ---
         if let Some(act) = action {
             match act {
-                CanvasAction::ClearSelection => {
-                    doc.clear_element_selection();
-                }
                 CanvasAction::SelectRung(r_idx) => {
                     doc.selected_rung_idx = Some(r_idx);
                     doc.clear_element_selection();
@@ -2703,15 +2976,6 @@ impl CanvasViewport {
                 }
             }
 
-            if is_being_dragged {
-                painter.rect_stroke(
-                    rect_screen.shrink(2.0 * self.zoom),
-                    6.0 * self.zoom,
-                    Stroke::new(1.8 * self.zoom, palette.accent_heading),
-                    StrokeKind::Inside,
-                );
-            }
-
             if is_clicked && is_hovered {
                 *action = Some(CanvasAction::SelectElement {
                     rung_idx,
@@ -2723,6 +2987,7 @@ impl CanvasViewport {
             }
             if is_right_clicked && is_hovered {
                 self.context_menu_elem = Some((rung_idx, elem.id));
+                self.context_menu_pos = mouse_pos.or(hover_pos);
             }
 
             let is_valid = validation_result.is_ok();
@@ -2742,6 +3007,21 @@ impl CanvasViewport {
                 default_coil_style,
                 palette,
             );
+
+            if is_being_dragged {
+                painter.rect_filled(
+                    rect_screen.shrink(2.0 * self.zoom),
+                    CornerRadius::same(5),
+                    palette.canvas_bg.gamma_multiply(0.58),
+                );
+                draw_dashed_rect(
+                    painter,
+                    rect_screen.shrink(2.5 * self.zoom),
+                    Stroke::new(1.4 * self.zoom, palette.accent_heading.gamma_multiply(0.85)),
+                    5.0 * self.zoom,
+                    3.5 * self.zoom,
+                );
+            }
 
             (start_world.x + cell_w, start_world.y + cell_h)
         }
@@ -2848,44 +3128,106 @@ impl CanvasViewport {
             );
         }
 
-        // Directional Insertion Zone Highlight
+        // Precision CAD Insertion Snap Guides
         if let Some((zone, is_valid)) = hovered_zone {
-            let (z_rect, z_label) = match zone {
-                InsertPosition::Left => (
-                    Rect::from_min_max(rect_screen.min, pos2(x0 + w * 0.28, rect_screen.max.y)),
-                    if is_valid { "< Left" } else { "Block" },
-                ),
-                InsertPosition::Right => (
-                    Rect::from_min_max(pos2(x0 + w * 0.72, y0), rect_screen.max),
-                    if is_valid { "Right >" } else { "Block" },
-                ),
-                InsertPosition::TopParallel => (
-                    Rect::from_min_max(rect_screen.min, pos2(rect_screen.max.x, y0 + h * 0.30)),
-                    if is_valid { "^ Parallel" } else { "Block" },
-                ),
-                InsertPosition::BottomParallel => (
-                    Rect::from_min_max(pos2(x0, y0 + h * 0.70), rect_screen.max),
-                    if is_valid { "v Parallel" } else { "Block" },
-                ),
-                InsertPosition::AppendRung => (rect_screen, if is_valid { "+ Add" } else { "Block" }),
-            };
-            let fill_col = if is_valid {
-                Color32::from_rgba_unmultiplied(35, 165, 240, 90)
+            let z = self.zoom;
+            let guide_col = if is_valid {
+                palette.accent_heading
             } else {
-                Color32::from_rgba_unmultiplied(225, 45, 40, 110)
+                palette.accent_danger
             };
-            painter.rect_filled(
-                z_rect,
-                4.0 * self.zoom,
-                fill_col,
-            );
-            painter.text(
-                z_rect.center(),
-                Align2::CENTER_CENTER,
-                z_label,
-                self.font_prop(9.5),
-                Color32::WHITE,
-            );
+
+            match zone {
+                InsertPosition::Left | InsertPosition::Right => {
+                    let is_left = matches!(zone, InsertPosition::Left);
+                    let wash_rect = if is_left {
+                        Rect::from_min_max(rect_screen.min, pos2(x0 + w * 0.24, rect_screen.max.y))
+                    } else {
+                        Rect::from_min_max(pos2(x0 + w * 0.76, y0), rect_screen.max)
+                    };
+                    painter.rect_filled(wash_rect, 4.0 * z, guide_col.gamma_multiply(0.14));
+
+                    let beam_x = if is_left { x0 + 2.0 * z } else { x0 + w - 2.0 * z };
+                    let top_pt = pos2(beam_x, y0 + 10.0 * z);
+                    let bot_pt = pos2(beam_x, y0 + h - 10.0 * z);
+                    painter.line_segment([top_pt, bot_pt], Stroke::new(3.0 * z, guide_col));
+                    painter.circle_filled(top_pt, 3.5 * z, guide_col);
+                    painter.circle_filled(bot_pt, 3.5 * z, guide_col);
+
+                    let pill_txt = if !is_valid {
+                        "Blocked"
+                    } else if is_left {
+                        "Before"
+                    } else {
+                        "After"
+                    };
+                    let pill_w = if !is_valid { 48.0 * z } else { 42.0 * z };
+                    let pill_rect = Rect::from_center_size(pos2(beam_x, mid_y), vec2(pill_w, 16.0 * z));
+                    painter.rect_filled(pill_rect, 8.0 * z, guide_col);
+                    painter.text(
+                        pill_rect.center(),
+                        Align2::CENTER_CENTER,
+                        pill_txt,
+                        self.font_prop(9.0),
+                        Color32::WHITE,
+                    );
+                }
+                InsertPosition::TopParallel | InsertPosition::BottomParallel => {
+                    let is_top = matches!(zone, InsertPosition::TopParallel);
+                    let branch_y = if is_top {
+                        y0 + 12.0 * z
+                    } else {
+                        y0 + h - 12.0 * z
+                    };
+                    let lx = x0 + 5.0 * z;
+                    let rx = x0 + w - 5.0 * z;
+                    painter.add(egui::epaint::PathShape::line(
+                        vec![
+                            pos2(lx, mid_y),
+                            pos2(lx, branch_y),
+                            pos2(rx, branch_y),
+                            pos2(rx, mid_y),
+                        ],
+                        Stroke::new(1.8 * z, guide_col),
+                    ));
+                    painter.circle_filled(pos2(lx, mid_y), 3.0 * z, guide_col);
+                    painter.circle_filled(pos2(rx, mid_y), 3.0 * z, guide_col);
+
+                    let pill_txt = if is_valid { "+ Parallel" } else { "Blocked" };
+                    let pill_w = if is_valid { 56.0 * z } else { 48.0 * z };
+                    let pill_rect = Rect::from_center_size(pos2(center.x, branch_y), vec2(pill_w, 16.0 * z));
+                    painter.rect_filled(pill_rect, 8.0 * z, guide_col);
+                    painter.text(
+                        pill_rect.center(),
+                        Align2::CENTER_CENTER,
+                        pill_txt,
+                        self.font_prop(9.0),
+                        Color32::WHITE,
+                    );
+                }
+                InsertPosition::AppendRung => {
+                    let slot_rect = rect_screen.shrink(2.5 * z);
+                    painter.rect_filled(slot_rect, 4.0 * z, guide_col.gamma_multiply(0.10));
+                    draw_dashed_rect(
+                        painter,
+                        slot_rect,
+                        Stroke::new(1.5 * z, guide_col),
+                        5.0 * z,
+                        3.5 * z,
+                    );
+                    let pill_txt = if is_valid { "+ Append" } else { "Blocked" };
+                    let pill_w = if is_valid { 54.0 * z } else { 48.0 * z };
+                    let pill_rect = Rect::from_center_size(center, vec2(pill_w, 16.0 * z));
+                    painter.rect_filled(pill_rect, 8.0 * z, guide_col);
+                    painter.text(
+                        pill_rect.center(),
+                        Align2::CENTER_CENTER,
+                        pill_txt,
+                        self.font_prop(9.0),
+                        Color32::WHITE,
+                    );
+                }
+            }
         }
 
         // Address Color Accent based on IEC / prefix
@@ -4718,5 +5060,39 @@ mod tests {
         assert!(dt.create_new_rung);
         assert_eq!(dt.rung_idx, 2);
         assert!(dt.validation_error.is_none());
+    }
+
+    #[test]
+    fn test_fit_to_viewport_clamps_zoom() {
+        let doc = Document::default();
+        let mut vp = CanvasViewport::default();
+        vp.pan_offset = vec2(-220.0, -140.0);
+        vp.zoom = 1.9;
+        vp.target_zoom = 1.9;
+        vp.zoom_anchor = Some(pos2(100.0, 100.0));
+
+        // Very small viewport should clamp to lower bound (0.45) and reset pan_offset
+        vp.fit_to_viewport(&doc, vec2(260.0, 160.0));
+        assert!(
+            (0.45..=1.25).contains(&vp.zoom),
+            "expected clamped zoom in 0.45..=1.25, got {}",
+            vp.zoom
+        );
+        assert!((vp.zoom - 0.45).abs() < 1e-5, "expected lower clamp 0.45, got {}", vp.zoom);
+        assert_eq!(vp.target_zoom, vp.zoom);
+        assert!(vp.zoom_anchor.is_none());
+        assert_eq!(vp.pan_offset, vec2(14.0, 16.0));
+
+        // Large viewport should stay within 0.45..=1.25 and reset pan_offset
+        vp.pan_offset = vec2(-90.0, -50.0);
+        vp.fit_to_viewport(&doc, vec2(2400.0, 1600.0));
+        assert!(
+            (0.45..=1.25).contains(&vp.zoom),
+            "expected clamped zoom in 0.45..=1.25, got {}",
+            vp.zoom
+        );
+        assert_eq!(vp.target_zoom, vp.zoom);
+        assert!(vp.zoom_anchor.is_none());
+        assert_eq!(vp.pan_offset, vec2(14.0, 16.0));
     }
 }

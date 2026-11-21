@@ -71,27 +71,60 @@ pub fn paint_icon(painter: &Painter, rect: Rect, icon: VectorIcon, color: Color3
 
     match icon {
         VectorIcon::Undo => {
-            // Horizontal bar + top return hook + left arrow head
-            let p_right = pos2(c.x + r * 0.75, c.y + r * 0.45);
-            let p_mid = pos2(c.x + r * 0.75, c.y - r * 0.25);
-            let p_left = pos2(c.x - r * 0.65, c.y - r * 0.25);
-            painter.line_segment([pos2(c.x - r * 0.2, p_right.y), p_right], s);
-            painter.line_segment([p_right, p_mid], s);
-            painter.line_segment([p_mid, p_left], s);
-            // Left arrow tip
-            painter.line_segment([p_left, pos2(p_left.x + r * 0.45, p_left.y - r * 0.4)], s);
-            painter.line_segment([p_left, pos2(p_left.x + r * 0.45, p_left.y + r * 0.4)], s);
+            // Smooth curved-arc return path + crisp chevron arrowhead
+            let stroke = Stroke::new(1.5, color);
+            let y_top = c.y - r * 0.26;
+            let y_bot = c.y + r * 0.50;
+            let arc_cy = (y_top + y_bot) * 0.5;
+            let arc_r = (y_bot - y_top) * 0.5;
+            let arc_cx = c.x + r * 0.36;
+            let p_left = pos2(c.x - r * 0.68, y_top);
+
+            let mut path = Vec::with_capacity(7);
+            path.push(pos2(c.x - r * 0.20, y_bot));
+            for i in 0..=4 {
+                let angle = std::f32::consts::FRAC_PI_2 - (i as f32 / 4.0) * std::f32::consts::PI;
+                path.push(pos2(arc_cx + arc_r * angle.cos(), arc_cy + arc_r * angle.sin()));
+            }
+            path.push(p_left);
+            painter.add(egui::epaint::PathShape::line(path, stroke));
+
+            painter.add(egui::epaint::PathShape::line(
+                vec![
+                    pos2(p_left.x + r * 0.40, p_left.y - r * 0.38),
+                    p_left,
+                    pos2(p_left.x + r * 0.40, p_left.y + r * 0.38),
+                ],
+                stroke,
+            ));
         }
         VectorIcon::Redo => {
-            let p_left = pos2(c.x - r * 0.75, c.y + r * 0.45);
-            let p_mid = pos2(c.x - r * 0.75, c.y - r * 0.25);
-            let p_right = pos2(c.x + r * 0.65, c.y - r * 0.25);
-            painter.line_segment([pos2(c.x + r * 0.2, p_left.y), p_left], s);
-            painter.line_segment([p_left, p_mid], s);
-            painter.line_segment([p_mid, p_right], s);
-            // Right arrow tip
-            painter.line_segment([p_right, pos2(p_right.x - r * 0.45, p_right.y - r * 0.4)], s);
-            painter.line_segment([p_right, pos2(p_right.x - r * 0.45, p_right.y + r * 0.4)], s);
+            // Smooth curved-arc return path + crisp chevron arrowhead
+            let stroke = Stroke::new(1.5, color);
+            let y_top = c.y - r * 0.26;
+            let y_bot = c.y + r * 0.50;
+            let arc_cy = (y_top + y_bot) * 0.5;
+            let arc_r = (y_bot - y_top) * 0.5;
+            let arc_cx = c.x - r * 0.36;
+            let p_right = pos2(c.x + r * 0.68, y_top);
+
+            let mut path = Vec::with_capacity(7);
+            path.push(pos2(c.x + r * 0.20, y_bot));
+            for i in 0..=4 {
+                let angle = std::f32::consts::FRAC_PI_2 + (i as f32 / 4.0) * std::f32::consts::PI;
+                path.push(pos2(arc_cx + arc_r * angle.cos(), arc_cy + arc_r * angle.sin()));
+            }
+            path.push(p_right);
+            painter.add(egui::epaint::PathShape::line(path, stroke));
+
+            painter.add(egui::epaint::PathShape::line(
+                vec![
+                    pos2(p_right.x - r * 0.40, p_right.y - r * 0.38),
+                    p_right,
+                    pos2(p_right.x - r * 0.40, p_right.y + r * 0.38),
+                ],
+                stroke,
+            ));
         }
         VectorIcon::NewRung => {
             // Left rail + rung wire + plus symbol
@@ -105,29 +138,49 @@ pub fn paint_icon(painter: &Painter, rect: Rect, icon: VectorIcon, color: Color3
             painter.line_segment([pos2(px, c.y - pr), pos2(px, c.y + pr)], s_bold);
         }
         VectorIcon::DeleteRung => {
-            // Modern Trash Can icon
-            let top_y = c.y - r * 0.55;
+            // Modern Trash Can icon with translucent trapezoid body
+            let stroke = Stroke::new(1.4, color);
+            let rib_stroke = Stroke::new(1.1, color);
+            let top_y = c.y - r * 0.48;
             let bot_y = c.y + r * 0.80;
-            let w_top = r * 0.72;
-            let w_bot = r * 0.56;
-            // Lid
-            painter.line_segment([pos2(c.x - r * 0.85, top_y), pos2(c.x + r * 0.85, top_y)], s);
+            let w_top = r * 0.68;
+            let w_bot = r * 0.52;
+
+            // Closed trapezoid body
+            painter.add(egui::epaint::PathShape::convex_polygon(
+                vec![
+                    pos2(c.x - w_top, top_y),
+                    pos2(c.x + w_top, top_y),
+                    pos2(c.x + w_bot, bot_y),
+                    pos2(c.x - w_bot, bot_y),
+                ],
+                color.gamma_multiply(0.12),
+                stroke,
+            ));
+
+            // Top lid bar + centered handle
             painter.line_segment(
-                [pos2(c.x - r * 0.3, top_y - r * 0.25), pos2(c.x + r * 0.3, top_y - r * 0.25)],
-                s,
+                [pos2(c.x - r * 0.84, top_y), pos2(c.x + r * 0.84, top_y)],
+                stroke,
             );
-            // Body
-            painter.line_segment([pos2(c.x - w_top, top_y), pos2(c.x - w_bot, bot_y)], s);
-            painter.line_segment([pos2(c.x + w_top, top_y), pos2(c.x + w_bot, bot_y)], s);
-            painter.line_segment([pos2(c.x - w_bot, bot_y), pos2(c.x + w_bot, bot_y)], s);
-            // Inner ribs
+            painter.add(egui::epaint::PathShape::line(
+                vec![
+                    pos2(c.x - r * 0.28, top_y),
+                    pos2(c.x - r * 0.28, top_y - r * 0.26),
+                    pos2(c.x + r * 0.28, top_y - r * 0.26),
+                    pos2(c.x + r * 0.28, top_y),
+                ],
+                stroke,
+            ));
+
+            // Two inner vertical ribs
             painter.line_segment(
-                [pos2(c.x - r * 0.22, top_y + r * 0.25), pos2(c.x - r * 0.18, bot_y - r * 0.2)],
-                s_thin,
+                [pos2(c.x - r * 0.22, top_y + r * 0.24), pos2(c.x - r * 0.18, bot_y - r * 0.20)],
+                rib_stroke,
             );
             painter.line_segment(
-                [pos2(c.x + r * 0.22, top_y + r * 0.25), pos2(c.x + r * 0.18, bot_y - r * 0.2)],
-                s_thin,
+                [pos2(c.x + r * 0.22, top_y + r * 0.24), pos2(c.x + r * 0.18, bot_y - r * 0.20)],
+                rib_stroke,
             );
         }
         VectorIcon::MoveUp => {
@@ -153,7 +206,7 @@ pub fn paint_icon(painter: &Painter, rect: Rect, icon: VectorIcon, color: Color3
             painter.line_segment([tip, pos2(c.x + r * 0.55, c.y - r * 0.1)], s_bold);
         }
         VectorIcon::CopyRung => {
-            // Back sheet + front sheet (theme-independent vector strokes)
+            // Back sheet via continuous PathShape::line + filled front sheet
             let r1 = Rect::from_min_max(
                 pos2(c.x - r * 0.75, c.y - r * 0.75),
                 pos2(c.x + r * 0.35, c.y + r * 0.40),
@@ -162,11 +215,23 @@ pub fn paint_icon(painter: &Painter, rect: Rect, icon: VectorIcon, color: Color3
                 pos2(c.x - r * 0.35, c.y - r * 0.35),
                 pos2(c.x + r * 0.75, c.y + r * 0.80),
             );
-            painter.line_segment([r1.left_top(), r1.right_top()], s_thin);
-            painter.line_segment([r1.right_top(), pos2(r1.right(), r2.top())], s_thin);
-            painter.line_segment([r1.left_top(), r1.left_bottom()], s_thin);
-            painter.line_segment([r1.left_bottom(), pos2(r2.left(), r1.bottom())], s_thin);
-            painter.rect_stroke(r2, 2.0, s, StrokeKind::Inside);
+            painter.add(egui::epaint::PathShape::line(
+                vec![
+                    pos2(r2.left(), r1.bottom()),
+                    r1.left_bottom(),
+                    r1.left_top(),
+                    r1.right_top(),
+                    pos2(r1.right(), r2.top()),
+                ],
+                Stroke::new(1.2, color),
+            ));
+            painter.rect(
+                r2,
+                2.0,
+                color.gamma_multiply(0.12),
+                Stroke::new(1.5, color),
+                StrokeKind::Inside,
+            );
         }
         VectorIcon::CopyUp => {
             // Small sheet + up arrow with plus
@@ -406,84 +471,123 @@ pub fn paint_icon(painter: &Painter, rect: Rect, icon: VectorIcon, color: Color3
         VectorIcon::NewFile => {
             let w = r * 0.70;
             let h = r * 0.90;
-            let fold = r * 0.45;
+            let fold = r * 0.44;
             let p_tl = pos2(c.x - w, c.y - h);
             let p_tr_fold = pos2(c.x + w - fold, c.y - h);
             let p_fold_r = pos2(c.x + w, c.y - h + fold);
             let p_br = pos2(c.x + w, c.y + h);
             let p_bl = pos2(c.x - w, c.y + h);
 
-            painter.line_segment([p_tl, p_tr_fold], s);
-            painter.line_segment([p_tr_fold, p_fold_r], s);
-            painter.line_segment([p_fold_r, p_br], s);
-            painter.line_segment([p_br, p_bl], s);
-            painter.line_segment([p_bl, p_tl], s);
+            painter.add(egui::epaint::PathShape::convex_polygon(
+                vec![p_tl, p_tr_fold, p_fold_r, p_br, p_bl],
+                color.gamma_multiply(0.10),
+                Stroke::new(1.5, color),
+            ));
 
             let p_corner = pos2(c.x + w - fold, c.y - h + fold);
-            painter.line_segment([p_tr_fold, p_corner], s_thin);
-            painter.line_segment([p_corner, p_fold_r], s_thin);
+            let fold_stroke = Stroke::new(1.1, color);
+            painter.line_segment([p_tr_fold, p_corner], fold_stroke);
+            painter.line_segment([p_corner, p_fold_r], fold_stroke);
 
             let px = c.x;
-            let py = c.y + r * 0.20;
-            let pr = r * 0.35;
-            painter.line_segment([pos2(px - pr, py), pos2(px + pr, py)], s_bold);
-            painter.line_segment([pos2(px, py - pr), pos2(px, py + pr)], s_bold);
+            let py = c.y + r * 0.24;
+            let pr = r * 0.30;
+            let plus_stroke = Stroke::new(1.5, color);
+            painter.line_segment([pos2(px - pr, py), pos2(px + pr, py)], plus_stroke);
+            painter.line_segment([pos2(px, py - pr), pos2(px, py + pr)], plus_stroke);
         }
         VectorIcon::OpenFile => {
-            let w = r * 0.85;
-            let h = r * 0.65;
-            let tab_w = r * 0.50;
-            let tab_h = r * 0.22;
-            let y_top = c.y - h * 0.5;
-            let y_bot = c.y + h * 0.75;
+            let w = r * 0.86;
+            let h = r * 0.68;
             let x_l = c.x - w;
             let x_r = c.x + w;
+            let y_tab = c.y - h;
+            let y_back = c.y - h * 0.56;
+            let y_bot = c.y + h;
+            let x_back_r = x_r - w * 0.14;
+            let x_tab_r = x_l + w * 0.68;
+            let x_tab_slope = x_l + w * 0.90;
 
-            painter.line_segment([pos2(x_l, y_top), pos2(x_l + tab_w, y_top)], s);
-            painter.line_segment(
-                [pos2(x_l + tab_w, y_top), pos2(x_l + tab_w + r * 0.2, y_top + tab_h)],
-                s,
+            // Complete back folder silhouette (convex tab + body fill, crisp closed outline)
+            let back_fill = color.gamma_multiply(0.08);
+            painter.add(egui::epaint::PathShape::convex_polygon(
+                vec![
+                    pos2(x_l, y_tab),
+                    pos2(x_tab_r, y_tab),
+                    pos2(x_tab_slope, y_back),
+                    pos2(x_l, y_back),
+                ],
+                back_fill,
+                Stroke::NONE,
+            ));
+            painter.rect_filled(
+                Rect::from_min_max(pos2(x_l, y_back), pos2(x_back_r, y_bot)),
+                0.0,
+                back_fill,
             );
-            painter.line_segment(
-                [pos2(x_l + tab_w + r * 0.2, y_top + tab_h), pos2(x_r - r * 0.15, y_top + tab_h)],
-                s_thin,
-            );
+            painter.add(egui::epaint::PathShape::closed_line(
+                vec![
+                    pos2(x_l, y_tab),
+                    pos2(x_tab_r, y_tab),
+                    pos2(x_tab_slope, y_back),
+                    pos2(x_back_r, y_back),
+                    pos2(x_back_r, y_bot),
+                    pos2(x_l, y_bot),
+                ],
+                Stroke::new(1.4, color),
+            ));
 
-            let flap_tl = pos2(x_l - r * 0.05, y_top + tab_h);
-            let flap_tr = pos2(x_r + r * 0.05, y_top + tab_h);
-            let flap_br = pos2(x_r - r * 0.15, y_bot);
+            // Angled open front flap polygon
+            let flap_y_top = c.y - h * 0.12;
+            let flap_tl = pos2(x_l + w * 0.16, flap_y_top);
+            let flap_tr = pos2(x_r + w * 0.08, flap_y_top);
+            let flap_br = pos2(x_back_r, y_bot);
             let flap_bl = pos2(x_l, y_bot);
-
-            painter.line_segment([flap_tl, flap_tr], s);
-            painter.line_segment([flap_tr, flap_br], s);
-            painter.line_segment([flap_br, flap_bl], s);
-            painter.line_segment([flap_bl, flap_tl], s);
+            painter.add(egui::epaint::PathShape::convex_polygon(
+                vec![flap_tl, flap_tr, flap_br, flap_bl],
+                color.gamma_multiply(0.20),
+                Stroke::new(1.5, color),
+            ));
         }
         VectorIcon::SaveFile => {
-            let w = r * 0.78;
+            let w = r * 0.80;
             let h = r * 0.82;
-            let box_r = Rect::from_center_size(c, vec2(w * 2.0, h * 2.0));
-            painter.rect_stroke(box_r, 2.0, s, StrokeKind::Inside);
+            let ch = r * 0.38;
+            let tl = pos2(c.x - w, c.y - h);
+            let tr_chamfer = pos2(c.x + w - ch, c.y - h);
+            let chamfer_r = pos2(c.x + w, c.y - h + ch);
+            let br = pos2(c.x + w, c.y + h);
+            let bl = pos2(c.x - w, c.y + h);
 
+            painter.add(egui::epaint::PathShape::convex_polygon(
+                vec![tl, tr_chamfer, chamfer_r, br, bl],
+                color.gamma_multiply(0.10),
+                Stroke::new(1.5, color),
+            ));
+
+            let detail_stroke = Stroke::new(1.1, color);
+
+            // Top shutter pocket with small write-notch fill inside
             let shut_r = Rect::from_min_max(
-                pos2(c.x - w * 0.55, box_r.min.y),
-                pos2(c.x + w * 0.55, c.y - h * 0.2),
+                pos2(c.x - w * 0.52, c.y - h),
+                pos2(c.x + w * 0.36, c.y - h * 0.16),
             );
-            painter.rect_stroke(shut_r, 1.0, s_thin, StrokeKind::Inside);
+            painter.rect_stroke(shut_r, 0.5, detail_stroke, StrokeKind::Inside);
             painter.rect_filled(
                 Rect::from_min_max(
-                    pos2(c.x - w * 0.25, box_r.min.y + 1.0),
-                    pos2(c.x - w * 0.05, c.y - h * 0.35),
+                    pos2(c.x + w * 0.06, c.y - h + 1.2),
+                    pos2(c.x + w * 0.24, c.y - h * 0.32),
                 ),
                 0.0,
                 color,
             );
 
+            // Bottom label rectangle with breathing room
             let lbl_r = Rect::from_min_max(
-                pos2(c.x - w * 0.65, c.y + h * 0.05),
-                pos2(c.x + w * 0.65, box_r.max.y - 1.5),
+                pos2(c.x - w * 0.58, c.y + h * 0.14),
+                pos2(c.x + w * 0.58, c.y + h),
             );
-            painter.rect_stroke(lbl_r, 1.0, s_thin, StrokeKind::Inside);
+            painter.rect_stroke(lbl_r, 0.5, detail_stroke, StrokeKind::Inside);
         }
         VectorIcon::ExportCode => {
             let lx = c.x - r * 0.60;
@@ -582,33 +686,50 @@ pub fn paint_icon(painter: &Painter, rect: Rect, icon: VectorIcon, color: Color3
                 let angle = start_angle + t * (end_angle - start_angle);
                 points.push(pos2(c.x + radius * angle.cos(), c.y + radius * angle.sin()));
             }
-            for i in 0..steps {
-                painter.line_segment([points[i], points[i + 1]], s);
-            }
             let tip = points[0];
-            painter.line_segment([tip, pos2(tip.x + r * 0.38, tip.y - r * 0.12)], s);
-            painter.line_segment([tip, pos2(tip.x + r * 0.12, tip.y + r * 0.38)], s);
+            let arc_stroke = Stroke::new(1.6, color);
+            painter.add(egui::epaint::PathShape::line(points, arc_stroke));
+            painter.add(egui::epaint::PathShape::line(
+                vec![
+                    pos2(tip.x + r * 0.38, tip.y - r * 0.12),
+                    tip,
+                    pos2(tip.x + r * 0.12, tip.y + r * 0.38),
+                ],
+                arc_stroke,
+            ));
         }
         VectorIcon::ZoomIn => {
             let glass_c = pos2(c.x - r * 0.18, c.y - r * 0.18);
             let glass_r = r * 0.58;
-            painter.circle_stroke(glass_c, glass_r, s);
+            painter.circle_filled(glass_c, glass_r, color.gamma_multiply(0.10));
+            painter.circle_stroke(glass_c, glass_r, Stroke::new(1.5, color));
             let h_start = pos2(glass_c.x + glass_r * 0.707, glass_c.y + glass_r * 0.707);
             let h_end = pos2(c.x + r * 0.85, c.y + r * 0.85);
-            painter.line_segment([h_start, h_end], s_bold);
+            painter.line_segment([h_start, h_end], Stroke::new(1.8, color));
             let pl = r * 0.30;
-            painter.line_segment([pos2(glass_c.x - pl, glass_c.y), pos2(glass_c.x + pl, glass_c.y)], s);
-            painter.line_segment([pos2(glass_c.x, glass_c.y - pl), pos2(glass_c.x, glass_c.y + pl)], s);
+            let plus_stroke = Stroke::new(1.4, color);
+            painter.line_segment(
+                [pos2(glass_c.x - pl, glass_c.y), pos2(glass_c.x + pl, glass_c.y)],
+                plus_stroke,
+            );
+            painter.line_segment(
+                [pos2(glass_c.x, glass_c.y - pl), pos2(glass_c.x, glass_c.y + pl)],
+                plus_stroke,
+            );
         }
         VectorIcon::ZoomOut => {
             let glass_c = pos2(c.x - r * 0.18, c.y - r * 0.18);
             let glass_r = r * 0.58;
-            painter.circle_stroke(glass_c, glass_r, s);
+            painter.circle_filled(glass_c, glass_r, color.gamma_multiply(0.10));
+            painter.circle_stroke(glass_c, glass_r, Stroke::new(1.5, color));
             let h_start = pos2(glass_c.x + glass_r * 0.707, glass_c.y + glass_r * 0.707);
             let h_end = pos2(c.x + r * 0.85, c.y + r * 0.85);
-            painter.line_segment([h_start, h_end], s_bold);
+            painter.line_segment([h_start, h_end], Stroke::new(1.8, color));
             let pl = r * 0.30;
-            painter.line_segment([pos2(glass_c.x - pl, glass_c.y), pos2(glass_c.x + pl, glass_c.y)], s);
+            painter.line_segment(
+                [pos2(glass_c.x - pl, glass_c.y), pos2(glass_c.x + pl, glass_c.y)],
+                Stroke::new(1.4, color),
+            );
         }
         VectorIcon::ZoomFit => {
             let box_r = r * 0.68;
@@ -618,122 +739,193 @@ pub fn paint_icon(painter: &Painter, rect: Rect, icon: VectorIcon, color: Color3
             painter.circle_filled(c, dot_r, color);
         }
         VectorIcon::HandPan => {
-            let wrist = pos2(c.x, c.y + r * 0.80);
-            let palm = pos2(c.x, c.y + r * 0.15);
-            painter.line_segment([wrist, palm], s_bold);
-            let f1 = pos2(c.x - r * 0.45, c.y - r * 0.45);
-            let f2 = pos2(c.x - r * 0.15, c.y - r * 0.80);
-            let f3 = pos2(c.x + r * 0.15, c.y - r * 0.75);
-            let f4 = pos2(c.x + r * 0.45, c.y - r * 0.40);
-            painter.line_segment([pos2(c.x - r * 0.30, palm.y), f1], s);
-            painter.line_segment([pos2(c.x - r * 0.10, palm.y), f2], s);
-            painter.line_segment([pos2(c.x + r * 0.10, palm.y), f3], s);
-            painter.line_segment([pos2(c.x + r * 0.30, palm.y), f4], s);
+            // Rounded palm + 4 vertical fingers + angled thumb
+            let stroke = Stroke::new(1.4, color);
+            let palm = Rect::from_min_max(
+                pos2(c.x - r * 0.44, c.y - r * 0.04),
+                pos2(c.x + r * 0.54, c.y + r * 0.76),
+            );
+            painter.rect(
+                palm,
+                CornerRadius { nw: 2, ne: 2, sw: 6, se: 6 },
+                color.gamma_multiply(0.14),
+                stroke,
+                StrokeKind::Inside,
+            );
+            for (fx, fy) in [
+                (c.x - r * 0.34, c.y - r * 0.64),
+                (c.x - r * 0.08, c.y - r * 0.80),
+                (c.x + r * 0.18, c.y - r * 0.72),
+                (c.x + r * 0.44, c.y - r * 0.48),
+            ] {
+                painter.line_segment([pos2(fx, palm.min.y), pos2(fx, fy)], stroke);
+            }
+            // Angled thumb on the left
+            painter.line_segment(
+                [pos2(palm.min.x, c.y + r * 0.38), pos2(c.x - r * 0.78, c.y - r * 0.08)],
+                stroke,
+            );
         }
         VectorIcon::EditPencil => {
-            // Crisp diagonal drafting pencil pointing down-left
+            // Crisp diagonal drafting pencil silhouette pointing down-left
             let tip = pos2(c.x - r * 0.80, c.y + r * 0.80);
             let t1 = pos2(c.x - r * 0.64, c.y + r * 0.28);
-            let t2 = pos2(c.x - r * 0.28, c.y + r * 0.64);
             let e1 = pos2(c.x + r * 0.36, c.y - r * 0.72);
             let e2 = pos2(c.x + r * 0.72, c.y - r * 0.36);
+            let t2 = pos2(c.x - r * 0.28, c.y + r * 0.64);
 
-            painter.line_segment([tip, t1], s);
-            painter.line_segment([t1, e1], s);
-            painter.line_segment([e1, e2], s);
-            painter.line_segment([e2, t2], s);
-            painter.line_segment([t2, tip], s);
+            painter.add(egui::epaint::PathShape::convex_polygon(
+                vec![tip, t1, e1, e2, t2],
+                color.gamma_multiply(0.14),
+                Stroke::new(1.4, color),
+            ));
             // Collar and eraser ferrule
-            painter.line_segment([t1, t2], s_thin);
+            let detail_stroke = Stroke::new(1.1, color);
+            painter.line_segment([t1, t2], detail_stroke);
             painter.line_segment(
                 [pos2(c.x + r * 0.14, c.y - r * 0.50), pos2(c.x + r * 0.50, c.y - r * 0.14)],
-                s_thin,
+                detail_stroke,
             );
         }
         VectorIcon::MonitorSim => {
-            // Clean desktop monitor / simulator screen with stand
+            // Clean desktop monitor / simulator screen with pulse waveform & stand
             let screen = Rect::from_min_max(
                 pos2(c.x - r * 0.85, c.y - r * 0.72),
                 pos2(c.x + r * 0.85, c.y + r * 0.32),
             );
-            painter.rect_stroke(screen, 2.0, s, StrokeKind::Inside);
+            painter.rect(
+                screen,
+                2.0,
+                color.gamma_multiply(0.12),
+                Stroke::new(1.5, color),
+                StrokeKind::Inside,
+            );
+            // Subtle horizontal pulse/waveform line inside the screen
+            let wy = screen.center().y;
+            painter.add(egui::epaint::PathShape::line(
+                vec![
+                    pos2(c.x - r * 0.58, wy),
+                    pos2(c.x - r * 0.22, wy),
+                    pos2(c.x - r * 0.06, wy - r * 0.26),
+                    pos2(c.x + r * 0.10, wy + r * 0.24),
+                    pos2(c.x + r * 0.24, wy),
+                    pos2(c.x + r * 0.58, wy),
+                ],
+                Stroke::new(1.1, color),
+            ));
             // Neck & stand base
-            painter.line_segment([pos2(c.x, c.y + r * 0.32), pos2(c.x, c.y + r * 0.72)], s_bold);
+            let stand_stroke = Stroke::new(1.6, color);
+            painter.line_segment(
+                [pos2(c.x, c.y + r * 0.32), pos2(c.x, c.y + r * 0.72)],
+                stand_stroke,
+            );
             painter.line_segment(
                 [pos2(c.x - r * 0.48, c.y + r * 0.72), pos2(c.x + r * 0.48, c.y + r * 0.72)],
-                s_bold,
+                stand_stroke,
             );
         }
         VectorIcon::PlugLink => {
-            // Industrial connector/plug with 2 prongs and cable stem
+            // Industrial connector/plug with 2 prongs, filled housing, and cable stem
+            let stem_stroke = Stroke::new(1.6, color);
             painter.line_segment(
                 [pos2(c.x - r * 0.36, c.y - r * 0.82), pos2(c.x - r * 0.36, c.y - r * 0.28)],
-                s_bold,
+                stem_stroke,
             );
             painter.line_segment(
                 [pos2(c.x + r * 0.36, c.y - r * 0.82), pos2(c.x + r * 0.36, c.y - r * 0.28)],
-                s_bold,
+                stem_stroke,
             );
             let body = Rect::from_min_max(
                 pos2(c.x - r * 0.62, c.y - r * 0.28),
                 pos2(c.x + r * 0.62, c.y + r * 0.34),
             );
-            painter.rect_stroke(
+            painter.rect(
                 body,
                 CornerRadius { nw: 1, ne: 1, sw: 4, se: 4 },
-                s,
+                color.gamma_multiply(0.16),
+                Stroke::new(1.5, color),
                 StrokeKind::Inside,
             );
-            painter.line_segment([pos2(c.x, c.y + r * 0.34), pos2(c.x, c.y + r * 0.85)], s_bold);
+            painter.line_segment(
+                [pos2(c.x, c.y + r * 0.34), pos2(c.x, c.y + r * 0.85)],
+                stem_stroke,
+            );
         }
         VectorIcon::CpuChip => {
-            // Square IC chip with pins on all 4 sides
+            // Square IC package with inner silicon die and pins on all 4 sides
             let body = Rect::from_center_size(c, vec2(r * 1.15, r * 1.15));
-            painter.rect_stroke(body, 2.0, s, StrokeKind::Inside);
+            painter.rect(
+                body,
+                2.0,
+                color.gamma_multiply(0.12),
+                Stroke::new(1.5, color),
+                StrokeKind::Inside,
+            );
             let die = Rect::from_center_size(c, vec2(r * 0.45, r * 0.45));
-            painter.rect_stroke(die, 1.0, s_thin, StrokeKind::Inside);
+            painter.rect(
+                die,
+                1.0,
+                color.gamma_multiply(0.28),
+                Stroke::new(1.0, color),
+                StrokeKind::Inside,
+            );
+            let pin_stroke = Stroke::new(1.1, color);
             for offset in [-r * 0.28, r * 0.28] {
                 painter.line_segment(
                     [pos2(c.x + offset, body.min.y), pos2(c.x + offset, c.y - r * 0.88)],
-                    s_thin,
+                    pin_stroke,
                 );
                 painter.line_segment(
                     [pos2(c.x + offset, body.max.y), pos2(c.x + offset, c.y + r * 0.88)],
-                    s_thin,
+                    pin_stroke,
                 );
                 painter.line_segment(
                     [pos2(body.min.x, c.y + offset), pos2(c.x - r * 0.88, c.y + offset)],
-                    s_thin,
+                    pin_stroke,
                 );
                 painter.line_segment(
                     [pos2(body.max.x, c.y + offset), pos2(c.x + r * 0.88, c.y + offset)],
-                    s_thin,
+                    pin_stroke,
                 );
             }
         }
         VectorIcon::UploadFromPlc => {
-            // Upward arrow exiting a horizontal tray/base
+            // Upward arrow exiting a continuous U-shaped tray/base
             let ty = c.y + r * 0.72;
             let tl = c.x - r * 0.78;
             let tr = c.x + r * 0.78;
-            painter.line_segment([pos2(tl, c.y + r * 0.32), pos2(tl, ty)], s);
-            painter.line_segment([pos2(tl, ty), pos2(tr, ty)], s);
-            painter.line_segment([pos2(tr, ty), pos2(tr, c.y + r * 0.32)], s);
+            painter.add(egui::epaint::PathShape::line(
+                vec![
+                    pos2(tl, c.y + r * 0.32),
+                    pos2(tl, ty),
+                    pos2(tr, ty),
+                    pos2(tr, c.y + r * 0.32),
+                ],
+                Stroke::new(1.5, color),
+            ));
 
-            let tip = pos2(c.x, c.y - r * 0.78);
-            painter.line_segment([tip, pos2(c.x, c.y + r * 0.32)], s_bold);
-            painter.line_segment([tip, pos2(c.x - r * 0.45, tip.y + r * 0.45)], s_bold);
-            painter.line_segment([tip, pos2(c.x + r * 0.45, tip.y + r * 0.45)], s_bold);
+            let arrow_stroke = Stroke::new(1.6, color);
+            let tip = pos2(c.x, c.y - r * 0.76);
+            painter.line_segment([tip, pos2(c.x, c.y + r * 0.32)], arrow_stroke);
+            painter.add(egui::epaint::PathShape::line(
+                vec![
+                    pos2(c.x - r * 0.44, tip.y + r * 0.44),
+                    tip,
+                    pos2(c.x + r * 0.44, tip.y + r * 0.44),
+                ],
+                arrow_stroke,
+            ));
         }
         VectorIcon::SyncAlert => {
-            // Crisp lightning bolt
+            // Seamless continuous lightning bolt
             let p0 = pos2(c.x + r * 0.25, c.y - r * 0.82);
             let p1 = pos2(c.x - r * 0.42, c.y + r * 0.05);
             let p2 = pos2(c.x + r * 0.42, c.y - r * 0.05);
             let p3 = pos2(c.x - r * 0.25, c.y + r * 0.82);
-            painter.line_segment([p0, p1], s_bold);
-            painter.line_segment([p1, p2], s_bold);
-            painter.line_segment([p2, p3], s_bold);
+            painter.add(egui::epaint::PathShape::line(
+                vec![p0, p1, p2, p3],
+                Stroke::new(1.8, color),
+            ));
         }
     }
 }

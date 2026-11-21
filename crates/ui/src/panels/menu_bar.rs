@@ -7,11 +7,11 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
     egui::MenuBar::new().ui(ui, |ui| {
         // --- FILE MENU ---
         ui.menu_button("File", |ui| {
-            if ui.button("New Program (Ctrl+N)").clicked() {
+            if ui.button("New (Ctrl+N)").clicked() {
                 app.request_new_program();
                 ui.close();
             }
-            if ui.button("Open Program (Ctrl+O)...").clicked() {
+            if ui.button("Open... (Ctrl+O)").clicked() {
                 app.request_open_program();
                 ui.close();
             }
@@ -71,11 +71,11 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 }
             });
             ui.separator();
-            if ui.button("Save Program (Ctrl+S)").clicked() {
+            if ui.button("Save (Ctrl+S)").clicked() {
                 app.save_or_save_as();
                 ui.close();
             }
-            if ui.button("Save Program As (.il)...").clicked() {
+            if ui.button("Save As (.il)...").clicked() {
                 app.save_program_dialog();
                 ui.close();
             }
@@ -83,16 +83,19 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 app.save_as_json_dialog();
                 ui.close();
             }
-            if ui.button("Export IEC 61131-3 IL (.il)...").clicked() {
-                app.export_il_dialog();
-                ui.close();
-            }
-            if ui.button("Import IEC 61131-3 IL (.il)...").clicked() {
+            ui.separator();
+            if ui.button("Import IL (.il)...").clicked() {
                 app.request_import_il();
                 ui.close();
             }
-            if ui.button("Upload Program from Connected PLC...").clicked() {
-                app.request_upload_from_plc();
+            if ui.button("Export IL (.il)...").clicked() {
+                app.export_il_dialog();
+                ui.close();
+            }
+            ui.separator();
+            if ui.button("Settings...").clicked() {
+                app.settings_tab = 0;
+                app.show_io_config = true;
                 ui.close();
             }
             ui.separator();
@@ -107,7 +110,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
             let is_edit_mode = app.work_mode == WorkMode::Edit;
             if !is_edit_mode {
                 if ui
-                    .button(RichText::new("Switch to Edit Mode to Modify Circuit").strong())
+                    .button(RichText::new("Switch to Edit Mode").strong())
                     .clicked()
                 {
                     app.set_work_mode(WorkMode::Edit);
@@ -131,16 +134,22 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
             }
             ui.separator();
             let has_sel = !app.doc.selected_ids().is_empty();
-            if ui.add_enabled(is_edit_mode && has_sel, egui::Button::new("Cut Element (Ctrl+X)")).clicked() {
+            if ui
+                .add_enabled(is_edit_mode && has_sel, egui::Button::new("Cut (Ctrl+X)"))
+                .clicked()
+            {
                 app.cut_selected_elements(ui.ctx());
                 ui.close();
             }
-            if ui.add_enabled(has_sel, egui::Button::new("Copy Element (Ctrl+C)")).clicked() {
+            if ui
+                .add_enabled(has_sel, egui::Button::new("Copy (Ctrl+C)"))
+                .clicked()
+            {
                 app.copy_selected_elements(ui.ctx());
                 ui.close();
             }
             if ui
-                .add_enabled(is_edit_mode && !app.clipboard.is_empty(), egui::Button::new("Paste Element (Ctrl+V)"))
+                .add_enabled(is_edit_mode && !app.clipboard.is_empty(), egui::Button::new("Paste (Ctrl+V)"))
                 .clicked()
             {
                 app.paste_clipboard_elements(None);
@@ -160,16 +169,25 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 app.copy_selected_network();
                 ui.close();
             }
-            if ui.add_enabled(is_edit_mode, egui::Button::new("Paste Network Below")).clicked() {
+            if ui
+                .add_enabled(is_edit_mode, egui::Button::new("Paste Network Below"))
+                .clicked()
+            {
                 app.paste_network_below();
                 ui.close();
             }
             ui.separator();
-            if ui.add_enabled(is_edit_mode, egui::Button::new("Delete Selected Element (Del)")).clicked() {
+            if ui
+                .add_enabled(is_edit_mode, egui::Button::new("Delete Element (Del)"))
+                .clicked()
+            {
                 app.doc.delete_selected_element();
                 ui.close();
             }
-            if ui.add_enabled(is_edit_mode, egui::Button::new("Delete Selected Network")).clicked() {
+            if ui
+                .add_enabled(is_edit_mode, egui::Button::new("Delete Network"))
+                .clicked()
+            {
                 if let Some(idx) = app.doc.selected_rung_idx {
                     app.doc.delete_rung(idx);
                 }
@@ -179,7 +197,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
 
         // --- VIEW MENU ---
         ui.menu_button("View", |ui| {
-            ui.menu_button("Theme (Modern / Dark / Light)", |ui| {
+            ui.menu_button("Theme", |ui| {
                 for t in AppTheme::ALL {
                     if ui.selectable_label(app.theme == t, t.label()).clicked() {
                         app.set_theme(t);
@@ -190,7 +208,11 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
             ui.menu_button("Schematic Style", |ui| {
                 for st in SchematicStyle::ALL {
                     let is_cur = app.doc.schematic_style == st;
-                    if ui.selectable_label(is_cur, st.label()).on_hover_text(st.description()).clicked() {
+                    if ui
+                        .selectable_label(is_cur, st.label())
+                        .on_hover_text(st.description())
+                        .clicked()
+                    {
                         app.doc.set_schematic_style(st);
                         app.save_settings();
                         ui.close();
@@ -260,77 +282,50 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                 app.canvas.reset_view();
                 ui.close();
             }
-            if ui
-                .checkbox(&mut app.show_il_code, "Show IEC 61131-3 IL Panel")
-                .changed()
-            {
+            if ui.checkbox(&mut app.show_il_code, "Show IL Code Panel").changed() {
                 app.save_settings();
             }
         });
 
-        // --- HARDWARE MENU ---
-        ui.menu_button("Hardware", |ui| {
-            ui.label(RichText::new("Target IEC 61131-3 Hardware Platform:").weak().size(11.0));
-            ui.separator();
-            let targets = crate::target::HARDWARE_TARGETS;
-            for target in targets {
-                let is_cur = app.doc.program.hardware == target;
-                if ui.selectable_label(is_cur, target).clicked() {
-                    app.doc.program.hardware = target.to_string();
-                    // Refresh X/Y hardware pin labels for the new target (RP2040 GPn vs STM32 Pxn)
-                    app.sync_doc_io_mappings_from_hw_config();
-                    app.save_settings();
-                    ui.close();
+        // --- PLC MENU ---
+        ui.menu_button("PLC", |ui| {
+            ui.menu_button("Target Hardware", |ui| {
+                let targets = crate::target::HARDWARE_TARGETS;
+                for target in targets {
+                    let is_cur = app.doc.program.hardware == target;
+                    if ui.selectable_label(is_cur, target).clicked() {
+                        app.doc.program.hardware = target.to_string();
+                        app.sync_doc_io_mappings_from_hw_config();
+                        app.save_settings();
+                        ui.close();
+                    }
                 }
-            }
-            if !targets.contains(&app.doc.program.hardware.as_str()) {
-                ui.separator();
-                ui.label(RichText::new(format!("Current: {}", app.doc.program.hardware)).italics().size(11.0));
-            }
+                if !targets.contains(&app.doc.program.hardware.as_str()) {
+                    ui.separator();
+                    ui.label(
+                        RichText::new(format!("Current: {}", app.doc.program.hardware))
+                            .italics()
+                            .size(11.0),
+                    );
+                }
+            });
             ui.separator();
-            if ui.button(io_pins_menu_label(app)).clicked() {
-                app.show_update_plc = true;
-                app.update_plc_tab = 2;
-                ui.close();
-            }
-            if ui.button("Update to PLC (Compile IL → Bytecode)...").clicked() {
-                app.show_update_plc = true;
-                ui.close();
-            }
-            if ui.button(flash_menu_label(app)).clicked() {
-                app.firmware_flasher.show_window = true;
-                ui.close();
-            }
-        });
-
-        // --- TOOLS MENU ---
-        ui.menu_button("Tools", |ui| {
-            ui.label(RichText::new("Operating Mode:").weak().size(11.0));
             if ui
-                .selectable_label(
-                    app.work_mode == WorkMode::Edit,
-                    "1. Edit Mode (Offline Circuit Editor)",
-                )
+                .selectable_label(app.work_mode == WorkMode::Edit, "Edit Mode")
                 .clicked()
             {
                 app.set_work_mode(WorkMode::Edit);
                 ui.close();
             }
             if ui
-                .selectable_label(
-                    app.work_mode == WorkMode::Simulator,
-                    "2. Simulator Mode (Virtual PLC on PC) [F5]",
-                )
+                .selectable_label(app.work_mode == WorkMode::Simulator, "Simulator Mode (F5)")
                 .clicked()
             {
                 app.set_work_mode(WorkMode::Simulator);
                 ui.close();
             }
             if ui
-                .selectable_label(
-                    app.work_mode == WorkMode::OnlineDebug,
-                    format!("3. Online PLC Debug ({} Hardware) [F7 / Ctrl+M]", app.plc_target().mcu_name()),
-                )
+                .selectable_label(app.work_mode == WorkMode::OnlineDebug, "Online PLC Debug (F7)")
                 .clicked()
             {
                 app.request_work_mode(WorkMode::OnlineDebug);
@@ -343,81 +338,49 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
             } else {
                 app.doc.simulator.is_running()
             };
-            let sim_label = if is_hw {
+            let run_label = if is_hw {
                 if is_running {
-                    "■ Stop Hardware PLC Execution (F5)"
+                    "Stop Hardware PLC (F5)"
                 } else {
-                    "Start / RUN Hardware PLC (F5)"
+                    "Run Hardware PLC (F5)"
                 }
             } else if is_running {
                 "Pause Simulation (F5)"
             } else {
                 "Run Simulation (F5)"
             };
-            if ui.button(sim_label).clicked() {
+            if ui.button(run_label).clicked() {
                 app.toggle_run_mode();
                 ui.close();
             }
-            let step_label = if is_hw {
-                "Single Scan Step Hardware PLC (F6)"
-            } else {
-                "Single Scan Step Simulator (F6)"
-            };
-            if ui.button(step_label).clicked() {
+            if ui.button("Single Scan Step (F6)").clicked() {
                 app.single_step_mode();
                 ui.close();
             }
-            let reset_label = if is_hw {
-                "↺ Reset / Halt Hardware PLC (Shift+F5)"
-            } else {
-                "↺ Reset Simulation (Shift+F5)"
-            };
-            if ui.button(reset_label).clicked() {
+            if ui.button("Reset / Halt (Shift+F5)").clicked() {
                 app.reset_run_mode();
                 ui.close();
             }
             ui.separator();
-            if ui.button(io_pins_menu_label(app)).clicked() {
+            if ui.button("Update to PLC...").clicked() {
                 app.show_update_plc = true;
-                app.update_plc_tab = 2;
                 ui.close();
             }
-            if ui.button("Update to PLC (Compile IL → Bytecode)...").clicked() {
-                app.show_update_plc = true;
+            if ui.button("Read from PLC...").clicked() {
+                app.request_upload_from_plc();
+                ui.close();
+            }
+            if ui.button(io_pins_menu_label(app)).clicked() {
+                app.settings_tab = 2;
+                app.show_io_config = true;
                 ui.close();
             }
             if ui.button(flash_menu_label(app)).clicked() {
                 app.firmware_flasher.show_window = true;
                 ui.close();
             }
-            if ui.button("Preview / Export IEC 61131-3 IL Code").clicked() {
+            if ui.button("Preview / Export IL Code...").clicked() {
                 app.show_code_export = true;
-                ui.close();
-            }
-        });
-
-        // --- OPTIONS MENU ---
-        ui.menu_button("Options", |ui| {
-            ui.menu_button("Theme (Modern / Dark / Light)", |ui| {
-                for t in AppTheme::ALL {
-                    if ui.selectable_label(app.theme == t, t.label()).clicked() {
-                        app.set_theme(t);
-                        ui.close();
-                    }
-                }
-            });
-            ui.separator();
-            ui.horizontal(|ui| {
-                ui.label("Cycle Time (ms):");
-                if ui
-                    .add(egui::DragValue::new(&mut app.doc.simulator.cycle_time_ms).range(1..=1000))
-                    .changed()
-                {
-                    app.save_settings();
-                }
-            });
-            if ui.button("Settings & IO Ports...").clicked() {
-                app.show_io_config = true;
                 ui.close();
             }
         });
@@ -438,29 +401,31 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
             }
         });
 
+        // --- RIGHT-ALIGNED UPDATE BADGE ---
         if let Some(new_ver) = app.updater.has_pending_update().map(|s| s.to_string()) {
-            ui.separator();
-            let badge_btn = egui::Button::new(
-                RichText::new(format!("Update v{} Available", new_ver))
-                    .size(11.0)
-                    .strong()
-                    .color(egui::Color32::WHITE),
-            )
-            .fill(egui::Color32::from_rgb(24, 130, 90))
-            .corner_radius(egui::CornerRadius::same(4));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let badge_btn = egui::Button::new(
+                    RichText::new(format!("Update v{} Available", new_ver))
+                        .size(11.0)
+                        .strong()
+                        .color(egui::Color32::WHITE),
+                )
+                .fill(egui::Color32::from_rgb(24, 130, 90))
+                .corner_radius(egui::CornerRadius::same(4));
 
-            if ui
-                .add(badge_btn)
-                .on_hover_text("Click to open Software Update & Release Manager")
-                .clicked()
-            {
-                app.updater.show_window = true;
-            }
+                if ui
+                    .add(badge_btn)
+                    .on_hover_text("Click to open Software Update & Release Manager")
+                    .clicked()
+                {
+                    app.updater.show_window = true;
+                }
+            });
         }
     });
 }
 
-/// Hardware-menu label for the I/O pin configuration entry (target dependent)
+/// PLC-menu label for the I/O pin configuration entry (target dependent)
 fn io_pins_menu_label(app: &crate::app::CanvasApp) -> String {
     let target = app.plc_target();
     if target.supports_runtime_io_config() {
@@ -470,7 +435,7 @@ fn io_pins_menu_label(app: &crate::app::CanvasApp) -> String {
     }
 }
 
-/// Hardware-menu label for the firmware flasher entry (USB UF2 for RP2040, ST-Link for STM32)
+/// PLC-menu label for the firmware flasher entry (USB UF2 for RP2040, ST-Link for STM32)
 fn flash_menu_label(app: &crate::app::CanvasApp) -> &'static str {
     if app.plc_target().supports_usb_bootsel() {
         "Flash MCU Firmware (USB)..."

@@ -430,16 +430,20 @@ pub fn render_update_dialog(ctx: &egui::Context, app: &mut CanvasApp) {
         Color32::from_rgb(24, 26, 30)
     };
 
-    Window::new("Software Update & Release Manager")
+    let max_w = (ctx.content_rect().width() - 32.0).max(460.0);
+    let target_w = 500.0_f32.min(max_w);
+
+    Window::new("Software Update")
         .order(egui::Order::Foreground)
         .open(&mut open_win)
-        .default_width(580.0)
-        .min_width(520.0)
+        .min_width(target_w)
+        .default_width(target_w)
+        .max_width(max_w)
         .collapsible(false)
         .resizable(true)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .show(ctx, |ui| {
-            // 1. Current Version & Platform Header Card
+            // 1. Compact 1-Line Header Strip
             let header_bg = if is_light {
                 Color32::from_rgb(235, 242, 252)
             } else {
@@ -454,223 +458,205 @@ pub fn render_update_dialog(ctx: &egui::Context, app: &mut CanvasApp) {
             egui::Frame::new()
                 .fill(header_bg)
                 .stroke(Stroke::new(1.0, header_border))
-                .corner_radius(CornerRadius::same(8))
-                .inner_margin(egui::Margin::symmetric(14, 10))
+                .corner_radius(CornerRadius::same(6))
+                .inner_margin(egui::Margin::symmetric(12, 8))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.vertical(|ui| {
-                        ui.horizontal(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new("LaduinoPLC")
+                                .size(13.5)
+                                .strong()
+                                .color(palette.accent_heading),
+                        );
+                        let (ver_bg, ver_border, ver_fg) = if is_light {
+                            (
+                                Color32::from_rgb(220, 252, 231),
+                                Color32::from_rgb(110, 215, 150),
+                                Color32::from_rgb(21, 128, 61),
+                            )
+                        } else {
+                            (
+                                Color32::from_rgba_unmultiplied(39, 174, 96, 42),
+                                Color32::from_rgba_unmultiplied(70, 210, 120, 120),
+                                palette.accent_ok,
+                            )
+                        };
+                        egui::Frame::new()
+                            .fill(ver_bg)
+                            .stroke(Stroke::new(1.0, ver_border))
+                            .corner_radius(CornerRadius::same(4))
+                            .inner_margin(egui::Margin::symmetric(6, 1))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    RichText::new(format!("v{}", AppUpdater::current_version()))
+                                        .size(11.0)
+                                        .strong()
+                                        .color(ver_fg),
+                                );
+                            });
+
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(
-                                RichText::new("LaduinoPLC / uPLC Studio")
-                                    .size(15.0)
-                                    .strong()
-                                    .color(palette.accent_heading),
+                                RichText::new(AppUpdater::current_target())
+                                    .monospace()
+                                    .size(10.5)
+                                    .color(palette.rung_text_dim),
                             );
-                            ui.add_space(4.0);
-                            let (ver_bg, ver_border, ver_fg) = if is_light {
-                                (
-                                    Color32::from_rgb(220, 252, 231),
-                                    Color32::from_rgb(110, 215, 150),
-                                    Color32::from_rgb(21, 128, 61),
-                                )
-                            } else {
-                                (
-                                    Color32::from_rgba_unmultiplied(39, 174, 96, 42),
-                                    Color32::from_rgba_unmultiplied(70, 210, 120, 120),
-                                    palette.accent_ok,
-                                )
-                            };
-                            egui::Frame::new()
-                                .fill(ver_bg)
-                                .stroke(Stroke::new(1.0, ver_border))
-                                .corner_radius(CornerRadius::same(4))
-                                .inner_margin(egui::Margin::symmetric(7, 2))
-                                .show(ui, |ui| {
-                                    ui.label(
-                                        RichText::new(format!("v{}", AppUpdater::current_version()))
-                                            .size(11.5)
-                                            .strong()
-                                            .color(ver_fg),
-                                    );
-                                });
-                        });
-                        ui.add_space(4.0);
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                RichText::new("Target Architecture:")
-                                    .size(11.0)
-                                    .color(palette.symbol_subtext),
-                            );
-                            egui::Frame::new()
-                                .fill(if is_light {
-                                    Color32::from_rgb(255, 255, 255)
-                                } else {
-                                    palette.pill_bg
-                                })
-                                .stroke(Stroke::new(
-                                    1.0,
-                                    if is_light {
-                                        Color32::from_rgb(190, 205, 225)
-                                    } else {
-                                        palette.card_border
-                                    },
-                                ))
-                                .corner_radius(CornerRadius::same(4))
-                                .inner_margin(egui::Margin::symmetric(6, 1))
-                                .show(ui, |ui| {
-                                    ui.label(
-                                        RichText::new(AppUpdater::current_target())
-                                            .monospace()
-                                            .size(11.0)
-                                            .color(palette.text_primary),
-                                    );
-                                });
                         });
                     });
                 });
 
             ui.add_space(6.0);
 
-            // 2. Update Source Configuration (GitHub Releases vs Private Server)
-            egui::Frame::new()
-                .fill(palette.card_bg)
-                .stroke(Stroke::new(1.0, palette.card_border))
-                .corner_radius(CornerRadius::same(8))
-                .inner_margin(egui::Margin::symmetric(14, 10))
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(
-                            RichText::new("Update Source:")
-                                .strong()
-                                .size(11.5)
-                                .color(palette.symbol_subtext),
-                        );
-                        ui.add_space(4.0);
+            // 2. Collapsible Update Source Configuration
+            let source_summary = if app.updater.use_custom_server {
+                "Private Server".to_string()
+            } else {
+                format!("GitHub ({}/{})", app.updater.repo_owner, app.updater.repo_name)
+            };
 
-                        for (is_custom, label) in [
-                            (false, "GitHub Releases"),
-                            (true, "Private Server (JSON)"),
-                        ] {
-                            let selected = app.updater.use_custom_server == is_custom;
-                            let (btn_bg, btn_border, btn_fg) = if selected {
-                                if is_light {
+            egui::CollapsingHeader::new(
+                RichText::new(format!("Update Source · {}", source_summary))
+                    .small()
+                    .strong()
+                    .color(palette.rung_text_dim),
+            )
+            .id_salt("updater_source_cfg_collapse")
+            .default_open(false)
+            .show(ui, |ui| {
+                egui::Frame::new()
+                    .fill(palette.card_bg)
+                    .stroke(Stroke::new(1.0, palette.card_border))
+                    .corner_radius(CornerRadius::same(6))
+                    .inner_margin(egui::Margin::symmetric(12, 8))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal_wrapped(|ui| {
+                            for (is_custom, label) in [
+                                (false, "GitHub Releases"),
+                                (true, "Private Server (JSON)"),
+                            ] {
+                                let selected = app.updater.use_custom_server == is_custom;
+                                let (btn_bg, btn_border, btn_fg) = if selected {
+                                    if is_light {
+                                        (
+                                            Color32::from_rgb(24, 100, 196),
+                                            Color32::from_rgb(18, 78, 160),
+                                            Color32::WHITE,
+                                        )
+                                    } else {
+                                        (
+                                            Color32::from_rgb(45, 105, 175),
+                                            Color32::from_rgb(100, 165, 235),
+                                            Color32::WHITE,
+                                        )
+                                    }
+                                } else if is_light {
                                     (
-                                        Color32::from_rgb(24, 100, 196),
-                                        Color32::from_rgb(18, 78, 160),
-                                        Color32::WHITE,
+                                        Color32::from_rgb(241, 245, 249),
+                                        Color32::from_rgb(190, 203, 220),
+                                        palette.text_primary,
                                     )
                                 } else {
                                     (
-                                        Color32::from_rgb(45, 105, 175),
-                                        Color32::from_rgb(100, 165, 235),
-                                        Color32::WHITE,
+                                        palette.pill_bg,
+                                        palette.card_border,
+                                        palette.text_primary,
                                     )
+                                };
+
+                                let tab_btn = egui::Button::new(
+                                    RichText::new(label)
+                                        .size(11.5)
+                                        .strong()
+                                        .color(btn_fg),
+                                )
+                                .fill(btn_bg)
+                                .stroke(Stroke::new(1.0, btn_border))
+                                .corner_radius(CornerRadius::same(5))
+                                .min_size(egui::vec2(130.0, 24.0));
+
+                                if ui.add(tab_btn).clicked() && !selected {
+                                    app.updater.use_custom_server = is_custom;
+                                    settings_changed = true;
                                 }
-                            } else if is_light {
-                                (
-                                    Color32::from_rgb(241, 245, 249),
-                                    Color32::from_rgb(190, 203, 220),
-                                    palette.text_primary,
-                                )
-                            } else {
-                                (
-                                    palette.pill_bg,
-                                    palette.card_border,
-                                    palette.text_primary,
-                                )
-                            };
+                            }
+                        });
 
-                            let tab_btn = egui::Button::new(
-                                RichText::new(label)
+                        ui.add_space(4.0);
+                        ui.separator();
+                        ui.add_space(4.0);
+
+                        if !app.updater.use_custom_server {
+                            egui::Grid::new("updater_github_cfg_grid")
+                                .num_columns(2)
+                                .spacing([10.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        RichText::new("Repository Owner:")
+                                            .size(11.5)
+                                            .color(palette.text_primary),
+                                    );
+                                    if ui
+                                        .add(
+                                            egui::TextEdit::singleline(&mut app.updater.repo_owner)
+                                                .background_color(input_bg)
+                                                .text_color(palette.text_primary)
+                                                .hint_text(DEFAULT_REPO_OWNER)
+                                                .desired_width(240.0),
+                                        )
+                                        .changed()
+                                    {
+                                        settings_changed = true;
+                                    }
+                                    ui.end_row();
+
+                                    ui.label(
+                                        RichText::new("Repository Name:")
+                                            .size(11.5)
+                                            .color(palette.text_primary),
+                                    );
+                                    if ui
+                                        .add(
+                                            egui::TextEdit::singleline(&mut app.updater.repo_name)
+                                                .background_color(input_bg)
+                                                .text_color(palette.text_primary)
+                                                .hint_text(DEFAULT_REPO_NAME)
+                                                .desired_width(240.0),
+                                        )
+                                        .changed()
+                                    {
+                                        settings_changed = true;
+                                    }
+                                    ui.end_row();
+                                });
+                        } else {
+                            ui.label(
+                                RichText::new("Manifest URL (latest.json):")
                                     .size(11.5)
-                                    .strong()
-                                    .color(btn_fg),
-                            )
-                            .fill(btn_bg)
-                            .stroke(Stroke::new(1.0, btn_border))
-                            .corner_radius(CornerRadius::same(5))
-                            .min_size(egui::vec2(130.0, 24.0));
-
-                            if ui.add(tab_btn).clicked() && !selected {
-                                app.updater.use_custom_server = is_custom;
+                                    .color(palette.symbol_subtext),
+                            );
+                            ui.add_space(2.0);
+                            if ui
+                                .add(
+                                    egui::TextEdit::singleline(&mut app.updater.custom_manifest_url)
+                                        .background_color(input_bg)
+                                        .text_color(palette.text_primary)
+                                        .hint_text("https://updates.example.com/laduino-plc/latest.json")
+                                        .desired_width(ui.available_width()),
+                                )
+                                .changed()
+                            {
                                 settings_changed = true;
                             }
                         }
                     });
-
-                    ui.add_space(4.0);
-                    ui.separator();
-                    ui.add_space(4.0);
-
-                    if !app.updater.use_custom_server {
-                        egui::Grid::new("updater_github_cfg_grid")
-                            .num_columns(2)
-                            .spacing([10.0, 6.0])
-                            .show(ui, |ui| {
-                                ui.label(
-                                    RichText::new("Repository Owner:")
-                                        .size(11.5)
-                                        .color(palette.text_primary),
-                                );
-                                if ui
-                                    .add(
-                                        egui::TextEdit::singleline(&mut app.updater.repo_owner)
-                                            .background_color(input_bg)
-                                            .text_color(palette.text_primary)
-                                            .hint_text(DEFAULT_REPO_OWNER)
-                                            .desired_width(260.0),
-                                    )
-                                    .changed()
-                                {
-                                    settings_changed = true;
-                                }
-                                ui.end_row();
-
-                                ui.label(
-                                    RichText::new("Repository Name:")
-                                        .size(11.5)
-                                        .color(palette.text_primary),
-                                );
-                                if ui
-                                    .add(
-                                        egui::TextEdit::singleline(&mut app.updater.repo_name)
-                                            .background_color(input_bg)
-                                            .text_color(palette.text_primary)
-                                            .hint_text(DEFAULT_REPO_NAME)
-                                            .desired_width(260.0),
-                                    )
-                                    .changed()
-                                {
-                                    settings_changed = true;
-                                }
-                                ui.end_row();
-                            });
-                    } else {
-                        ui.label(
-                            RichText::new("Manifest URL (latest.json):")
-                                .size(11.5)
-                                .color(palette.symbol_subtext),
-                        );
-                        ui.add_space(2.0);
-                        if ui
-                            .add(
-                                egui::TextEdit::singleline(&mut app.updater.custom_manifest_url)
-                                    .background_color(input_bg)
-                                    .text_color(palette.text_primary)
-                                    .hint_text("https://updates.example.com/laduino-plc/latest.json")
-                                    .desired_width(ui.available_width()),
-                            )
-                            .changed()
-                        {
-                            settings_changed = true;
-                        }
-                    }
-                });
+            });
 
             ui.add_space(6.0);
 
-            // 3. Industrial Safety Guard Banner (Structured 2-row layout to prevent overlapping)
+            // 3. Industrial Safety Guard Banner
             if let Some(reason) = block_reason {
                 let (warn_bg, warn_border, warn_title_fg, warn_body_fg) = if is_light {
                     (
@@ -691,7 +677,7 @@ pub fn render_update_dialog(ctx: &egui::Context, app: &mut CanvasApp) {
                 egui::Frame::new()
                     .fill(warn_bg)
                     .stroke(Stroke::new(1.0, warn_border))
-                    .corner_radius(CornerRadius::same(8))
+                    .corner_radius(CornerRadius::same(6))
                     .inner_margin(egui::Margin::symmetric(12, 8))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
@@ -811,8 +797,8 @@ pub fn render_update_dialog(ctx: &egui::Context, app: &mut CanvasApp) {
             egui::Frame::new()
                 .fill(status_bg)
                 .stroke(Stroke::new(1.0, status_border))
-                .corner_radius(CornerRadius::same(8))
-                .inner_margin(egui::Margin::symmetric(14, 10))
+                .corner_radius(CornerRadius::same(6))
+                .inner_margin(egui::Margin::symmetric(12, 8))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     match &status_snapshot {
@@ -968,131 +954,132 @@ pub fn render_update_dialog(ctx: &egui::Context, app: &mut CanvasApp) {
                     }
                 });
 
-            ui.add_space(8.0);
+            ui.add_space(6.0);
+            ui.separator();
+            ui.add_space(4.0);
 
-            // 5. Bottom Action Bar (Clean layout with safety margins)
+            // 5. Unified Pro IDE Footer
             ui.horizontal(|ui| {
                 let is_busy = matches!(
                     status_snapshot,
                     UpdateStatus::Checking | UpdateStatus::Downloading { .. }
                 );
 
-                let (check_bg, check_fg) = if !is_busy {
-                    if is_light {
-                        (Color32::from_rgb(2, 132, 199), Color32::WHITE)
-                    } else {
-                        (Color32::from_rgb(14, 116, 170), Color32::WHITE)
-                    }
-                } else if is_light {
-                    (Color32::from_rgb(203, 213, 225), Color32::from_rgb(100, 116, 139))
-                } else {
-                    (Color32::from_rgb(55, 60, 70), Color32::from_rgb(140, 148, 160))
-                };
-
-                let check_btn = egui::Button::new(
-                    RichText::new("Check for Updates")
-                        .size(12.0)
-                        .strong()
-                        .color(check_fg),
-                )
-                .fill(check_bg)
-                .corner_radius(CornerRadius::same(6))
-                .min_size(egui::vec2(148.0, 30.0));
-
-                if ui.add_enabled(!is_busy, check_btn).clicked() {
-                    trigger_check = true;
-                }
-
-                if let UpdateStatus::UpdateAvailable {
-                    latest_version,
-                    download_url,
-                    ..
-                } = &status_snapshot
-                {
-                    let can_install = block_reason.is_none() && !is_busy;
-                    let (inst_bg, inst_fg) = if can_install {
-                        if is_light {
-                            (Color32::from_rgb(22, 163, 74), Color32::WHITE)
-                        } else {
-                            (Color32::from_rgb(24, 130, 90), Color32::WHITE)
-                        }
-                    } else if is_light {
-                        (Color32::from_rgb(203, 213, 225), Color32::from_rgb(100, 116, 139))
-                    } else {
-                        (Color32::from_rgb(55, 60, 70), Color32::from_rgb(140, 148, 160))
-                    };
-
-                    let install_btn = egui::Button::new(
-                        RichText::new(format!("⬇ Install v{}", latest_version))
+                // Left side: subtle secondary Recheck button when an update is available
+                if matches!(status_snapshot, UpdateStatus::UpdateAvailable { .. }) {
+                    let recheck_btn = egui::Button::new(
+                        RichText::new("Recheck")
                             .size(12.0)
-                            .strong()
-                            .color(inst_fg),
+                            .color(palette.text_primary),
                     )
-                    .fill(inst_bg)
-                    .corner_radius(CornerRadius::same(6))
-                    .min_size(egui::vec2(140.0, 30.0));
-
-                    let resp = ui.add_enabled(can_install, install_btn);
-                    if let Some(reason) = block_reason {
-                        resp.on_disabled_hover_text(reason);
-                    } else if resp.clicked() {
-                        trigger_install = Some((latest_version.clone(), download_url.clone()));
+                    .corner_radius(CornerRadius::same(5))
+                    .min_size(egui::vec2(76.0, 28.0));
+                    if ui.add_enabled(!is_busy, recheck_btn).clicked() {
+                        trigger_check = true;
                     }
                 }
 
-                if let UpdateStatus::ReadyToRestart { new_version } = &status_snapshot {
-                    let can_restart = block_reason.is_none();
-                    let (rst_bg, rst_fg) = if can_restart {
-                        if is_light {
-                            (Color32::from_rgb(2, 132, 199), Color32::WHITE)
-                        } else {
-                            (Color32::from_rgb(14, 116, 170), Color32::WHITE)
-                        }
-                    } else if is_light {
-                        (Color32::from_rgb(203, 213, 225), Color32::from_rgb(100, 116, 139))
-                    } else {
-                        (Color32::from_rgb(55, 60, 70), Color32::from_rgb(140, 148, 160))
-                    };
-
-                    let restart_btn = egui::Button::new(
-                        RichText::new(format!("Restart into v{}", new_version))
-                            .size(12.0)
-                            .strong()
-                            .color(rst_fg),
-                    )
-                    .fill(rst_bg)
-                    .corner_radius(CornerRadius::same(6))
-                    .min_size(egui::vec2(154.0, 30.0));
-
-                    if ui.add_enabled(can_restart, restart_btn).clicked() {
-                        trigger_restart = true;
-                    }
-                }
-
+                // Right-aligned: Primary CTA beside Close
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let (close_bg, close_border, close_fg) = if is_light {
-                        (
-                            Color32::from_rgb(226, 232, 240),
-                            Color32::from_rgb(178, 190, 208),
-                            palette.text_primary,
-                        )
-                    } else {
-                        (
-                            Color32::from_rgb(48, 52, 60),
-                            palette.card_border,
-                            palette.text_primary,
-                        )
-                    };
-                    let close_btn = egui::Button::new(
-                        RichText::new("Close")
-                            .size(12.0)
-                            .strong()
-                            .color(close_fg),
-                    )
-                    .fill(close_bg)
-                    .stroke(Stroke::new(1.0, close_border))
-                    .corner_radius(CornerRadius::same(6))
-                    .min_size(egui::vec2(78.0, 30.0));
+                    match &status_snapshot {
+                        UpdateStatus::ReadyToRestart { new_version } => {
+                            let can_restart = block_reason.is_none();
+                            let (rst_bg, rst_fg) = if can_restart {
+                                if is_light {
+                                    (Color32::from_rgb(2, 132, 199), Color32::WHITE)
+                                } else {
+                                    (Color32::from_rgb(14, 116, 170), Color32::WHITE)
+                                }
+                            } else if is_light {
+                                (Color32::from_rgb(203, 213, 225), Color32::from_rgb(100, 116, 139))
+                            } else {
+                                (Color32::from_rgb(55, 60, 70), Color32::from_rgb(140, 148, 160))
+                            };
+
+                            let restart_btn = egui::Button::new(
+                                RichText::new(format!("Restart into v{}", new_version))
+                                    .size(12.0)
+                                    .strong()
+                                    .color(rst_fg),
+                            )
+                            .fill(rst_bg)
+                            .corner_radius(CornerRadius::same(5))
+                            .min_size(egui::vec2(140.0, 28.0));
+
+                            let resp = ui.add_enabled(can_restart, restart_btn);
+                            if let Some(reason) = block_reason {
+                                resp.on_disabled_hover_text(reason);
+                            } else if resp.clicked() {
+                                trigger_restart = true;
+                            }
+                        }
+                        UpdateStatus::UpdateAvailable {
+                            latest_version,
+                            download_url,
+                            ..
+                        } => {
+                            let can_install = block_reason.is_none() && !is_busy;
+                            let (inst_bg, inst_fg) = if can_install {
+                                if is_light {
+                                    (Color32::from_rgb(22, 163, 74), Color32::WHITE)
+                                } else {
+                                    (Color32::from_rgb(24, 130, 90), Color32::WHITE)
+                                }
+                            } else if is_light {
+                                (Color32::from_rgb(203, 213, 225), Color32::from_rgb(100, 116, 139))
+                            } else {
+                                (Color32::from_rgb(55, 60, 70), Color32::from_rgb(140, 148, 160))
+                            };
+
+                            let install_btn = egui::Button::new(
+                                RichText::new(format!("Install v{}", latest_version))
+                                    .size(12.0)
+                                    .strong()
+                                    .color(inst_fg),
+                            )
+                            .fill(inst_bg)
+                            .corner_radius(CornerRadius::same(5))
+                            .min_size(egui::vec2(124.0, 28.0));
+
+                            let resp = ui.add_enabled(can_install, install_btn);
+                            if let Some(reason) = block_reason {
+                                resp.on_disabled_hover_text(reason);
+                            } else if resp.clicked() {
+                                trigger_install = Some((latest_version.clone(), download_url.clone()));
+                            }
+                        }
+                        _ => {
+                            let (check_bg, check_fg) = if !is_busy {
+                                if is_light {
+                                    (Color32::from_rgb(2, 132, 199), Color32::WHITE)
+                                } else {
+                                    (Color32::from_rgb(14, 116, 170), Color32::WHITE)
+                                }
+                            } else if is_light {
+                                (Color32::from_rgb(203, 213, 225), Color32::from_rgb(100, 116, 139))
+                            } else {
+                                (Color32::from_rgb(55, 60, 70), Color32::from_rgb(140, 148, 160))
+                            };
+
+                            let check_btn = egui::Button::new(
+                                RichText::new("Check for Updates")
+                                    .size(12.0)
+                                    .strong()
+                                    .color(check_fg),
+                            )
+                            .fill(check_bg)
+                            .corner_radius(CornerRadius::same(5))
+                            .min_size(egui::vec2(140.0, 28.0));
+
+                            if ui.add_enabled(!is_busy, check_btn).clicked() {
+                                trigger_check = true;
+                            }
+                        }
+                    }
+
+                    let close_btn = egui::Button::new(RichText::new("Close").size(12.0))
+                        .corner_radius(CornerRadius::same(5))
+                        .min_size(egui::vec2(72.0, 28.0));
                     if ui.add_enabled(!is_busy, close_btn).clicked() {
                         close_win = true;
                     }

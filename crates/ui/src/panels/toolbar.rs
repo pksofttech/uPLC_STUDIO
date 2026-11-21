@@ -340,13 +340,13 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                         app.request_new_program();
                     }
 
-                    // Open File
+                    // Open File (Left-click: Open dialog, Right-click: Open Recent)
                     let (open_lbl, open_w) = if show_file_labels {
                         ("Open", 54.0)
                     } else {
                         ("", CAD_ICON_BTN_WIDTH)
                     };
-                    if modern_tool_button(
+                    let open_resp = modern_tool_button(
                         ui,
                         Some(VectorIcon::OpenFile),
                         open_lbl,
@@ -357,11 +357,52 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                         open_w,
                         palette,
                     )
-                    .on_hover_text("Open IEC 61131-3 IL (.il) or Project (.json) [Ctrl+O]")
-                    .clicked()
-                    {
+                    .on_hover_text(
+                        "Open Project (.il / .json) [Ctrl+O]\nRight-click for Recent Files",
+                    );
+                    if open_resp.clicked() {
                         app.request_open_program();
                     }
+                    open_resp.context_menu(|ui| {
+                        ui.label(
+                            egui::RichText::new("Recent Files")
+                                .size(10.5)
+                                .color(palette.rung_text_dim),
+                        );
+                        ui.separator();
+                        if app.recent_files.is_empty() {
+                            ui.label(
+                                egui::RichText::new("(no recent files)")
+                                    .size(11.0)
+                                    .color(palette.rung_text_dim)
+                                    .italics(),
+                            );
+                        } else {
+                            let mut chosen: Option<String> = None;
+                            for (i, path) in app.recent_files.iter().enumerate() {
+                                let name = std::path::Path::new(path)
+                                    .file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or(path);
+                                if ui
+                                    .button(format!("{}. {}", i + 1, name))
+                                    .on_hover_text(path.as_str())
+                                    .clicked()
+                                {
+                                    chosen = Some(path.clone());
+                                }
+                            }
+                            ui.separator();
+                            if ui.button("Clear Recent Files").clicked() {
+                                app.clear_recent_files();
+                                ui.close();
+                            }
+                            if let Some(path) = chosen {
+                                app.request_open_recent(path);
+                                ui.close();
+                            }
+                        }
+                    });
 
                     // Save File (with crisp 5px unsaved-changes dot indicator)
                     let (save_lbl, save_w) = if show_file_labels {
@@ -374,11 +415,16 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     } else {
                         "Save Program [Ctrl+S]"
                     };
+                    let save_color = if app.doc.is_dirty {
+                        palette.accent_ok
+                    } else {
+                        palette.accent_heading
+                    };
                     let save_resp = modern_tool_button(
                         ui,
                         Some(VectorIcon::SaveFile),
                         save_lbl,
-                        palette.accent_ok,
+                        save_color,
                         false,
                         true,
                         false,
@@ -414,7 +460,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                         ui,
                         Some(VectorIcon::Undo),
                         undo_lbl,
-                        palette.accent_warn,
+                        palette.accent_heading,
                         false,
                         is_edit_mode && app.doc.can_undo(),
                         false,
