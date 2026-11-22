@@ -67,6 +67,7 @@
 
       <ul class="nav-links" id="nav-links-menu">
         <li><a href="#features" data-i18n="nav_features">ฟีเจอร์เด่น</a></li>
+        <li><a href="#whats-new" data-i18n="nav_whatsnew">ใหม่ใน v0.2.0</a></li>
         <li><a href="#getting-started" data-i18n="nav_getting_started">เริ่มต้นใช้งาน</a></li>
         <li><a href="#hardware" data-i18n="nav_hardware">ฮาร์ดแวร์ & พิน</a></li>
         <li><a href="#examples" data-i18n="nav_examples">ตัวอย่างวงจร</a></li>
@@ -316,6 +317,63 @@
       </div>
     </section>
 
+    <!-- What's New in v0.2.0 Section -->
+    <section id="whats-new">
+      <div class="container">
+        <div class="section-header">
+          <div class="whatsnew-header-badges">
+            <span class="section-tag" data-i18n="wn_tag">WHAT'S NEW IN v0.2.0</span>
+            <span class="whatsnew-pill" data-i18n="wn_badge">v0.2.0 PRE-RELEASE</span>
+          </div>
+          <h2 data-i18n="wn_title">มีอะไรใหม่ในเวอร์ชัน v0.2.0</h2>
+          <p data-i18n="wn_subtitle">
+            ยกระดับความแม่นยำและความสะดวกในการเขียนวงจร PLC ด้วยระบบตรวจสอบโครงสร้างตามมาตรฐาน IEC 61131-3, แคนวาสเวอร์ชันใหม่พร้อม Copy/Paste และธีมมืด Modern Dark UI
+          </p>
+        </div>
+
+        <div class="grid-3">
+          <div class="card whatsnew-card">
+            <div class="card-icon">🛡️</div>
+            <h3 data-i18n="wn1_title">IEC 61131-3 Strict Ladder Validator</h3>
+            <p data-i18n="wn1_desc">
+              ตรวจสอบโครงสร้าง Topology และความถูกต้องของวงจรแบบเรียลไทม์ภายใต้นโยบาย STRICT_EDITOR แจ้งเตือนตำแหน่ง Coil ผิดพลาด, Branch ขนาน, ชนิดข้อมูล และ Address ไม่ถูกต้องก่อนคอมไพล์ (Error / Warning / Info)
+            </p>
+            <div class="tag-list">
+              <span class="code-pill">STRICT_EDITOR</span>
+              <span class="code-pill">Topology Check</span>
+              <span class="code-pill">Pre-Compile Guard</span>
+            </div>
+          </div>
+
+          <div class="card whatsnew-card">
+            <div class="card-icon">📋</div>
+            <h3 data-i18n="wn2_title">Enhanced Ladder Canvas & Clipboard</h3>
+            <p data-i18n="wn2_desc">
+              อัปเกรดการเรนเดอร์แคนวาสระดับ CAD พร้อมรองรับการคัดลอก/วาง (Copy/Paste) Rung และอุปกรณ์ผ่าน System Clipboard เลือกและต่อสายวงจรได้ลื่นไหลและรวดเร็วขึ้นด้วยคีย์บอร์ด
+            </p>
+            <div class="tag-list">
+              <span class="code-pill">Clipboard Copy/Paste</span>
+              <span class="code-pill">Canvas v2</span>
+              <span class="code-pill">Faster Wiring</span>
+            </div>
+          </div>
+
+          <div class="card whatsnew-card">
+            <div class="card-icon">🎨</div>
+            <h3 data-i18n="wn3_title">Refined Modern Dark UI Theme</h3>
+            <p data-i18n="wn3_desc">
+              ปรับโฉมธีมสี Slate-Dark คอนทราสต์คมชัดยิ่งขึ้น (Modern Theme) เพิ่มความชัดเจนของสถานะ Hover/Focus และจัดระเบียบแผง Inspector ด้านขวา ช่วยลดความเมื่อยล้าสายตาขณะดีบักวงจร PLC เป็นเวลานาน
+            </p>
+            <div class="tag-list">
+              <span class="code-pill">Modern Dark Theme</span>
+              <span class="code-pill">Crisper Contrast</span>
+              <span class="code-pill">Inspector UX</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- Getting Started Section -->
     <section id="getting-started">
       <div class="container">
@@ -335,7 +393,7 @@
               ดาวน์โหลดไฟล์สำหรับ Windows หรือ Linux จากหน้า GitHub Releases แตกไฟล์แล้วเปิดโปรแกรม laduino-plc ได้ทันทีโดยไม่ต้องติดตั้งไลบรารีเสริม
             </p>
             <div class="shortcut-box" data-i18n="s1_box">
-              เปิดโปรแกรมปุ๊บ → เข้าสู่หน้า New Ladder (1 Network ว่าง) พร้อมใช้งานทันที หรือเลือกเมนู Examples เพื่อดูตัวอย่างกว่า 18 โปรเจกต์
+              เปิดโปรแกรมปุ๊บ → เข้าสู่หน้า New Ladder (1 Network ว่าง) พร้อมใช้งานทันที หรือเลือกเมนู Examples เพื่อดูตัวอย่างกว่า 17 โปรเจกต์
             </div>
           </div>
 
@@ -681,7 +739,7 @@
       <div class="container">
         <div class="section-header">
           <span class="section-tag" data-i18n="ex_tag">BUNDLED IEC 61131-3 EXAMPLES</span>
-          <h2 data-i18n="ex_title">ตัวอย่างวงจรมาตรฐานพร้อมใช้งานกว่า 14 โปรเจกต์</h2>
+          <h2 data-i18n="ex_title">ตัวอย่างวงจรมาตรฐานพร้อมใช้งานกว่า 17 โปรเจกต์</h2>
           <p data-i18n="ex_subtitle">
             คลิกเลือกดูโค้ด Instruction List (.il) ตัวอย่างที่มาพร้อมกับโปรแกรม สามารถคัดลอกหรือเปิดจากโฟลเดอร์ example/ ในโปรแกรมเพื่อจำลองการทำงานได้ทันที
           </p>
@@ -724,37 +782,37 @@
           <div class="roadmap-card completed">
             <div class="roadmap-status-row">
               <span class="roadmap-badge done" data-i18n="rm_p1_badge">✔ เสร็จสมบูรณ์ (Completed)</span>
-              <span class="roadmap-ver">Phase 01</span>
+              <span class="roadmap-ver">Phase 01 • v0.1.x</span>
             </div>
-            <h3 data-i18n="rm_p1_title">Core IEC 61131-3 IDE & 32-bit Micro-VM</h3>
+            <h3 data-i18n="rm_p1_title">Core IEC 61131-3 IDE, Micro-VM & Hardware I/O</h3>
             <ul>
-              <li data-i18n="rm_p1_l1">ตัววาดวงจร Ladder Diagram พร้อมแปลงโค้ด .il แบบสองทิศทาง</li>
-              <li data-i18n="rm_p1_l2">ระบบจำลองการทำงานแบบเรียลไทม์ (Offline Simulator) & Force I/O</li>
-              <li data-i18n="rm_p1_l3">เฟิร์มแวร์ RP2040 Embassy พร้อม RETAIN Flash & CRC16</li>
+              <li data-i18n="rm_p1_l1">ตัววาดวงจร Ladder Diagram พร้อมแปลงโค้ด .il สองทิศทาง & Simulator</li>
+              <li data-i18n="rm_p1_l2">เฟิร์มแวร์ RP2040 Embassy 32-bit Micro-VM พร้อม RETAIN Flash & CRC16</li>
+              <li data-i18n="rm_p1_l3">ตั้งค่าพิน GPIO / RS-485 แบบ Runtime และแฟลช .uf2 ในคลิกเดียว</li>
             </ul>
           </div>
 
           <div class="roadmap-card current">
             <div class="roadmap-status-row">
-              <span class="roadmap-badge active" data-i18n="rm_p2_badge">🚧 กำลังดำเนินการ (Pre-Release)</span>
-              <span class="roadmap-ver">Phase 02 • v0.1.0</span>
+              <span class="roadmap-badge active" data-i18n="rm_p2_badge">🚧 กำลังดำเนินการ (v0.2.0 Pre-Release)</span>
+              <span class="roadmap-ver">Phase 02 • v0.2.0</span>
             </div>
-            <h3 data-i18n="rm_p2_title">ปรับปรุงและทดสอบก่อนปล่อยอย่างเป็นทางการ</h3>
+            <h3 data-i18n="rm_p2_title">Strict IEC Validator, Canvas v2 & Stability</h3>
             <ul>
-              <li data-i18n="rm_p2_l1">ทดสอบความเสถียรของบล็อก PID, SCALE, Drum Sequencer และ Modbus RTU</li>
-              <li data-i18n="rm_p2_l2">ระบบแฟลชเฟิร์มแวร์ .uf2 ผ่าน USB BOOTSEL ในคลิกเดียว</li>
-              <li data-i18n="rm_p2_l3">ตรวจสอบความเข้ากันได้บน Windows 10/11 และ Linux หลากหลายดิสโทร</li>
+              <li data-i18n="rm_p2_l1">ระบบตรวจสอบวงจร IEC 61131-3 Strict Ladder Validator & Topology Engine</li>
+              <li data-i18n="rm_p2_l2">อัปเกรดแคนวาส Ladder v2, ระบบ Copy/Paste และธีม Modern Dark UI</li>
+              <li data-i18n="rm_p2_l3">ทดสอบความเสถียรข้ามแพลตฟอร์ม Windows 10/11 & Linux ก่อนปล่อย v1.0.0</li>
             </ul>
           </div>
 
           <div class="roadmap-card upcoming">
             <div class="roadmap-status-row">
               <span class="roadmap-badge next" data-i18n="rm_p3_badge">🎯 เป้าหมายถัดไป (Official Release)</span>
-              <span class="roadmap-ver">Phase 03 • v0.2.0+</span>
+              <span class="roadmap-ver">Phase 03 • v1.0.0+</span>
             </div>
             <h3 data-i18n="rm_p3_title">Official Public Release & Next-Gen MCU</h3>
             <ul>
-              <li data-i18n="rm_p3_l1">เปิดตัวเวอร์ชันทางการพร้อมระบบอัปเดตออนไลน์อัตโนมัติเต็มรูปแบบ</li>
+              <li data-i18n="rm_p3_l1">เปิดตัวเวอร์ชันทางการ (v1.0.0) พร้อมระบบอัปเดตออนไลน์อัตโนมัติเต็มรูปแบบ</li>
               <li data-i18n="rm_p3_l2">รองรับชิปใหม่ Raspberry Pi Pico 2 (RP2350 Cortex-M33)</li>
               <li data-i18n="rm_p3_l3">ขยายการรองรับไมโครคอนโทรลเลอร์ตระกูลอื่น เช่น ESP32 (ESP32 / ESP32-S3 / ESP32-C3) และ STM32</li>
             </ul>
@@ -880,15 +938,15 @@
             <div class="checksum-list">
               <div class="checksum-item">
                 <span class="checksum-label">Windows (.zip)</span>
-                <code>458071e07dc8f62f59e5468fab5a53a43cce3bd44b4698283c99d91bbb60863a</code>
+                <code>eb1c544280a1fc403b883862aee7da8f74f0a32ed3d75754c67d42012a8f8aac</code>
               </div>
               <div class="checksum-item">
                 <span class="checksum-label">Linux (.tar.gz)</span>
-                <code>3383408e4c7effeac55274ecd7cfda0c2485d817f8701231208a2dd262f3e6ba</code>
+                <code>7b38363e900e7868e65f9b4a08964c1316baddb0037cea20fcd568466757f6e5</code>
               </div>
               <div class="checksum-item">
                 <span class="checksum-label">RP2040 (.uf2)</span>
-                <code>e175c4a4ac7ab916c562a18257627ba1f9e956ef45c837ff1baed5526a5228ab</code>
+                <code>e67736de45e59b9f7734e6a53932d9271ea82990a2ab2fde0169f39052468785</code>
               </div>
             </div>
           </div>

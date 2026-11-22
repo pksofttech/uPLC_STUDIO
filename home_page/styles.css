@@ -798,6 +798,44 @@ section {
 }
 
 /* ============================================================================
+ * What's New in v0.2.0 (#whats-new)
+ * ============================================================================ */
+.whatsnew-header-badges {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.whatsnew-header-badges .section-tag {
+  margin-bottom: 0;
+}
+
+.whatsnew-pill {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 5px 13px;
+  border-radius: var(--radius-pill);
+  background: #000000;
+  color: #fbbf24;
+  border: 1px solid rgba(0, 0, 0, 0.16);
+}
+
+.whatsnew-card {
+  position: relative;
+  border-top: 2px solid rgba(2, 132, 199, 0.45);
+}
+
+.whatsnew-card:hover {
+  border-top-color: #000000;
+}
+
+/* ============================================================================
  * Getting Started Steps
  * ============================================================================ */
 .steps-grid {
