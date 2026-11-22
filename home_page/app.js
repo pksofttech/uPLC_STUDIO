@@ -95,6 +95,10 @@ const I18N = {
     wn2_desc: "อัปเกรดการเรนเดอร์แคนวาสระดับ CAD พร้อมรองรับการคัดลอก/วาง (Copy/Paste) Rung และอุปกรณ์ผ่าน System Clipboard เลือกและต่อสายวงจรได้ลื่นไหลและรวดเร็วขึ้นด้วยคีย์บอร์ด",
     wn3_title: "Refined Modern Dark UI Theme",
     wn3_desc: "ปรับโฉมธีมสี Slate-Dark คอนทราสต์คมชัดยิ่งขึ้น (Modern Theme) เพิ่มความชัดเจนของสถานะ Hover/Focus และจัดระเบียบแผง Inspector ด้านขวา ช่วยลดความเมื่อยล้าสายตาขณะดีบักวงจร PLC เป็นเวลานาน",
+    ide_win_title: "LaduinoPLC v0.2.0 — Modern Dark Canvas & STRICT_EDITOR Preview",
+    ide_btn_valid: "✔ Valid Rung",
+    ide_btn_err: "⚠ Trigger Strict Error",
+    ide_diag_hdr: "🛡️ STRICT_EDITOR Validator",
 
     start_tag: "GETTING STARTED",
     start_title: "เริ่มต้นใช้งาน LaduinoPLC ใน 4 ขั้นตอน",
@@ -102,7 +106,7 @@ const I18N = {
 
     s1_title: "ดาวน์โหลดและเปิดโปรแกรม",
     s1_desc: "ดาวน์โหลดไฟล์สำหรับ Windows หรือ Linux จากหน้า GitHub Releases แตกไฟล์แล้วเปิดโปรแกรม laduino-plc ได้ทันทีโดยไม่ต้องติดตั้งไลบรารีเสริม",
-    s1_box: "เปิดโปรแกรมปุ๊บ → เข้าสู่หน้า New Ladder (1 Network ว่าง) พร้อมใช้งานทันที หรือเลือกเมนู Examples เพื่อดูตัวอย่างกว่า 17 โปรเจกต์",
+    s1_box: "เปิดโปรแกรมปุ๊บ → เข้าสู่หน้า New Ladder (1 Network ว่าง) พร้อมใช้งานทันที หรือเลือกเมนู Examples เพื่อดูตัวอย่างกว่า 22 โปรเจกต์",
 
     s2_title: "วางอุปกรณ์และตั้งค่า IEC Address",
     s2_desc: "คลิกเลือก Contact, Coil หรือ Function Block จากแถบด้านซ้ายแล้ววางลงบนเส้น Rung ดับเบิลคลิกที่ตัวอุปกรณ์เพื่อกำหนด Address (%IX0.0, %QX0.0, T0) และตั้งชื่อ Symbol",
@@ -119,6 +123,9 @@ const I18N = {
     hw_tag: "HARDWARE & MEMORY MAP",
     hw_title: "ตารางพินและหน่วยความจำมาตรฐาน (RP2040 Micro-VM)",
     hw_subtitle: "การแมปพอร์ตมาตรฐานสำหรับบอร์ด Raspberry Pi Pico (RP2040) พร้อมระบบปรับเปลี่ยนพิน GPIO & RS-485 ผ่านโปรแกรมแบบ Runtime โดยไม่ต้อง Build Firmware ใหม่",
+    hw_tab_map: "📊 ตารางพิน & หน่วยความจำ",
+    hw_tab_config: "🔧 ตั้งค่าพิน I/O แบบจำลอง",
+    hw_tab_wiring: "🔌 ผังการต่อวงจรฮาร์ดแวร์",
     th_region: "หมวดหมู่ (Region)",
     th_iec: "IEC 61131-3 Address",
     th_alias: "PLC Alias",
@@ -162,7 +169,7 @@ const I18N = {
     wire_3_desc: "เชื่อมต่อโมดูล MAX485 / SP3485 (3.3V) เข้ากับ UART1: เลือกคู่พิน GP8(TX)/GP9(RX) หรือ GP4(TX)/GP5(RX), กำหนดขา DE/RE (Auto หรือ GP6/GP7/GP16) และ Baud Rate 9600..115200 ได้จากหน้า UI",
 
     ex_tag: "BUNDLED IEC 61131-3 EXAMPLES",
-    ex_title: "ตัวอย่างวงจรมาตรฐานพร้อมใช้งานกว่า 17 โปรเจกต์",
+    ex_title: "ตัวอย่างวงจรมาตรฐานพร้อมใช้งานกว่า 22 โปรเจกต์",
     ex_subtitle: "คลิกเลือกดูโค้ด Instruction List (.il) ตัวอย่างที่มาพร้อมกับโปรแกรม สามารถคัดลอกหรือเปิดจากโฟลเดอร์ example/ ในโปรแกรมเพื่อจำลองการทำงานได้ทันที",
     ex_tab_0: "01 • Motor Start/Stop",
     ex_tab_1: "02 • Star-Delta Timer",
@@ -182,7 +189,7 @@ const I18N = {
     rm_p2_title: "Strict IEC Validator, Canvas v2 & Stability",
     rm_p2_l1: "ระบบตรวจสอบวงจร IEC 61131-3 Strict Ladder Validator & Topology Engine",
     rm_p2_l2: "อัปเกรดแคนวาส Ladder v2, ระบบ Copy/Paste และธีม Modern Dark UI",
-    rm_p2_l3: "ทดสอบความเสถียรข้ามแพลตฟอร์ม Windows 10/11 & Linux ก่อนปล่อย v1.0.0",
+    rm_p2_l3: "รองรับ Windows 10/11 & Linux (Ubuntu 22.04+ / GLIBC 2.35+) พร้อมตัวอย่างวงจร 22 โปรเจกต์",
     rm_p3_badge: "🎯 เป้าหมายถัดไป (Official Release)",
     rm_p3_title: "Official Public Release & Next-Gen MCU",
     rm_p3_l1: "เปิดตัวเวอร์ชันทางการ (v1.0.0) พร้อมระบบอัปเดตออนไลน์อัตโนมัติเต็มรูปแบบ",
@@ -208,13 +215,13 @@ const I18N = {
     dl_win_sub: "สำหรับ Windows 10 / 11 (64-bit)",
     dl_win_l1: "ไฟล์โปรแกรมพร้อมรัน (laduino-plc.exe)",
     dl_win_l2: "รวมไฟล์เฟิร์มแวร์ RP2040 (.uf2) ในตัว",
-    dl_win_l3: "รวมตัวอย่างวงจร Ladder มาตรฐานครบชุด",
+    dl_win_l3: "รวมตัวอย่างวงจร Ladder มาตรฐานครบ 22 โปรเจกต์",
     dl_win_btn: "⬇ ดาวน์โหลดสำหรับ Windows",
 
-    dl_lin_sub: "สำหรับ Ubuntu / Debian / Arch / Fedora (x86_64)",
+    dl_lin_sub: "สำหรับ Ubuntu 22.04+ / Debian 12+ / Arch / Fedora (x86_64, GLIBC 2.35+)",
     dl_lin_l1: "ไบนารีเนทีฟความเร็วสูง (wgpu / X11)",
     dl_lin_l2: "รองรับพอร์ต USB-CDC (/dev/ttyACM*) อัตโนมัติ",
-    dl_lin_l3: "รวมไฟล์เฟิร์มแวร์ .uf2 และตัวอย่างครบชุด",
+    dl_lin_l3: "รวมไฟล์เฟิร์มแวร์ .uf2 และตัวอย่างครบ 22 โปรเจกต์",
     dl_lin_btn: "⬇ ดาวน์โหลดสำหรับ Linux",
 
     dl_fw_sub: "32-bit Micro-VM Runtime สำหรับ Raspberry Pi Pico",
@@ -320,6 +327,10 @@ const I18N = {
     wn2_desc: "Upgraded CAD-grade canvas rendering with system clipboard Copy/Paste for rungs and elements, smoother selection & wiring interaction, and faster keyboard-first ladder editing.",
     wn3_title: "Refined Modern Dark UI Theme",
     wn3_desc: "Higher-contrast slate-dark palette (Modern Theme) with crisper hover/active focus states and cleaner right-hand inspector panels to reduce eye strain during long PLC debugging sessions.",
+    ide_win_title: "LaduinoPLC v0.2.0 — Modern Dark Canvas & STRICT_EDITOR Preview",
+    ide_btn_valid: "✔ Valid Rung",
+    ide_btn_err: "⚠ Trigger Strict Error",
+    ide_diag_hdr: "🛡️ STRICT_EDITOR Validator",
 
     start_tag: "GETTING STARTED",
     start_title: "Get Started with LaduinoPLC in 4 Simple Steps",
@@ -327,7 +338,7 @@ const I18N = {
 
     s1_title: "Download & Launch",
     s1_desc: "Download the latest Windows or Linux archive from GitHub Releases, extract it, and run laduino-plc — no external runtime dependencies required.",
-    s1_box: "Starts directly with a clean New Ladder (1 empty network), or browse 17+ ready-to-run circuits under the Examples menu.",
+    s1_box: "Starts directly with a clean New Ladder (1 empty network), or browse 22 ready-to-run circuits under the Examples menu.",
 
     s2_title: "Place Elements & Assign IEC Addresses",
     s2_desc: "Pick Contacts, Coils, or Function Blocks from the left panel and drop them onto a rung. Double-click any element to configure its IEC address (%IX0.0, %QX0.0, T0) and Symbol.",
@@ -344,6 +355,9 @@ const I18N = {
     hw_tag: "HARDWARE & MEMORY MAP",
     hw_title: "Standard Pinout & Runtime Configurable I/O (RP2040 Micro-VM)",
     hw_subtitle: "Default hardware pin assignments for Raspberry Pi Pico (RP2040) — all GPIO & RS-485 pins are runtime-configurable from the IDE without rebuilding firmware.",
+    hw_tab_map: "📊 Memory Map & Pinout",
+    hw_tab_config: "🔧 Interactive Pin Configurator",
+    hw_tab_wiring: "🔌 Hardware Wiring Diagrams",
     th_region: "Memory Region",
     th_iec: "IEC 61131-3 Address",
     th_alias: "PLC Alias",
@@ -387,7 +401,7 @@ const I18N = {
     wire_3_desc: "Connect a 3.3V MAX3485 / MAX485 transceiver to UART1: choose GP8(TX)/GP9(RX) or GP4(TX)/GP5(RX), DE/RE pin (Auto or GP6/GP7/GP16), and Baud Rate 9600..115200 in the UI.",
 
     ex_tag: "BUNDLED IEC 61131-3 EXAMPLES",
-    ex_title: "17+ Ready-to-Run Industrial Ladder Examples",
+    ex_title: "22 Ready-to-Run Industrial Ladder Examples",
     ex_subtitle: "Click any tab below to inspect the IEC 61131-3 Instruction List (.il) code bundled in the example/ directory.",
     ex_tab_0: "01 • Motor Start/Stop",
     ex_tab_1: "02 • Star-Delta Timer",
@@ -407,7 +421,7 @@ const I18N = {
     rm_p2_title: "Strict IEC Validator, Canvas v2 & Stability",
     rm_p2_l1: "IEC 61131-3 Strict Ladder Validator & topology rule engine",
     rm_p2_l2: "Upgraded Ladder Canvas v2, Clipboard Copy/Paste & Modern Dark UI",
-    rm_p2_l3: "Cross-platform verification (Windows 10/11 & Linux) ahead of v1.0.0",
+    rm_p2_l3: "Cross-platform support for Windows 10/11 & Linux (Ubuntu 22.04+ / GLIBC 2.35+) + 22 examples",
     rm_p3_badge: "🎯 Upcoming (Official Release)",
     rm_p3_title: "Official Public Release & Next-Gen MCU",
     rm_p3_l1: "Official v1.0.0 stable release with full online auto-updater support",
@@ -433,13 +447,13 @@ const I18N = {
     dl_win_sub: "For Windows 10 / 11 (64-bit)",
     dl_win_l1: "Standalone executable (laduino-plc.exe)",
     dl_win_l2: "Includes bundled RP2040 .uf2 firmware",
-    dl_win_l3: "Includes 17+ IEC 61131-3 example programs",
+    dl_win_l3: "Includes 22 IEC 61131-3 example programs",
     dl_win_btn: "⬇ Download for Windows",
 
-    dl_lin_sub: "For Ubuntu / Debian / Arch / Fedora (x86_64)",
+    dl_lin_sub: "For Ubuntu 22.04+ / Debian 12+ / Arch / Fedora (x86_64, GLIBC 2.35+)",
     dl_lin_l1: "Fast native binary (wgpu / X11)",
     dl_lin_l2: "Automatic USB-CDC (/dev/ttyACM*) detection",
-    dl_lin_l3: "Includes bundled .uf2 firmware & examples",
+    dl_lin_l3: "Includes bundled .uf2 firmware & 22 examples",
     dl_lin_btn: "⬇ Download for Linux",
 
     dl_fw_sub: "32-bit Micro-VM Runtime for Raspberry Pi Pico",
@@ -691,6 +705,7 @@ function setLanguage(lang) {
   }
 
   renderExample(currentExampleIdx);
+  renderIdeShowcase();
 }
 
 function applySiteConfig() {
@@ -831,12 +846,176 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  // Initialize Interactive IDE v0.2.0 Showcase
+  initIdeShowcase();
+
+  // Initialize Hardware Pill Tabs
+  initHardwareTabs();
+
+  // Copy SHA-256 Checksum Handlers
+  document.querySelectorAll(".checksum-copy-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const targetId = btn.getAttribute("data-copy-target");
+      const codeEl = targetId ? document.getElementById(targetId) : null;
+      if (!codeEl) return;
+      navigator.clipboard?.writeText((codeEl.textContent || "").trim());
+      btn.textContent = I18N[currentLang].btn_copied;
+      setTimeout(() => {
+        btn.textContent = I18N[currentLang].btn_copy_id;
+      }, 1800);
+    });
+  });
+
+  // Back-to-Top Floating Button
+  const backToTopBtn = document.getElementById("back-to-top-btn");
+  if (backToTopBtn) {
+    const toggleBackToTop = () => {
+      backToTopBtn.classList.toggle("visible", window.scrollY > 500);
+    };
+    window.addEventListener("scroll", toggleBackToTop, { passive: true });
+    toggleBackToTop();
+    backToTopBtn.addEventListener("click", () => {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+  }
+
   // Initialize Interactive Configure RP2040 Hardware I/O Pins Showcase
   initIoConfigShowcase();
 
   // Initialize Visitor & Download Analytics
   initVisitorAnalytics();
 });
+
+let ideShowcaseMode = "valid";
+
+function renderIdeShowcase() {
+  const el1 = document.getElementById("ide-el-1");
+  const el2 = document.getElementById("ide-el-2");
+  const wireMid = document.getElementById("ide-wire-mid");
+  const errRing = document.getElementById("ide-err-ring");
+  const lbl1 = document.getElementById("ide-el-1-lbl");
+  const lbl2 = document.getElementById("ide-el-2-lbl");
+  const listEl = document.getElementById("ide-validator-list");
+  const btnValid = document.getElementById("btn-ide-valid");
+  const btnErr = document.getElementById("btn-ide-err");
+
+  if (!listEl) return;
+
+  const isErr = ideShowcaseMode === "error";
+
+  btnValid?.classList.toggle("active", !isErr);
+  btnErr?.classList.toggle("active", isErr);
+
+  if (errRing) {
+    errRing.style.display = isErr ? "block" : "none";
+  }
+
+  if (el1) {
+    el1.innerHTML = isErr
+      ? `<path d="M 94 42 C 82 50, 82 70, 94 78" fill="none" stroke="#ef4444" stroke-width="3.5" stroke-linecap="round" />` +
+        `<path d="M 114 42 C 126 50, 126 70, 114 78" fill="none" stroke="#ef4444" stroke-width="3.5" stroke-linecap="round" />`
+      : `<line x1="90" y1="42" x2="90" y2="78" stroke="#38bdf8" stroke-width="3.5" stroke-linecap="round" />` +
+        `<line x1="118" y1="42" x2="118" y2="78" stroke="#38bdf8" stroke-width="3.5" stroke-linecap="round" />`;
+  }
+
+  if (el2) {
+    const col2 = isErr ? "#f59e0b" : "#38bdf8";
+    el2.querySelectorAll("line").forEach((ln) => ln.setAttribute("stroke", col2));
+  }
+
+  if (wireMid) {
+    wireMid.setAttribute("stroke", isErr ? "#ef4444" : "#10e182");
+  }
+
+  if (lbl1) {
+    lbl1.textContent = isErr ? "%QX0.0" : "%IX0.0";
+    lbl1.setAttribute("fill", isErr ? "#ef4444" : "#38bdf8");
+  }
+
+  if (lbl2) {
+    lbl2.textContent = "%IX0.1";
+    lbl2.setAttribute("fill", isErr ? "#f59e0b" : "#38bdf8");
+  }
+
+  const isTh = currentLang === "th";
+  if (!isErr) {
+    listEl.innerHTML = `
+      <div class="ide-diag-item ok">
+        ${
+          isTh
+            ? "✔ [OK] โครงสร้าง Topology ถูกต้องตาม IEC 61131-3 — 0 Errors"
+            : "✔ [OK] Topology valid (IEC 61131-3) — 0 Errors"
+        }
+      </div>
+      <div class="ide-diag-item info">
+        ${
+          isTh
+            ? "ℹ [INFO] พร้อมคอมไพล์เป็น 32-bit Bytecode (CRC16 Verified)"
+            : "ℹ [INFO] Ready to compile to 32-bit Bytecode (CRC16 Verified)"
+        }
+      </div>
+    `;
+  } else {
+    listEl.innerHTML = `
+      <div class="ide-diag-item err">
+        ${
+          isTh
+            ? "✖ [ERR-01] STRICT_EDITOR: ห้ามวาง Output Coil (%QX0.0) หน้าหน้าสัมผัส Contact (%IX0.1)"
+            : "✖ [ERR-01] STRICT_EDITOR: Output Coil (%QX0.0) cannot precede Contact (%IX0.1)"
+        }
+      </div>
+      <div class="ide-diag-item info">
+        ${
+          isTh
+            ? "ℹ [GUARD] ระงับการคอมไพล์อัตโนมัติ — ย้าย Coil ไปไว้ชิดรางขวา (L2) เพื่อแก้ไข"
+            : "ℹ [GUARD] Compilation blocked — move Output Coil to the right-hand rail (L2) to fix"
+        }
+      </div>
+    `;
+  }
+}
+
+function initIdeShowcase() {
+  const btnValid = document.getElementById("btn-ide-valid");
+  const btnErr = document.getElementById("btn-ide-err");
+  if (!btnValid || !btnErr) return;
+
+  btnValid.addEventListener("click", () => {
+    ideShowcaseMode = "valid";
+    renderIdeShowcase();
+  });
+
+  btnErr.addEventListener("click", () => {
+    ideShowcaseMode = "error";
+    renderIdeShowcase();
+  });
+
+  renderIdeShowcase();
+}
+
+function initHardwareTabs() {
+  const tabs = document.querySelectorAll(".hw-tab");
+  const panels = document.querySelectorAll(".hw-tab-panel");
+  if (!tabs.length || !panels.length) return;
+
+  tabs.forEach((tab) => {
+    tab.addEventListener("click", () => {
+      const target = tab.getAttribute("data-hw-tab");
+      tabs.forEach((t) => t.classList.toggle("active", t === tab));
+      panels.forEach((p) => {
+        p.classList.toggle("active", p.getAttribute("data-hw-panel") === target);
+      });
+    });
+  });
+}
+
+function formatBytes(bytes) {
+  const num = Number(bytes || 0);
+  if (!num || num <= 0) return "";
+  if (num >= 1024 * 1024) return `${(num / (1024 * 1024)).toFixed(1)} MB`;
+  if (num >= 1024) return `${Math.round(num / 1024)} KB`;
+  return `${num} B`;
+}
 
 /**
  * Interactive "Configure RP2040 Hardware I/O Pins" Showcase in #hardware section
@@ -1134,15 +1313,36 @@ function initVisitorAnalytics() {
             const name = (asset.name || "").toLowerCase();
             const url = asset.browser_download_url;
             if (!url) return;
+
+            const sizeStr = formatBytes(asset.size);
+            const dateStr = asset.updated_at ? String(asset.updated_at).slice(0, 10) : "";
+            const metaText = [sizeStr, dateStr].filter(Boolean).join(" • ");
+            const digest =
+              typeof asset.digest === "string" && asset.digest.trim()
+                ? asset.digest.trim().replace(/^sha256:/i, "")
+                : "";
+
             if (name.includes("windows-msvc") && name.endsWith(".zip")) {
               const winLink = document.getElementById("dl-win-link");
               if (winLink) winLink.setAttribute("href", url);
+              const metaWin = document.getElementById("meta-dl-win");
+              if (metaWin && metaText) metaWin.textContent = metaText;
+              const shaWin = document.getElementById("sha-win-code");
+              if (shaWin && digest) shaWin.textContent = digest;
             } else if (name.includes("linux") && name.endsWith(".tar.gz")) {
               const linLink = document.getElementById("dl-lin-link");
               if (linLink) linLink.setAttribute("href", url);
+              const metaLin = document.getElementById("meta-dl-lin");
+              if (metaLin && metaText) metaLin.textContent = metaText;
+              const shaLin = document.getElementById("sha-lin-code");
+              if (shaLin && digest) shaLin.textContent = digest;
             } else if (name.endsWith(".uf2")) {
               const fwLink = document.getElementById("dl-fw-link");
               if (fwLink) fwLink.setAttribute("href", url);
+              const metaFw = document.getElementById("meta-dl-fw");
+              if (metaFw && metaText) metaFw.textContent = metaText;
+              const shaFw = document.getElementById("sha-fw-code");
+              if (shaFw && digest) shaFw.textContent = digest;
             }
           });
 

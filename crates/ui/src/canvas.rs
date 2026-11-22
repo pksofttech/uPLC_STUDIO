@@ -482,11 +482,156 @@ enum CanvasAction {
     DeleteSelectedElements,
     DuplicateRung(usize),
     DeleteRung(usize),
+    MoveRungUp(usize),
+    MoveRungDown(usize),
+    InsertRungBelow(usize),
     DebugToggleBit(String),
     DebugForceBit(String, bool),
     DebugUnforceBit(String),
     DebugClearAllForces,
     SwitchToEditMode(Option<u64>),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct SelectHudTelemetry {
+    is_on: bool,
+    forced: Option<bool>,
+    detail_text: String,
+    timer_progress: Option<f32>,
+}
+
+fn resolve_select_hud_telemetry(elem: &LadderElement, doc: &Document) -> SelectHudTelemetry {
+    let addr = elem.name.trim();
+    let upper = addr.to_ascii_uppercase();
+    let is_on = doc.simulator.get_var_value(addr);
+    let forced = my_canvas_core::BytecodeCompiler::parse_direct_address(&upper, false)
+        .and_then(|(vm_addr, _, _)| doc.simulator.is_bit_forced(vm_addr));
+
+    let mut timer_progress = None;
+    let detail_text = match elem.element_type {
+        TypeTag::Ton | TypeTag::Tof | TypeTag::Tp => {
+            let accum = doc
+                .simulator
+                .timers
+                .get(&upper)
+                .map(|(acc, _)| *acc as i32)
+                .unwrap_or(elem.current_accum);
+            if elem.preset_value > 0 {
+                timer_progress = Some((accum as f32 / elem.preset_value as f32).clamp(0.0, 1.0));
+            }
+            format!("{}/{}ms", accum, elem.preset_value)
+        }
+        TypeTag::Ctu | TypeTag::Ctd | TypeTag::Ctud => {
+            let count = doc
+                .simulator
+                .counters
+                .get(&upper)
+                .map(|(cnt, _, _)| *cnt)
+                .unwrap_or(elem.current_accum);
+            format!("{}/{}", count, elem.preset_value)
+        }
+        TypeTag::Move
+        | TypeTag::Math
+        | TypeTag::Compare
+        | TypeTag::Pid
+        | TypeTag::Scale
+        | TypeTag::Limit
+        | TypeTag::Adc
+        | TypeTag::Pwm
+        | TypeTag::Bitwise
+        | TypeTag::Select
+        | TypeTag::InRange
+        | TypeTag::IncDec => {
+            if doc.simulator.registers.contains_key(&upper)
+                || upper.starts_with("%MW")
+                || upper.starts_with("%IW")
+                || upper.starts_with("%QW")
+                || upper.starts_with('D')
+                || upper.starts_with("AI")
+                || upper.starts_with("AO")
+            {
+                format!("= {}", doc.simulator.read_word(addr))
+            } else if is_on {
+                "ON".to_string()
+            } else {
+                "OFF".to_string()
+            }
+        }
+        _ => {
+            if is_on {
+                "ON".to_string()
+            } else {
+                "OFF".to_string()
+            }
+        }
+    };
+
+    SelectHudTelemetry {
+        is_on,
+        forced,
+        detail_text,
+        timer_progress,
+    }
+}
+
+fn compute_select_hud_layout(
+    sel_rect: Rect,
+    viewport_rect: Rect,
+    hud_w: f32,
+    hud_h: f32,
+) -> (Rect, bool, f32) {
+    let gap = 8.0;
+    let is_above = sel_rect.min.y - hud_h - gap > viewport_rect.min.y + 38.0;
+    let hud_y = if is_above {
+        sel_rect.min.y - hud_h - gap
+    } else {
+        sel_rect.max.y + gap
+    };
+    let min_cx = viewport_rect.min.x + hud_w * 0.5 + 8.0;
+    let max_cx = (viewport_rect.max.x - hud_w * 0.5 - 8.0).max(min_cx);
+    let hud_cx = sel_rect.center().x.clamp(min_cx, max_cx);
+    let hud_rect =
+        Rect::from_center_size(pos2(hud_cx, hud_y + hud_h * 0.5), vec2(hud_w, hud_h));
+    let caret_x = sel_rect
+        .center()
+        .x
+        .clamp(hud_rect.min.x + 14.0, hud_rect.max.x - 14.0);
+    (hud_rect, is_above, caret_x)
+}
+
+fn network_badge_rail_color(
+    is_selected: bool,
+    sim_active: bool,
+    is_energized: bool,
+    val_col: Option<Color32>,
+    palette: ThemePalette,
+) -> Color32 {
+    if let Some(vc) = val_col {
+        vc
+    } else if sim_active && is_energized {
+        palette.accent_ok
+    } else if is_selected {
+        palette.rung_badge_sel_border
+    } else {
+        palette.rung_badge_border
+    }
+}
+
+fn compute_network_action_pill_rect(
+    header_top_y: f32,
+    right_x: f32,
+    btn_count: usize,
+    zoom: f32,
+) -> Rect {
+    let s = zoom.clamp(0.75, 1.35);
+    let btn_sz = 20.0 * s;
+    let gap = 3.0 * s;
+    let pad_x = 4.0 * s;
+    let pad_y = 3.0 * s;
+    let total_w =
+        pad_x * 2.0 + btn_count as f32 * btn_sz + btn_count.saturating_sub(1) as f32 * gap;
+    let total_h = btn_sz + pad_y * 2.0;
+    Rect::from_min_size(pos2(right_x - total_w, header_top_y), vec2(total_w, total_h))
 }
 
 impl CanvasViewport {
@@ -508,6 +653,528 @@ impl CanvasViewport {
         self.target_zoom = fit_z;
         self.zoom_anchor = None;
         self.pan_offset = vec2(14.0, 16.0);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_select_debug_hud(
+        &self,
+        ui: &Ui,
+        painter: &Painter,
+        doc: &Document,
+        sel_id: u64,
+        sel_elem: &LadderElement,
+        sel_rect: Rect,
+        viewport_rect: Rect,
+        hover_pos: Option<Pos2>,
+        is_clicked: bool,
+        palette: ThemePalette,
+        any_interactive_hovered: &mut bool,
+    ) -> Option<CanvasAction> {
+        struct SelectHudBtn {
+            label: &'static str,
+            icon: Option<VectorIcon>,
+            width: f32,
+            accent: Color32,
+            enabled: bool,
+            active: bool,
+            action: CanvasAction,
+        }
+
+        let elem_addr = sel_elem.name.trim().to_string();
+        let telemetry = resolve_select_hud_telemetry(sel_elem, doc);
+
+        let badge_label = format!("{} · {}", elem_addr, telemetry.detail_text);
+        let badge_w = (badge_label.chars().count() as f32 * 6.4
+            + 28.0
+            + if telemetry.forced.is_some() { 26.0 } else { 0.0 })
+        .clamp(108.0, 210.0);
+
+        let btns: Vec<SelectHudBtn> = if self.is_online_hw_mode {
+            vec![
+                SelectHudBtn {
+                    label: "Force 1",
+                    icon: None,
+                    width: 56.0,
+                    accent: palette.accent_ok,
+                    enabled: true,
+                    active: telemetry.forced == Some(true),
+                    action: CanvasAction::DebugForceBit(elem_addr.clone(), true),
+                },
+                SelectHudBtn {
+                    label: "Force 0",
+                    icon: None,
+                    width: 56.0,
+                    accent: palette.accent_danger,
+                    enabled: true,
+                    active: telemetry.forced == Some(false),
+                    action: CanvasAction::DebugForceBit(elem_addr.clone(), false),
+                },
+                SelectHudBtn {
+                    label: "Unforce",
+                    icon: None,
+                    width: 58.0,
+                    accent: palette.accent_warn,
+                    enabled: true,
+                    active: false,
+                    action: CanvasAction::DebugUnforceBit(elem_addr.clone()),
+                },
+                SelectHudBtn {
+                    label: "Edit",
+                    icon: Some(VectorIcon::EditPencil),
+                    width: 48.0,
+                    accent: palette.accent_heading,
+                    enabled: true,
+                    active: false,
+                    action: CanvasAction::SwitchToEditMode(Some(sel_id)),
+                },
+            ]
+        } else {
+            vec![
+                SelectHudBtn {
+                    label: "Toggle",
+                    icon: None,
+                    width: 52.0,
+                    accent: if telemetry.is_on {
+                        palette.accent_ok
+                    } else {
+                        palette.accent_heading
+                    },
+                    enabled: true,
+                    active: false,
+                    action: CanvasAction::DebugToggleBit(elem_addr.clone()),
+                },
+                SelectHudBtn {
+                    label: "Force 1",
+                    icon: None,
+                    width: 54.0,
+                    accent: palette.accent_warn,
+                    enabled: true,
+                    active: telemetry.forced == Some(true),
+                    action: CanvasAction::DebugForceBit(elem_addr.clone(), true),
+                },
+                SelectHudBtn {
+                    label: "Force 0",
+                    icon: None,
+                    width: 54.0,
+                    accent: palette.accent_danger,
+                    enabled: true,
+                    active: telemetry.forced == Some(false),
+                    action: CanvasAction::DebugForceBit(elem_addr.clone(), false),
+                },
+                SelectHudBtn {
+                    label: "Unforce",
+                    icon: None,
+                    width: 56.0,
+                    accent: palette.accent_warn,
+                    enabled: telemetry.forced.is_some(),
+                    active: false,
+                    action: CanvasAction::DebugUnforceBit(elem_addr.clone()),
+                },
+                SelectHudBtn {
+                    label: "",
+                    icon: Some(VectorIcon::EditPencil),
+                    width: 26.0,
+                    accent: palette.accent_heading,
+                    enabled: true,
+                    active: false,
+                    action: CanvasAction::SwitchToEditMode(Some(sel_id)),
+                },
+            ]
+        };
+
+        let hud_h = 34.0;
+        let btn_sum_w: f32 = btns.iter().map(|b| b.width).sum();
+        let btn_gaps = btns.len().saturating_sub(1) as f32 * 4.0;
+        let hud_w = 6.0 + badge_w + 9.0 + btn_sum_w + btn_gaps + 6.0;
+
+        let (hud_rect, is_above, caret_x) =
+            compute_select_hud_layout(sel_rect, viewport_rect, hud_w, hud_h);
+        if hover_pos.map_or(false, |hp| hud_rect.contains(hp)) {
+            *any_interactive_hovered = true;
+        }
+
+        // Layered drop shadow
+        let shadow_alpha = if palette.is_light() { 26 } else { 90 };
+        painter.rect_filled(
+            hud_rect.translate(vec2(0.0, 3.0)),
+            CornerRadius::same(7),
+            Color32::from_black_alpha(shadow_alpha),
+        );
+
+        let card_fill = palette
+            .banner_bg
+            .gamma_multiply(if palette.is_light() { 0.99 } else { 0.97 });
+        let border_col = if telemetry.forced.is_some() || self.is_online_hw_mode {
+            palette.accent_warn
+        } else if telemetry.is_on {
+            palette.accent_ok
+        } else {
+            palette.accent_heading
+        };
+
+        // Main Pro CAD Card
+        painter.rect(
+            hud_rect,
+            CornerRadius::same(7),
+            card_fill,
+            Stroke::new(1.25, border_col),
+            StrokeKind::Inside,
+        );
+
+        // Crisp 2px top accent rail
+        let accent_rail = Rect::from_min_max(
+            pos2(hud_rect.min.x + 8.0, hud_rect.min.y + 1.0),
+            pos2(hud_rect.max.x - 8.0, hud_rect.min.y + 3.0),
+        );
+        painter.rect_filled(accent_rail, CornerRadius::same(1), border_col);
+
+        // Triangular pointer caret anchored toward the selected element
+        let caret_half_w = 5.0;
+        let caret_h = 5.0;
+        let (p_left, p_right, p_tip) = if is_above {
+            let y_base = hud_rect.max.y - 1.0;
+            (
+                pos2(caret_x - caret_half_w, y_base),
+                pos2(caret_x + caret_half_w, y_base),
+                pos2(caret_x, y_base + caret_h),
+            )
+        } else {
+            let y_base = hud_rect.min.y + 1.0;
+            (
+                pos2(caret_x - caret_half_w, y_base),
+                pos2(caret_x + caret_half_w, y_base),
+                pos2(caret_x, y_base - caret_h),
+            )
+        };
+        painter.add(egui::Shape::convex_polygon(
+            vec![p_left, p_right, p_tip],
+            card_fill,
+            Stroke::NONE,
+        ));
+        painter.line_segment([p_left, p_tip], Stroke::new(1.25, border_col));
+        painter.line_segment([p_tip, p_right], Stroke::new(1.25, border_col));
+
+        // Left Telemetry Pill
+        let pill_h = 24.0;
+        let badge_rect = Rect::from_min_size(
+            pos2(hud_rect.min.x + 6.0, hud_rect.center().y - pill_h * 0.5),
+            vec2(badge_w, pill_h),
+        );
+        let badge_border = if telemetry.forced.is_some() {
+            palette.accent_warn
+        } else {
+            palette.rung_badge_border
+        };
+        painter.rect(
+            badge_rect,
+            CornerRadius::same(4),
+            palette.pill_bg,
+            Stroke::new(1.0, badge_border),
+            StrokeKind::Inside,
+        );
+
+        // Glowing LED dot
+        let led_center = pos2(badge_rect.min.x + 9.0, badge_rect.center().y);
+        if telemetry.is_on {
+            painter.circle_filled(led_center, 4.4, palette.accent_ok.gamma_multiply(0.30));
+            painter.circle_filled(led_center, 2.7, palette.accent_ok);
+        } else {
+            painter.circle_stroke(
+                led_center,
+                2.6,
+                Stroke::new(1.1, palette.rung_text_dim),
+            );
+        }
+
+        // Monospace address + live telemetry text
+        let label_fg = if telemetry.is_on {
+            palette.accent_ok
+        } else {
+            palette.text_primary
+        };
+        painter.text(
+            pos2(badge_rect.min.x + 17.0, badge_rect.center().y),
+            Align2::LEFT_CENTER,
+            &badge_label,
+            FontId::monospace(9.5),
+            label_fg,
+        );
+
+        // Optional inline Forced badge ("F1" / "F0")
+        if let Some(forced_val) = telemetry.forced {
+            let f_tag = if forced_val { "F1" } else { "F0" };
+            let f_rect = Rect::from_min_size(
+                pos2(badge_rect.max.x - 23.0, badge_rect.center().y - 7.5),
+                vec2(19.0, 15.0),
+            );
+            painter.rect(
+                f_rect,
+                CornerRadius::same(3),
+                palette.accent_warn.gamma_multiply(0.24),
+                Stroke::new(0.9, palette.accent_warn),
+                StrokeKind::Inside,
+            );
+            painter.text(
+                f_rect.center(),
+                Align2::CENTER_CENTER,
+                f_tag,
+                FontId::monospace(8.5),
+                palette.accent_warn,
+            );
+        }
+
+        // Optional Timer progress bar along bottom edge of telemetry pill
+        if let Some(progress) = telemetry.timer_progress {
+            let bar_total_w = (badge_rect.width() - 6.0).max(0.0);
+            let bar_w = bar_total_w * progress;
+            let bar_col = if telemetry.is_on {
+                palette.accent_ok
+            } else {
+                palette.accent_heading
+            };
+            if bar_w > 0.5 {
+                let bar_rect = Rect::from_min_max(
+                    pos2(badge_rect.min.x + 3.0, badge_rect.max.y - 2.5),
+                    pos2(badge_rect.min.x + 3.0 + bar_w, badge_rect.max.y - 0.5),
+                );
+                painter.rect_filled(bar_rect, CornerRadius::same(1), bar_col);
+            }
+        }
+
+        // Hairline Vertical Divider
+        let div_x = badge_rect.max.x + 4.5;
+        painter.line_segment(
+            [
+                pos2(div_x, hud_rect.min.y + 7.0),
+                pos2(div_x, hud_rect.max.y - 7.0),
+            ],
+            Stroke::new(1.0, palette.rung_badge_border),
+        );
+
+        // Tactile CAD Action Buttons
+        let mut chosen_action = None;
+        let mut cursor_x = badge_rect.max.x + 9.0;
+        let btn_h = 24.0;
+        let btn_y = hud_rect.center().y - btn_h * 0.5;
+
+        for btn in btns {
+            let b_rect = Rect::from_min_size(pos2(cursor_x, btn_y), vec2(btn.width, btn_h));
+            cursor_x += btn.width + 4.0;
+
+            let b_hov = btn.enabled && hover_pos.map_or(false, |hp| b_rect.contains(hp));
+            if b_hov {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+
+            let (bg, stroke) = if !btn.enabled {
+                (palette.pill_bg.gamma_multiply(0.45), Stroke::NONE)
+            } else if btn.active {
+                (
+                    btn.accent.gamma_multiply(0.24),
+                    Stroke::new(1.25, btn.accent),
+                )
+            } else if b_hov {
+                (
+                    btn.accent.gamma_multiply(0.22),
+                    Stroke::new(1.1, btn.accent),
+                )
+            } else {
+                (palette.pill_bg, Stroke::new(1.0, palette.rung_badge_border))
+            };
+
+            painter.rect(b_rect, CornerRadius::same(4), bg, stroke, StrokeKind::Inside);
+
+            if btn.active && btn.enabled {
+                let led_strip = Rect::from_min_max(
+                    pos2(b_rect.min.x + 3.0, b_rect.max.y - 2.5),
+                    pos2(b_rect.max.x - 3.0, b_rect.max.y - 0.5),
+                );
+                painter.rect_filled(led_strip, CornerRadius::same(1), btn.accent);
+            }
+
+            let fg = if !btn.enabled {
+                palette.rung_text_dim.gamma_multiply(0.55)
+            } else if btn.active || b_hov {
+                if palette.is_light() {
+                    btn.accent
+                } else {
+                    Color32::WHITE
+                }
+            } else {
+                btn.accent
+            };
+
+            let has_label = !btn.label.is_empty();
+            if let Some(ic) = btn.icon {
+                let ic_x = if has_label {
+                    b_rect.min.x + 11.0
+                } else {
+                    b_rect.center().x
+                };
+                let ic_rect = Rect::from_center_size(pos2(ic_x, b_rect.center().y), vec2(13.0, 13.0));
+                paint_icon(painter, ic_rect, ic, fg);
+            }
+            if has_label {
+                let (tx, align) = if btn.icon.is_some() {
+                    (b_rect.min.x + 20.0, Align2::LEFT_CENTER)
+                } else {
+                    (b_rect.center().x, Align2::CENTER_CENTER)
+                };
+                painter.text(
+                    pos2(tx, b_rect.center().y),
+                    align,
+                    btn.label,
+                    FontId::proportional(10.0),
+                    fg,
+                );
+            }
+
+            if is_clicked && b_hov {
+                chosen_action = Some(btn.action);
+            }
+        }
+
+        chosen_action
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_network_inline_actions(
+        &self,
+        ui: &Ui,
+        painter: &Painter,
+        r_idx: usize,
+        total_rungs: usize,
+        is_rung_selected: bool,
+        header_top_y: f32,
+        right_x: f32,
+        hover_pos: Option<Pos2>,
+        is_clicked: bool,
+        palette: ThemePalette,
+        any_interactive_hovered: &mut bool,
+        pending_tooltip: &mut Option<(Pos2, Vec<String>, Color32)>,
+    ) -> Option<CanvasAction> {
+        struct NetActionBtn {
+            icon: VectorIcon,
+            enabled: bool,
+            accent: Color32,
+            action: CanvasAction,
+            tip: &'static str,
+        }
+
+        let btns = [
+            NetActionBtn {
+                icon: VectorIcon::MoveUp,
+                enabled: r_idx > 0,
+                accent: palette.accent_heading,
+                action: CanvasAction::MoveRungUp(r_idx),
+                tip: "Move Network Up",
+            },
+            NetActionBtn {
+                icon: VectorIcon::MoveDown,
+                enabled: r_idx + 1 < total_rungs,
+                accent: palette.accent_heading,
+                action: CanvasAction::MoveRungDown(r_idx),
+                tip: "Move Network Down",
+            },
+            NetActionBtn {
+                icon: VectorIcon::CopyDown,
+                enabled: true,
+                accent: palette.accent_heading,
+                action: CanvasAction::DuplicateRung(r_idx),
+                tip: "Duplicate Network Below",
+            },
+            NetActionBtn {
+                icon: VectorIcon::NewRung,
+                enabled: true,
+                accent: palette.accent_ok,
+                action: CanvasAction::InsertRungBelow(r_idx),
+                tip: "Insert New Network Below",
+            },
+            NetActionBtn {
+                icon: VectorIcon::DeleteRung,
+                enabled: true,
+                accent: palette.accent_danger,
+                action: CanvasAction::DeleteRung(r_idx),
+                tip: "Delete Network",
+            },
+        ];
+
+        let pill_rect =
+            compute_network_action_pill_rect(header_top_y, right_x, btns.len(), self.zoom);
+        if hover_pos.map_or(false, |hp| pill_rect.contains(hp)) {
+            *any_interactive_hovered = true;
+        }
+
+        // Subtle 2px drop shadow
+        painter.rect_filled(
+            pill_rect.translate(vec2(0.0, 2.0)),
+            CornerRadius::same(5),
+            Color32::from_black_alpha(if palette.is_light() { 24 } else { 80 }),
+        );
+
+        let pill_fill = palette
+            .banner_bg
+            .gamma_multiply(if palette.is_light() { 0.97 } else { 0.95 });
+        let pill_border = if is_rung_selected {
+            palette.rung_badge_sel_border.gamma_multiply(0.8)
+        } else {
+            palette.rung_badge_border
+        };
+        painter.rect(
+            pill_rect,
+            CornerRadius::same(5),
+            pill_fill,
+            Stroke::new(1.0, pill_border),
+            StrokeKind::Inside,
+        );
+
+        let s = self.zoom.clamp(0.75, 1.35);
+        let btn_sz = 20.0 * s;
+        let gap = 3.0 * s;
+        let pad_x = 4.0 * s;
+        let pad_y = 3.0 * s;
+
+        let mut chosen = None;
+        let mut cursor_x = pill_rect.min.x + pad_x;
+        let btn_y = pill_rect.min.y + pad_y;
+
+        for btn in btns {
+            let b_rect = Rect::from_min_size(pos2(cursor_x, btn_y), vec2(btn_sz, btn_sz));
+            cursor_x += btn_sz + gap;
+
+            let b_hov = btn.enabled && hover_pos.map_or(false, |hp| b_rect.contains(hp));
+            if b_hov {
+                painter.rect(
+                    b_rect,
+                    CornerRadius::same(3),
+                    btn.accent.gamma_multiply(0.22),
+                    Stroke::new(1.0, btn.accent),
+                    StrokeKind::Inside,
+                );
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                *pending_tooltip = Some((
+                    pos2(b_rect.min.x, b_rect.max.y + 6.0),
+                    vec![btn.tip.to_string()],
+                    btn.accent,
+                ));
+            }
+
+            let ic_col = if !btn.enabled {
+                palette.rung_text_dim.gamma_multiply(0.40)
+            } else if b_hov {
+                btn.accent
+            } else {
+                palette.text_primary.gamma_multiply(0.85)
+            };
+            let ic_rect = Rect::from_center_size(b_rect.center(), vec2(12.5 * s, 12.5 * s));
+            paint_icon(painter, ic_rect, btn.icon, ic_col);
+
+            if is_clicked && b_hov {
+                chosen = Some(btn.action);
+            }
+        }
+
+        chosen
     }
 
     pub fn set_target_zoom(&mut self, new_zoom: f32, anchor: Option<Pos2>) {
@@ -1126,6 +1793,7 @@ impl CanvasViewport {
         };
 
         // --- Render Rungs ---
+        let total_rungs = doc.program.rungs.len();
         for (r_idx, rung) in doc.program.rungs.iter().enumerate() {
             let is_rung_selected = doc.selected_rung_idx == Some(r_idx);
             let label_elem = rung.elements.iter().find(|e| e.element_type == TypeTag::Label);
@@ -1133,39 +1801,109 @@ impl CanvasViewport {
             let comment_offset = Self::rung_header_offset(rung);
             let has_header_bar = comment_offset > 0.0;
 
+            // 0a. Subtle Hairline Divider Between Networks
+            if r_idx > 0 {
+                let div_y = self.to_screen(pos2(0.0, cur_y - 9.0), origin).y;
+                let div_x0 = self.to_screen(pos2(margin_left + 12.0, 0.0), origin).x;
+                let div_x1 = self.to_screen(pos2(margin_right - 12.0, 0.0), origin).x;
+                let div_col = palette
+                    .rung_badge_border
+                    .gamma_multiply(if palette.is_light() { 0.55 } else { 0.40 });
+                let dash_len = 6.0 * self.zoom;
+                let dash_gap = 5.0 * self.zoom;
+                let mut dx = div_x0;
+                while dx < div_x1 {
+                    let seg_end = (dx + dash_len).min(div_x1);
+                    painter.line_segment(
+                        [pos2(dx, div_y), pos2(seg_end, div_y)],
+                        Stroke::new(1.0, div_col),
+                    );
+                    dx += dash_len + dash_gap;
+                }
+            }
+
+            // 0b. Subtle Network Row Framing (drawn before wires/elements)
+            let rung_body_h = rung
+                .elements
+                .iter()
+                .filter(|e| e.element_type != TypeTag::Label)
+                .map(|e| Self::element_height(e, cell_h))
+                .fold(cell_h, f32::max);
+            let rung_row_world = Rect::from_min_max(
+                pos2(12.0, cur_y - 2.0),
+                pos2(margin_right + 6.0, cur_y + comment_offset + rung_body_h + 2.0),
+            );
+            let rung_row_screen = Rect::from_min_max(
+                self.to_screen(rung_row_world.min, origin),
+                self.to_screen(rung_row_world.max, origin),
+            );
+            let rung_hovered = hover_pos.map_or(false, |hp| rung_row_screen.contains(hp));
+
+            if is_rung_selected {
+                painter.rect(
+                    rung_row_screen,
+                    CornerRadius::same(5),
+                    palette
+                        .accent_heading
+                        .gamma_multiply(if palette.is_light() { 0.05 } else { 0.06 }),
+                    Stroke::new(1.0, palette.rung_badge_sel_border.gamma_multiply(0.35)),
+                    StrokeKind::Inside,
+                );
+            } else if sim_active && rung.is_energized {
+                painter.rect(
+                    rung_row_screen,
+                    CornerRadius::same(5),
+                    palette
+                        .accent_ok
+                        .gamma_multiply(if palette.is_light() { 0.05 } else { 0.045 }),
+                    Stroke::new(1.0, palette.accent_ok.gamma_multiply(0.22)),
+                    StrokeKind::Inside,
+                );
+            } else if rung_hovered && !is_dragging {
+                painter.rect_filled(
+                    rung_row_screen,
+                    CornerRadius::same(5),
+                    palette.rung_badge_hov_bg.gamma_multiply(0.28),
+                );
+            }
+
             // Network Header Bar (Shows Flag Badge for Target Label + Network Comment)
             if has_header_bar {
                 let c_min = self.to_screen(pos2(margin_left + 8.0, cur_y + 2.0), origin);
                 let c_max = self.to_screen(pos2(margin_right - 8.0, cur_y + comment_offset - 3.0), origin);
                 let c_rect = Rect::from_two_pos(c_min, c_max);
                 let comment_hovered = hover_pos.map_or(false, |hp| c_rect.contains(hp));
-                painter.rect_filled(c_rect, 4.0 * self.zoom, palette.comment_bg);
+                let header_border = if comment_hovered {
+                    palette.accent_heading.gamma_multiply(0.55)
+                } else {
+                    palette.card_border.gamma_multiply(0.65)
+                };
+                painter.rect(
+                    c_rect,
+                    CornerRadius::same(4),
+                    palette.comment_bg,
+                    Stroke::new(1.0, header_border),
+                    StrokeKind::Inside,
+                );
 
                 let accent_bar = Rect::from_min_max(
                     c_rect.min,
-                    pos2(c_rect.min.x + 2.5 * self.zoom, c_rect.max.y),
+                    pos2(c_rect.min.x + 3.0 * self.zoom, c_rect.max.y),
                 );
-                painter.rect_filled(
-                    accent_bar,
-                    1.5 * self.zoom,
-                    if is_rung_selected {
-                        palette.accent_heading
-                    } else {
-                        palette.card_border
-                    },
-                );
+                let header_accent_col = if is_rung_selected {
+                    palette.accent_heading
+                } else if sim_active && rung.is_energized {
+                    palette.accent_ok
+                } else {
+                    palette.comment_fg.gamma_multiply(0.75)
+                };
+                painter.rect_filled(accent_bar, CornerRadius::same(2), header_accent_col);
                 if comment_hovered {
-                    painter.rect_stroke(
-                        c_rect,
-                        4.0 * self.zoom,
-                        Stroke::new(1.0, palette.accent_heading.gamma_multiply(0.45)),
-                        StrokeKind::Inside,
-                    );
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
 
                 let first_line_y = self.to_screen(pos2(0.0, cur_y + 12.5), origin).y;
-                let mut text_x = c_rect.min.x + 8.0 * self.zoom;
+                let mut text_x = c_rect.min.x + 9.0 * self.zoom;
 
                 // Prominent Flag Badge for Target Label
                 if let Some(lbl) = label_elem {
@@ -1232,7 +1970,7 @@ impl CanvasViewport {
             let rung_start_y = cur_y + comment_offset;
             let wire_y = rung_start_y + cell_h * 0.5;
 
-            // 1. Rung Number Badge on Left of L1 Rail
+            // 1. Pro Network Badge on Left of L1 Rail
             let r_badge_world = Rect::from_min_size(
                 pos2(18.0, rung_start_y + 12.0),
                 vec2(rung_header_w - 8.0, cell_h - 24.0),
@@ -1267,13 +2005,53 @@ impl CanvasViewport {
                 palette.rung_badge_border
             };
 
-            painter.rect_filled(r_badge_screen, 6.0 * self.zoom, badge_bg);
-            painter.rect_stroke(
+            painter.rect(
                 r_badge_screen,
-                6.0 * self.zoom,
-                Stroke::new(1.5 * self.zoom, badge_border),
+                CornerRadius::same(5),
+                badge_bg,
+                Stroke::new(1.25 * self.zoom, badge_border),
                 StrokeKind::Inside,
             );
+
+            // Left 3px vertical status rail inside badge
+            let rail_col = network_badge_rail_color(
+                is_rung_selected,
+                sim_active,
+                rung.is_energized,
+                rung_val_col,
+                palette,
+            );
+            let rail_rect = Rect::from_min_max(
+                pos2(r_badge_screen.min.x + 1.0, r_badge_screen.min.y + 3.0 * self.zoom),
+                pos2(
+                    r_badge_screen.min.x + 1.0 + 3.0 * self.zoom,
+                    r_badge_screen.max.y - 3.0 * self.zoom,
+                ),
+            );
+            painter.rect_filled(rail_rect, CornerRadius::same(1), rail_col);
+
+            // Live Power LED dot when simulation/online is active
+            if sim_active {
+                let led_c = pos2(
+                    r_badge_screen.min.x + 9.0 * self.zoom,
+                    r_badge_screen.min.y + 7.0 * self.zoom,
+                );
+                if rung.is_energized {
+                    painter.circle_filled(
+                        led_c,
+                        4.0 * self.zoom,
+                        palette.accent_ok.gamma_multiply(0.30),
+                    );
+                    painter.circle_filled(led_c, 2.4 * self.zoom, palette.accent_ok);
+                } else {
+                    painter.circle_stroke(
+                        led_c,
+                        2.2 * self.zoom,
+                        Stroke::new(1.0 * self.zoom, palette.rung_text_dim.gamma_multiply(0.55)),
+                    );
+                }
+            }
+
             if let Some(vc) = rung_val_col {
                 let dot_r = 4.5 * self.zoom;
                 let dot_c = pos2(
@@ -1296,25 +2074,20 @@ impl CanvasViewport {
                     }
                 }
             }
-            let top_sub = if label_elem.is_some() { "TARGET" } else { "NETWORK" };
+            let top_sub = if label_elem.is_some() { "TARGET" } else { "NET" };
+            let text_cx = r_badge_screen.center().x + 1.5 * self.zoom;
             painter.text(
-                pos2(
-                    r_badge_screen.center().x,
-                    r_badge_screen.center().y - 7.0 * self.zoom,
-                ),
+                pos2(text_cx, r_badge_screen.center().y - 7.0 * self.zoom),
                 Align2::CENTER_CENTER,
                 top_sub,
                 self.font_mono(7.5),
                 if label_elem.is_some() { palette.accent_heading } else { palette.rung_text_dim },
             );
             painter.text(
-                pos2(
-                    r_badge_screen.center().x,
-                    r_badge_screen.center().y + 7.0 * self.zoom,
-                ),
+                pos2(text_cx, r_badge_screen.center().y + 7.0 * self.zoom),
                 Align2::CENTER_CENTER,
                 format!("{:02}", r_idx + 1),
-                self.font_mono(13.0),
+                self.font_mono(13.5),
                 if is_rung_selected {
                     palette.rung_text_sel
                 } else {
@@ -1539,6 +2312,28 @@ impl CanvasViewport {
                 }
             }
 
+            // Inline Quick Actions Pill (Edit Mode, on selected or hovered Network)
+            if self.is_edit_mode && !is_dragging && (is_rung_selected || rung_hovered) {
+                let header_top_y = self.to_screen(pos2(0.0, cur_y + 2.0), origin).y;
+                let right_x = self.to_screen(pos2(margin_right - 10.0, 0.0), origin).x;
+                if let Some(net_act) = self.render_network_inline_actions(
+                    ui,
+                    &painter,
+                    r_idx,
+                    total_rungs,
+                    is_rung_selected,
+                    header_top_y,
+                    right_x,
+                    hover_pos,
+                    is_clicked,
+                    palette,
+                    &mut any_interactive_hovered,
+                    &mut pending_tooltip,
+                ) {
+                    action = Some(net_act);
+                }
+            }
+
             rung_y_spans.push((r_idx, rung_start_y, max_y));
             cur_y = max_y + 18.0;
         }
@@ -1726,152 +2521,20 @@ impl CanvasViewport {
                         cell_h,
                         sel_id,
                     ) {
-                        let elem_addr = sel_elem.name.trim().to_string();
-                        let hud_w = 356.0;
-                        let hud_h = 26.0;
-                        let hud_y = if sel_rect.min.y - hud_h - 6.0 > viewport_rect.min.y + 40.0 {
-                            sel_rect.min.y - hud_h - 5.0
-                        } else {
-                            sel_rect.max.y + 5.0
-                        };
-                        let hud_cx = sel_rect.center().x.clamp(
-                            viewport_rect.min.x + hud_w * 0.5 + 8.0,
-                            (viewport_rect.max.x - hud_w * 0.5 - 8.0)
-                                .max(viewport_rect.min.x + hud_w * 0.5 + 8.0),
-                        );
-                        let hud_rect = Rect::from_center_size(
-                            pos2(hud_cx, hud_y + hud_h * 0.5),
-                            vec2(hud_w, hud_h),
-                        );
-                        if hover_pos.map_or(false, |hp| hud_rect.contains(hp)) {
-                            any_interactive_hovered = true;
-                        }
-
-                        let mode_border_col = if self.is_online_hw_mode {
-                            palette.accent_warn
-                        } else {
-                            palette.accent_ok
-                        };
-                        painter.rect_filled(hud_rect, CornerRadius::same(6), palette.banner_bg);
-                        painter.rect_stroke(
-                            hud_rect,
-                            CornerRadius::same(6),
-                            Stroke::new(1.0, mode_border_col),
-                            StrokeKind::Inside,
-                        );
-
-                        // Address & Live State Badge on left
-                        let is_on = doc.simulator.get_var_value(&elem_addr);
-                        let badge_w = 104.0;
-                        let badge_rect = Rect::from_min_size(
-                            pos2(hud_rect.min.x + 4.0, hud_rect.min.y + 3.0),
-                            vec2(badge_w, hud_h - 6.0),
-                        );
-                        let state_col = if is_on {
-                            palette.accent_ok
-                        } else {
-                            palette.accent_heading
-                        };
-                        painter.rect_filled(
-                            badge_rect,
-                            CornerRadius::same(4),
-                            state_col.gamma_multiply(0.20),
-                        );
-                        painter.text(
-                            badge_rect.center(),
-                            Align2::CENTER_CENTER,
-                            format!(
-                                "{} · {}",
-                                elem_addr,
-                                if is_on { "ON" } else { "OFF" }
-                            ),
-                            FontId::monospace(9.5),
-                            state_col,
-                        );
-
-                        let debug_btns: [(&str, Color32, CanvasAction); 4] = if self.is_online_hw_mode {
-                            [
-                                (
-                                    "Force 1",
-                                    palette.accent_ok,
-                                    CanvasAction::DebugForceBit(elem_addr.clone(), true),
-                                ),
-                                (
-                                    "Force 0",
-                                    palette.accent_danger,
-                                    CanvasAction::DebugForceBit(elem_addr.clone(), false),
-                                ),
-                                (
-                                    "Unforce",
-                                    palette.accent_warn,
-                                    CanvasAction::DebugUnforceBit(elem_addr.clone()),
-                                ),
-                                (
-                                    "Edit",
-                                    palette.accent_heading,
-                                    CanvasAction::SwitchToEditMode(Some(sel_id)),
-                                ),
-                            ]
-                        } else {
-                            [
-                                (
-                                    "Toggle",
-                                    palette.accent_ok,
-                                    CanvasAction::DebugToggleBit(elem_addr.clone()),
-                                ),
-                                (
-                                    "Force 1",
-                                    palette.accent_warn,
-                                    CanvasAction::DebugForceBit(elem_addr.clone(), true),
-                                ),
-                                (
-                                    "Force 0",
-                                    palette.accent_danger,
-                                    CanvasAction::DebugForceBit(elem_addr.clone(), false),
-                                ),
-                                (
-                                    "Unforce",
-                                    palette.text_primary,
-                                    CanvasAction::DebugUnforceBit(elem_addr.clone()),
-                                ),
-                            ]
-                        };
-
-                        let rem_w = hud_w - badge_w - 10.0;
-                        let btn_w = rem_w / 4.0;
-                        for (i, (lbl, col, btn_act)) in debug_btns.into_iter().enumerate() {
-                            let bx = hud_rect.min.x + badge_w + 5.0 + i as f32 * btn_w;
-                            let b_rect = Rect::from_min_size(
-                                pos2(bx + 1.0, hud_rect.min.y + 3.0),
-                                vec2(btn_w - 2.0, hud_h - 6.0),
-                            );
-                            let b_hov = hover_pos.map_or(false, |hp| b_rect.contains(hp));
-                            if b_hov {
-                                painter.rect_filled(
-                                    b_rect,
-                                    CornerRadius::same(4),
-                                    col.gamma_multiply(0.25),
-                                );
-                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                            }
-                            painter.text(
-                                b_rect.center(),
-                                Align2::CENTER_CENTER,
-                                lbl,
-                                FontId::proportional(10.0),
-                                if b_hov {
-                                    if palette.is_light() {
-                                        palette.text_primary
-                                    } else {
-                                        Color32::WHITE
-                                    }
-                                } else {
-                                    col
-                                },
-                            );
-                            if is_clicked && b_hov {
-                                action = Some(btn_act);
-                            }
+                        if let Some(hud_act) = self.render_select_debug_hud(
+                            ui,
+                            &painter,
+                            doc,
+                            sel_id,
+                            &sel_elem,
+                            sel_rect,
+                            viewport_rect,
+                            hover_pos,
+                            is_clicked,
+                            palette,
+                            &mut any_interactive_hovered,
+                        ) {
+                            action = Some(hud_act);
                         }
                     }
                 }
@@ -3209,6 +3872,17 @@ impl CanvasViewport {
                 }
                 CanvasAction::DeleteRung(r_idx) => {
                     doc.delete_rung(r_idx);
+                }
+                CanvasAction::MoveRungUp(r_idx) => {
+                    doc.move_rung_up(r_idx);
+                }
+                CanvasAction::MoveRungDown(r_idx) => {
+                    doc.move_rung_down(r_idx);
+                }
+                CanvasAction::InsertRungBelow(r_idx) => {
+                    let insert_idx = (r_idx + 1).min(doc.program.rungs.len());
+                    doc.insert_rung(insert_idx);
+                    doc.selected_element_id = None;
                 }
             }
         }
@@ -6155,5 +6829,122 @@ mod tests {
         assert_eq!(vp.target_zoom, vp.zoom);
         assert!(vp.zoom_anchor.is_none());
         assert_eq!(vp.pan_offset, vec2(14.0, 16.0));
+    }
+
+    #[test]
+    fn compute_select_hud_layout_positions_above_below_and_clamps() {
+        let viewport = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        let hud_w = 340.0;
+        let hud_h = 34.0;
+
+        // Element comfortably below top margin -> HUD appears above it
+        let sel_mid = Rect::from_min_size(pos2(360.0, 200.0), vec2(80.0, 48.0));
+        let (rect_above, is_above, caret_x) =
+            compute_select_hud_layout(sel_mid, viewport, hud_w, hud_h);
+        assert!(is_above);
+        assert!((rect_above.max.y - (sel_mid.min.y - 8.0)).abs() < 0.01);
+        assert!((caret_x - sel_mid.center().x).abs() < 0.01);
+
+        // Element near top edge -> HUD flips below it
+        let sel_top = Rect::from_min_size(pos2(360.0, 42.0), vec2(80.0, 48.0));
+        let (rect_below, is_above_top, _) =
+            compute_select_hud_layout(sel_top, viewport, hud_w, hud_h);
+        assert!(!is_above_top);
+        assert!((rect_below.min.y - (sel_top.max.y + 8.0)).abs() < 0.01);
+
+        // Element near left edge -> HUD clamps to viewport.min.x + 8.0, caret stays inside HUD bounds
+        let sel_left = Rect::from_min_size(pos2(4.0, 220.0), vec2(20.0, 48.0));
+        let (rect_left, _, caret_left) =
+            compute_select_hud_layout(sel_left, viewport, hud_w, hud_h);
+        assert!((rect_left.min.x - 8.0).abs() < 0.01);
+        assert!(caret_left >= rect_left.min.x + 14.0 - 0.01);
+        assert!(caret_left <= rect_left.max.x - 14.0 + 0.01);
+    }
+
+    #[test]
+    fn resolve_select_hud_telemetry_reports_bit_force_and_timer() {
+        let mut doc = Document::new_empty();
+
+        // 1. Contact bit OFF -> ON + forced
+        let contact = LadderElement::new_contact(1, "%IX0.0", "START", ContactMode::NormallyOpen);
+        let t_off = resolve_select_hud_telemetry(&contact, &doc);
+        assert!(!t_off.is_on);
+        assert_eq!(t_off.forced, None);
+        assert_eq!(t_off.detail_text, "OFF");
+        assert_eq!(t_off.timer_progress, None);
+
+        doc.simulator.set_var_value("%IX0.0", true);
+        doc.simulator.force_bit(0, true);
+        let t_on = resolve_select_hud_telemetry(&contact, &doc);
+        assert!(t_on.is_on);
+        assert_eq!(t_on.forced, Some(true));
+        assert_eq!(t_on.detail_text, "ON");
+
+        // 2. Timer element with live accumulator & progress
+        let mut timer = LadderElement {
+            id: 2,
+            element_type: TypeTag::Ton,
+            name: "T0".to_string(),
+            preset_value: 3000,
+            current_accum: 0,
+            ..Default::default()
+        };
+        doc.simulator.timers.insert("T0".to_string(), (1500, false));
+        let t_timer = resolve_select_hud_telemetry(&timer, &doc);
+        assert_eq!(t_timer.detail_text, "1500/3000ms");
+        assert!((t_timer.timer_progress.unwrap() - 0.5).abs() < 0.001);
+
+        // Timer with preset 0 should not divide by zero
+        timer.preset_value = 0;
+        let t_zero = resolve_select_hud_telemetry(&timer, &doc);
+        assert_eq!(t_zero.timer_progress, None);
+    }
+
+    #[test]
+    fn network_badge_rail_color_priority() {
+        use crate::theme::AppTheme;
+
+        for theme in AppTheme::ALL {
+            let p = theme.palette();
+            // 1. Validation overrides Energized + Selected
+            assert_eq!(
+                network_badge_rail_color(true, true, true, Some(p.accent_danger), p),
+                p.accent_danger
+            );
+            // 2. Energized (sim_active) overrides Selected
+            assert_eq!(
+                network_badge_rail_color(true, true, true, None, p),
+                p.accent_ok
+            );
+            // 3. Selected overrides Idle (even if energized flag is true when !sim_active)
+            assert_eq!(
+                network_badge_rail_color(true, false, true, None, p),
+                p.rung_badge_sel_border
+            );
+            // 4. Idle fallback
+            assert_eq!(
+                network_badge_rail_color(false, false, false, None, p),
+                p.rung_badge_border
+            );
+        }
+    }
+
+    #[test]
+    fn compute_network_action_pill_rect_bounds() {
+        for zoom in [0.5_f32, 0.75, 1.0, 1.35, 2.0] {
+            let r = compute_network_action_pill_rect(120.0, 900.0, 5, zoom);
+            assert!((r.max.x - 900.0).abs() < 0.01);
+            assert!((r.min.y - 120.0).abs() < 0.01);
+            assert!(r.width() > 0.0);
+            assert!(r.height() > 0.0);
+        }
+        // Zoom clamping: 0.5 and 0.75 should produce identical dimensions; 1.35 and 2.0 identical
+        let r_low = compute_network_action_pill_rect(100.0, 800.0, 5, 0.5);
+        let r_min = compute_network_action_pill_rect(100.0, 800.0, 5, 0.75);
+        assert!((r_low.width() - r_min.width()).abs() < 0.01);
+
+        let r_max = compute_network_action_pill_rect(100.0, 800.0, 5, 1.35);
+        let r_high = compute_network_action_pill_rect(100.0, 800.0, 5, 2.0);
+        assert!((r_max.width() - r_high.width()).abs() < 0.01);
     }
 }

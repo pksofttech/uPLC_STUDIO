@@ -371,6 +371,78 @@
             </div>
           </div>
         </div>
+
+        <!-- Interactive IDE v0.2.0 Showcase -->
+        <div class="ide-showcase-card">
+          <div class="ide-topbar">
+            <div class="window-dots">
+              <span></span><span></span><span></span>
+            </div>
+            <div class="ide-win-title" data-i18n="ide_win_title">
+              LaduinoPLC v0.2.0 — Modern Dark Canvas & STRICT_EDITOR Preview
+            </div>
+            <div class="ide-mode-group" role="group" aria-label="Validator Demo Mode">
+              <button type="button" id="btn-ide-valid" class="ide-mode-btn active" data-i18n="ide_btn_valid">✔ Valid Rung</button>
+              <button type="button" id="btn-ide-err" class="ide-mode-btn" data-i18n="ide_btn_err">⚠ Trigger Strict Error</button>
+            </div>
+          </div>
+
+          <div class="ide-body">
+            <div class="ide-canvas-pane">
+              <svg id="ide-showcase-svg" viewBox="0 0 460 120" xmlns="http://www.w3.org/2000/svg">
+                <!-- Left Power Rail L1 -->
+                <line x1="22" y1="14" x2="22" y2="106" stroke="#f59e0b" stroke-width="4" stroke-linecap="round" />
+                <!-- Right Neutral Rail L2 -->
+                <line x1="438" y1="14" x2="438" y2="106" stroke="#64748b" stroke-width="4" stroke-linecap="round" />
+
+                <!-- Left Wire into Element 1 -->
+                <line x1="22" y1="60" x2="88" y2="60" stroke="#10e182" stroke-width="2.5" />
+
+                <!-- Error Highlight Ring (hidden in valid mode) -->
+                <rect id="ide-err-ring" x="74" y="24" width="60" height="72" rx="10" fill="rgba(239,68,68,0.12)" stroke="#ef4444" stroke-width="2" stroke-dasharray="5 3" style="display: none;" />
+
+                <!-- Element 1 (Valid: Contact %IX0.0 | Error: Misplaced Coil %QX0.0) -->
+                <g id="ide-el-1">
+                  <line x1="90" y1="42" x2="90" y2="78" stroke="#38bdf8" stroke-width="3.5" stroke-linecap="round" />
+                  <line x1="118" y1="42" x2="118" y2="78" stroke="#38bdf8" stroke-width="3.5" stroke-linecap="round" />
+                </g>
+                <text id="ide-el-1-lbl" x="104" y="34" text-anchor="middle" fill="#38bdf8" font-family="monospace" font-size="11" font-weight="700">%IX0.0</text>
+                <text x="104" y="96" text-anchor="middle" fill="#94a3b8" font-family="monospace" font-size="9">SLOT 01</text>
+
+                <!-- Middle Wire -->
+                <line id="ide-wire-mid" x1="118" y1="60" x2="216" y2="60" stroke="#10e182" stroke-width="2.5" />
+
+                <!-- Element 2 (Contact %IX0.1) -->
+                <g id="ide-el-2">
+                  <line x1="216" y1="42" x2="216" y2="78" stroke="#38bdf8" stroke-width="3.5" stroke-linecap="round" />
+                  <line x1="244" y1="42" x2="244" y2="78" stroke="#38bdf8" stroke-width="3.5" stroke-linecap="round" />
+                </g>
+                <text id="ide-el-2-lbl" x="230" y="34" text-anchor="middle" fill="#38bdf8" font-family="monospace" font-size="11" font-weight="700">%IX0.1</text>
+                <text x="230" y="96" text-anchor="middle" fill="#94a3b8" font-family="monospace" font-size="9">SLOT 02</text>
+
+                <!-- Wire to Output Coil -->
+                <line x1="244" y1="60" x2="346" y2="60" stroke="#475569" stroke-width="2.5" />
+
+                <!-- Output Coil (%QX0.0) -->
+                <path d="M 356 42 C 344 50, 344 70, 356 78" fill="none" stroke="#10e182" stroke-width="3.5" stroke-linecap="round" />
+                <path d="M 376 42 C 388 50, 388 70, 376 78" fill="none" stroke="#10e182" stroke-width="3.5" stroke-linecap="round" />
+                <text x="366" y="34" text-anchor="middle" fill="#10e182" font-family="monospace" font-size="11" font-weight="700">%QX0.0</text>
+                <text x="366" y="96" text-anchor="middle" fill="#94a3b8" font-family="monospace" font-size="9">COIL</text>
+
+                <!-- Right Wire to L2 -->
+                <line x1="384" y1="60" x2="438" y2="60" stroke="#64748b" stroke-width="2.5" />
+              </svg>
+              <div class="ide-canvas-footer">
+                Canvas v2 • Clipboard: Ctrl+C / Ctrl+V • Theme: Modern Dark
+              </div>
+            </div>
+
+            <div class="ide-inspector-pane">
+              <div class="ide-diag-header" data-i18n="ide_diag_hdr">🛡️ STRICT_EDITOR Validator</div>
+              <div id="ide-validator-list" class="ide-diag-list"></div>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -393,7 +465,7 @@
               ดาวน์โหลดไฟล์สำหรับ Windows หรือ Linux จากหน้า GitHub Releases แตกไฟล์แล้วเปิดโปรแกรม laduino-plc ได้ทันทีโดยไม่ต้องติดตั้งไลบรารีเสริม
             </p>
             <div class="shortcut-box" data-i18n="s1_box">
-              เปิดโปรแกรมปุ๊บ → เข้าสู่หน้า New Ladder (1 Network ว่าง) พร้อมใช้งานทันที หรือเลือกเมนู Examples เพื่อดูตัวอย่างกว่า 17 โปรเจกต์
+              เปิดโปรแกรมปุ๊บ → เข้าสู่หน้า New Ladder (1 Network ว่าง) พร้อมใช้งานทันที หรือเลือกเมนู Examples เพื่อดูตัวอย่างกว่า 22 โปรเจกต์
             </div>
           </div>
 
@@ -444,6 +516,13 @@
           </p>
         </div>
 
+        <div class="hw-tabs" role="tablist">
+          <button type="button" class="hw-tab active" data-hw-tab="map" data-i18n="hw_tab_map">📊 Memory Map & Pinout</button>
+          <button type="button" class="hw-tab" data-hw-tab="config" data-i18n="hw_tab_config">🔧 Interactive Pin Configurator</button>
+          <button type="button" class="hw-tab" data-hw-tab="wiring" data-i18n="hw_tab_wiring">🔌 Hardware Wiring Diagrams</button>
+        </div>
+
+        <div class="hw-tab-panel active" data-hw-panel="map">
         <div class="table-wrap">
           <table>
             <thead>
@@ -536,8 +615,10 @@
             </tbody>
           </table>
         </div>
+        </div>
 
         <!-- Interactive Configure RP2040 Hardware I/O Pins Showcase -->
+        <div class="hw-tab-panel" data-hw-panel="config">
         <div class="io-config-showcase">
           <div class="io-config-topbar">
             <div class="window-dots">
@@ -656,8 +737,10 @@
             </div>
           </div>
         </div>
+        </div>
 
         <!-- Hardware Wiring Schematics (3 Cards) -->
+        <div class="hw-tab-panel" data-hw-panel="wiring">
         <div class="wiring-grid">
           <div class="wiring-card">
             <span class="wiring-tag" data-i18n="wire_1_tag">01 / DIGITAL INPUT WIRING</span>
@@ -731,6 +814,7 @@
             </div>
           </div>
         </div>
+        </div>
       </div>
     </section>
 
@@ -739,7 +823,7 @@
       <div class="container">
         <div class="section-header">
           <span class="section-tag" data-i18n="ex_tag">BUNDLED IEC 61131-3 EXAMPLES</span>
-          <h2 data-i18n="ex_title">ตัวอย่างวงจรมาตรฐานพร้อมใช้งานกว่า 17 โปรเจกต์</h2>
+          <h2 data-i18n="ex_title">ตัวอย่างวงจรมาตรฐานพร้อมใช้งานกว่า 22 โปรเจกต์</h2>
           <p data-i18n="ex_subtitle">
             คลิกเลือกดูโค้ด Instruction List (.il) ตัวอย่างที่มาพร้อมกับโปรแกรม สามารถคัดลอกหรือเปิดจากโฟลเดอร์ example/ ในโปรแกรมเพื่อจำลองการทำงานได้ทันที
           </p>
@@ -801,7 +885,7 @@
             <ul>
               <li data-i18n="rm_p2_l1">ระบบตรวจสอบวงจร IEC 61131-3 Strict Ladder Validator & Topology Engine</li>
               <li data-i18n="rm_p2_l2">อัปเกรดแคนวาส Ladder v2, ระบบ Copy/Paste และธีม Modern Dark UI</li>
-              <li data-i18n="rm_p2_l3">ทดสอบความเสถียรข้ามแพลตฟอร์ม Windows 10/11 & Linux ก่อนปล่อย v1.0.0</li>
+              <li data-i18n="rm_p2_l3">รองรับ Windows 10/11 &amp; Linux (Ubuntu 22.04+ / GLIBC 2.35+) พร้อมตัวอย่างวงจร 22 โปรเจกต์</li>
             </ul>
           </div>
 
@@ -873,9 +957,10 @@
               <ul>
                 <li data-i18n="dl_win_l1">ไฟล์โปรแกรมพร้อมรัน (laduino-plc.exe)</li>
                 <li data-i18n="dl_win_l2">รวมไฟล์เฟิร์มแวร์ RP2040 (.uf2) ในตัว</li>
-                <li data-i18n="dl_win_l3">รวมตัวอย่างวงจร Ladder มาตรฐานครบชุด</li>
+                <li data-i18n="dl_win_l3">รวมตัวอย่างวงจร Ladder มาตรฐานครบ 22 โปรเจกต์</li>
               </ul>
             </div>
+            <div class="dl-meta-row" id="meta-dl-win"></div>
             <a id="dl-win-link" href="https://github.com/pksofttech/uPLC_STUDIO/releases/latest/download/laduino-plc-v0.2.0-x86_64-pc-windows-msvc.zip" download class="btn btn-primary" data-i18n="dl_win_btn">
               ⬇ ดาวน์โหลดสำหรับ Windows
             </a>
@@ -891,15 +976,16 @@
                     <h3>LaduinoPLC for Linux</h3>
                     <span class="dl-count-pill" id="stat-dl-lin" title="Linux Downloads">⬇ 0</span>
                   </div>
-                  <small style="color: var(--text-secondary);" data-i18n="dl_lin_sub">สำหรับ Ubuntu / Debian / Arch / Fedora (x86_64)</small>
+                  <small style="color: var(--text-secondary);" data-i18n="dl_lin_sub">สำหรับ Ubuntu 22.04+ / Debian 12+ / Arch / Fedora (x86_64, GLIBC 2.35+)</small>
                 </div>
               </div>
               <ul>
                 <li data-i18n="dl_lin_l1">ไบนารีเนทีฟความเร็วสูง (wgpu / X11)</li>
                 <li data-i18n="dl_lin_l2">รองรับพอร์ต USB-CDC (/dev/ttyACM*) อัตโนมัติ</li>
-                <li data-i18n="dl_lin_l3">รวมไฟล์เฟิร์มแวร์ .uf2 และตัวอย่างครบชุด</li>
+                <li data-i18n="dl_lin_l3">รวมไฟล์เฟิร์มแวร์ .uf2 และตัวอย่างครบ 22 โปรเจกต์</li>
               </ul>
             </div>
+            <div class="dl-meta-row" id="meta-dl-lin"></div>
             <a id="dl-lin-link" href="https://github.com/pksofttech/uPLC_STUDIO/releases/latest/download/laduino-plc-v0.2.0-x86_64-unknown-linux-gnu.tar.gz" download class="btn btn-outline" data-i18n="dl_lin_btn">
               ⬇ ดาวน์โหลดสำหรับ Linux
             </a>
@@ -924,6 +1010,7 @@
                 <li data-i18n="dl_fw_l3">รองรับ PID, SCALE, LIMIT, UART, Modbus RTU</li>
               </ul>
             </div>
+            <div class="dl-meta-row" id="meta-dl-fw"></div>
             <a id="dl-fw-link" href="https://github.com/pksofttech/uPLC_STUDIO/releases/latest/download/uplc-rp2040-embassy.uf2" download class="btn btn-emerald" data-i18n="dl_fw_btn">
               ⚡ ดาวน์โหลดเฟิร์มแวร์ (.uf2)
             </a>
@@ -937,16 +1024,25 @@
             <p data-i18n="sha_desc">คุณสามารถตรวจสอบค่า SHA-256 ของไฟล์ที่ดาวน์โหลดจากโฟลเดอร์ releases/ ได้ดังนี้:</p>
             <div class="checksum-list">
               <div class="checksum-item">
-                <span class="checksum-label">Windows (.zip)</span>
-                <code>eb1c544280a1fc403b883862aee7da8f74f0a32ed3d75754c67d42012a8f8aac</code>
+                <div class="checksum-header-row">
+                  <span class="checksum-label">Windows (.zip)</span>
+                  <button type="button" class="checksum-copy-btn" data-copy-target="sha-win-code" data-i18n="btn_copy_id">คัดลอก</button>
+                </div>
+                <code id="sha-win-code">eb1c544280a1fc403b883862aee7da8f74f0a32ed3d75754c67d42012a8f8aac</code>
               </div>
               <div class="checksum-item">
-                <span class="checksum-label">Linux (.tar.gz)</span>
-                <code>7b38363e900e7868e65f9b4a08964c1316baddb0037cea20fcd568466757f6e5</code>
+                <div class="checksum-header-row">
+                  <span class="checksum-label">Linux (.tar.gz)</span>
+                  <button type="button" class="checksum-copy-btn" data-copy-target="sha-lin-code" data-i18n="btn_copy_id">คัดลอก</button>
+                </div>
+                <code id="sha-lin-code">7b38363e900e7868e65f9b4a08964c1316baddb0037cea20fcd568466757f6e5</code>
               </div>
               <div class="checksum-item">
-                <span class="checksum-label">RP2040 (.uf2)</span>
-                <code>e67736de45e59b9f7734e6a53932d9271ea82990a2ab2fde0169f39052468785</code>
+                <div class="checksum-header-row">
+                  <span class="checksum-label">RP2040 (.uf2)</span>
+                  <button type="button" class="checksum-copy-btn" data-copy-target="sha-fw-code" data-i18n="btn_copy_id">คัดลอก</button>
+                </div>
+                <code id="sha-fw-code">e67736de45e59b9f7734e6a53932d9271ea82990a2ab2fde0169f39052468785</code>
               </div>
             </div>
           </div>
@@ -1113,6 +1209,8 @@
       </div>
     </div>
   </footer>
+
+  <button type="button" id="back-to-top-btn" class="back-to-top-btn" aria-label="Back to top">↑</button>
 
   <!-- QR Zoom Modal -->
   <div id="qr-modal" class="modal-backdrop">

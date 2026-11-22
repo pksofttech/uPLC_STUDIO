@@ -2690,3 +2690,322 @@ footer {
     max-width: 100%;
   }
 }
+
+/* ============================================================================
+ * Interactive IDE v0.2.0 Showcase (#whats-new)
+ * ============================================================================ */
+.ide-showcase-card {
+  margin-top: 28px;
+  background: #0b0f19;
+  color: #f8fafc;
+  border: 1px solid rgba(0, 0, 0, 0.16);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sim);
+  overflow: hidden;
+}
+
+.ide-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 14px 20px;
+  background: #070a12;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.ide-win-title {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: #94a3b8;
+  flex: 1;
+  min-width: 200px;
+}
+
+.ide-mode-group {
+  display: inline-flex;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 3px;
+  border-radius: var(--radius-pill);
+}
+
+.ide-mode-btn {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  font-weight: 600;
+  padding: 6px 13px;
+  border-radius: var(--radius-pill);
+  border: 1px solid transparent;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  transition: all 0.2s var(--ease-out-expo);
+}
+
+.ide-mode-btn:hover {
+  color: #f8fafc;
+}
+
+.ide-mode-btn.active {
+  background: rgba(16, 225, 130, 0.16);
+  border-color: rgba(16, 225, 130, 0.45);
+  color: #10e182;
+}
+
+#btn-ide-err.active {
+  background: rgba(239, 68, 68, 0.18);
+  border-color: rgba(239, 68, 68, 0.5);
+  color: #fca5a5;
+}
+
+.ide-body {
+  display: grid;
+  grid-template-columns: 1.35fr 1fr;
+  gap: 18px;
+  padding: 20px;
+  align-items: stretch;
+}
+
+.ide-canvas-pane {
+  background: #060911;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  padding: 14px 16px 12px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.ide-canvas-pane svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.ide-canvas-footer {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: #64748b;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.ide-inspector-pane {
+  background: #0f1524;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ide-diag-header {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #e2e8f0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.ide-diag-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ide-diag-item {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+}
+
+.ide-diag-item.ok {
+  background: rgba(16, 225, 130, 0.1);
+  border-color: rgba(16, 225, 130, 0.3);
+  color: #6ee7b7;
+}
+
+.ide-diag-item.err {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+}
+
+.ide-diag-item.info {
+  background: rgba(56, 189, 248, 0.1);
+  border-color: rgba(56, 189, 248, 0.28);
+  color: #bae6fd;
+}
+
+/* ============================================================================
+ * Hardware Section Pill Tabs (#hardware)
+ * ============================================================================ */
+.hw-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 28px;
+}
+
+.hw-tab {
+  font-family: var(--font-sans);
+  font-size: 0.84rem;
+  font-weight: 600;
+  padding: 10px 20px;
+  border-radius: var(--radius-pill);
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: rgba(255, 255, 255, 0.85);
+  color: var(--text-secondary);
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition: all 0.25s var(--ease-out-expo);
+}
+
+.hw-tab:hover {
+  border-color: #000000;
+  color: #000000;
+  transform: translateY(-1px);
+}
+
+.hw-tab.active {
+  background: #000000;
+  border-color: #000000;
+  color: #ffffff;
+  box-shadow: 0 8px 20px -6px rgba(0, 0, 0, 0.28);
+}
+
+.hw-tab-panel {
+  display: none;
+}
+
+.hw-tab-panel.active {
+  display: block;
+}
+
+/* ============================================================================
+ * Download Metadata Row & SHA-256 Copy Button (#download)
+ * ============================================================================ */
+.dl-meta-row {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  margin: -12px 0 12px;
+  min-height: 1.1em;
+}
+
+.dl-meta-row:empty {
+  display: none;
+}
+
+.checksum-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.checksum-copy-btn {
+  background: #000000;
+  color: #ffffff;
+  border: none;
+  border-radius: var(--radius-pill);
+  padding: 3px 10px;
+  font-family: var(--font-sans);
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.15s ease;
+}
+
+.checksum-copy-btn:hover {
+  background: #27272a;
+}
+
+.checksum-copy-btn:active {
+  transform: scale(0.95);
+}
+
+/* ============================================================================
+ * Floating Back-to-Top Button
+ * ============================================================================ */
+.back-to-top-btn {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 90;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  background: #000000;
+  color: #ffffff;
+  font-size: 1.1rem;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 12px 28px -6px rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(12px);
+  transition: opacity 0.25s ease, transform 0.25s var(--ease-out-expo), background 0.2s ease;
+}
+
+.back-to-top-btn:hover {
+  background: #27272a;
+}
+
+.back-to-top-btn.visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+/* ============================================================================
+ * Responsive Rules for New Components (<= 768px)
+ * ============================================================================ */
+@media (max-width: 768px) {
+  .ide-body {
+    grid-template-columns: 1fr;
+    padding: 14px;
+  }
+
+  .ide-topbar {
+    padding: 12px 14px;
+  }
+
+  .ide-mode-group {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .hw-tabs {
+    gap: 8px;
+    margin-bottom: 20px;
+  }
+
+  .hw-tab {
+    flex: 1 1 auto;
+    text-align: center;
+    padding: 8px 14px;
+    font-size: 0.78rem;
+  }
+
+  .back-to-top-btn {
+    right: 16px;
+    bottom: 16px;
+    width: 40px;
+    height: 40px;
+  }
+}
