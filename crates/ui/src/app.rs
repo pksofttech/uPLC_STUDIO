@@ -387,6 +387,7 @@ pub struct CanvasApp {
     pub show_il_code: bool,
     pub show_about: bool,
     pub show_code_export: bool,
+    pub code_export_copied_at: Option<Instant>,
     pub show_io_config: bool,
     pub settings_tab: u8,
     pub show_update_plc: bool,
@@ -486,6 +487,7 @@ impl Default for CanvasApp {
             show_il_code: settings.show_il_code,
             show_about: false,
             show_code_export: false,
+            code_export_copied_at: None,
             show_io_config: false,
             settings_tab: 0,
             show_update_plc: false,
@@ -2938,16 +2940,52 @@ impl CanvasApp {
     }
 
     pub fn new_program(&mut self) {
+        if self.online_mode {
+            self.stop_online_monitoring();
+        }
+        self.work_mode = WorkMode::Edit;
+        self.latest_snapshot = None;
+        self.online_status_text = "Offline".to_string();
+
         self.doc.clear();
+        self.sync_doc_io_mappings_from_hw_config();
+
         self.is_example_template = false;
         self.elem_modal.close();
+        self.show_code_export = false;
+        self.code_export_copied_at = None;
+        self.update_plc_status.clear();
+        self.update_plc_is_error = false;
+
         self.canvas.context_menu_elem = None;
+        self.canvas.context_menu_pos = None;
+        self.canvas.drag_candidate = None;
+        self.canvas.dragging_elem = None;
+        self.canvas.dragging_tool = None;
+        self.canvas.marquee_start = None;
+        self.canvas.show_diagnostics_popover = false;
+        self.canvas.rejection_toast = None;
+        self.canvas.pending_debug_event = None;
         self.canvas.reset_view();
+
         self.active_tool = ActiveTool::Select;
         self.copied_rung = None;
+        self.clipboard.clear();
+        self.find = FindState::default();
+
+        self.watch_rows.clear();
+        self.watch_filter_text.clear();
+        self.watch_new_addr.clear();
+        self.watch_new_symbol.clear();
+
+        self.uart_tx_history.clear();
+        self.uart_rx_input.clear();
+
         self.elem_filter_text.clear();
         self.elem_filter_cat = 0;
         self.component_filter.clear();
+        self.special_reg_filter_text.clear();
+        self.special_reg_filter_cat = 0;
     }
 
     pub fn open_config_for_selected(&mut self) {
@@ -3326,28 +3364,34 @@ impl eframe::App for CanvasApp {
         let modal_open = any_modal_open;
 
         // 1. Top Menu Bar
-        Panel::top("top_menu_bar").show(ui, |ui| {
-            if modal_open {
-                ui.disable();
-            }
-            menu_bar::render(ui, self);
-        });
+        Panel::top("top_menu_bar")
+            .frame(egui::Frame::side_top_panel(ui.style()).fill(palette.chrome_bg))
+            .show(ui, |ui| {
+                if modal_open {
+                    ui.disable();
+                }
+                menu_bar::render(ui, self);
+            });
 
         // 2. Top Toolbar
-        Panel::top("top_toolbar").show(ui, |ui| {
-            if modal_open {
-                ui.disable();
-            }
-            toolbar::render(ui, self);
-        });
+        Panel::top("top_toolbar")
+            .frame(egui::Frame::side_top_panel(ui.style()).fill(palette.chrome_bg))
+            .show(ui, |ui| {
+                if modal_open {
+                    ui.disable();
+                }
+                toolbar::render(ui, self);
+            });
 
         // 3. Bottom Status Bar
-        Panel::bottom("bottom_status_bar").show(ui, |ui| {
-            if modal_open {
-                ui.disable();
-            }
-            status_bar::render(ui, self);
-        });
+        Panel::bottom("bottom_status_bar")
+            .frame(egui::Frame::side_top_panel(ui.style()).fill(palette.chrome_bg))
+            .show(ui, |ui| {
+                if modal_open {
+                    ui.disable();
+                }
+                status_bar::render(ui, self);
+            });
 
         // 4. Left Panel: Ladder Tools & Components
         Panel::left("left_tools_panel")
@@ -4436,7 +4480,7 @@ impl eframe::App for CanvasApp {
                         .inner_margin(egui::Margin::symmetric(8, 6))
                         .show(ui, |ui| {
                             egui::ScrollArea::both().max_height(320.0).show(ui, |ui| {
-                                let mut text = code.clone();
+                                let mut text = code.as_str();
                                 ui.add(
                                     egui::TextEdit::multiline(&mut text)
                                         .code_editor()
@@ -4448,11 +4492,19 @@ impl eframe::App for CanvasApp {
                     ui.separator();
 
                     ui.horizontal(|ui| {
-                        let copy_btn = egui::Button::new("Copy")
+                        let just_copied = self
+                            .code_export_copied_at
+                            .is_some_and(|t| t.elapsed() < Duration::from_millis(1500));
+                        if just_copied {
+                            ui.ctx().request_repaint_after(Duration::from_millis(200));
+                        }
+                        let copy_label = if just_copied { "Copied!" } else { "Copy" };
+                        let copy_btn = egui::Button::new(copy_label)
                             .min_size(egui::vec2(64.0, 28.0))
                             .corner_radius(egui::CornerRadius::same(5));
                         if ui.add(copy_btn).clicked() {
                             ui.ctx().copy_text(code.clone());
+                            self.code_export_copied_at = Some(Instant::now());
                         }
 
                         let save_btn = egui::Button::new("Save .il...")
@@ -4499,6 +4551,7 @@ impl eframe::App for CanvasApp {
                 });
             if !open_code_export || close_code_export {
                 self.show_code_export = false;
+                self.code_export_copied_at = None;
             }
         }
 
@@ -5883,5 +5936,87 @@ mod tests {
         assert!(!app.online_target_hw);
         assert_eq!(app.doc.simulator.state, SimState::Stopped);
         assert_eq!(app.right_panel_tab, 0);
+    }
+
+    #[test]
+    fn test_new_program_clears_all_previous_state() {
+        let mut app = sample_app();
+
+        // Populate symbols
+        app.doc.program.sync_symbols_from_elements_and_io();
+        assert!(!app.doc.program.symbols.records.is_empty());
+
+        // Populate forced bits and RETAIN marker/register values
+        app.doc.simulator.forced_bits.insert(0, true);
+        app.doc.simulator.markers.insert("M64".to_string(), true);
+        app.doc.simulator.registers.insert("%MW96".to_string(), 1234);
+
+        // Populate watch table state
+        app.watch_rows = default_watch_rows();
+        app.watch_filter_text = "MOTOR".to_string();
+        app.watch_new_addr = "%MW10".to_string();
+        app.watch_new_symbol = "TEMP".to_string();
+
+        // Populate find state
+        app.find.open = true;
+        app.find.query = "%QX0.0".to_string();
+        app.find.refresh(&app.doc);
+        assert!(!app.find.results.is_empty());
+
+        // Populate clipboard & copied rung
+        app.clipboard.push(app.doc.program.rungs[0].elements[0].clone());
+        app.copied_rung = Some(app.doc.program.rungs[0].clone());
+
+        // Populate UART terminal state
+        app.uart_tx_history.extend_from_slice(b"HELLO");
+        app.uart_rx_input = "CMD".to_string();
+
+        // Activate online/debug mode & snapshot
+        app.set_work_mode(WorkMode::OnlineDebug);
+        app.latest_snapshot = Some(PlcStatusSnapshot::default());
+        assert_eq!(app.work_mode, WorkMode::OnlineDebug);
+        assert!(app.online_mode);
+        assert!(app.latest_snapshot.is_some());
+
+        // Populate filter texts
+        app.elem_filter_text = "TON".to_string();
+        app.elem_filter_cat = 2;
+        app.special_reg_filter_text = "SM0".to_string();
+        app.special_reg_filter_cat = 1;
+        app.component_filter = "COIL".to_string();
+
+        // Execute New Program
+        app.new_program();
+
+        // Verify all previous state is cleared
+        assert!(app.doc.program.symbols.records.is_empty());
+        assert!(app.doc.simulator.forced_bits.is_empty());
+        assert_eq!(app.doc.simulator.markers.get("M64").copied(), Some(false));
+        assert_eq!(app.doc.simulator.registers.get("%MW96").copied(), Some(0));
+
+        assert!(app.watch_rows.is_empty());
+        assert!(app.watch_filter_text.is_empty());
+        assert!(app.watch_new_addr.is_empty());
+        assert!(app.watch_new_symbol.is_empty());
+
+        assert!(!app.find.open);
+        assert!(app.find.query.is_empty());
+        assert!(app.find.results.is_empty());
+
+        assert!(app.clipboard.is_empty());
+        assert!(app.copied_rung.is_none());
+
+        assert!(app.uart_tx_history.is_empty());
+        assert!(app.uart_rx_input.is_empty());
+
+        assert_eq!(app.work_mode, WorkMode::Edit);
+        assert!(!app.online_mode);
+        assert!(app.latest_snapshot.is_none());
+
+        assert!(app.elem_filter_text.is_empty());
+        assert_eq!(app.elem_filter_cat, 0);
+        assert!(app.special_reg_filter_text.is_empty());
+        assert_eq!(app.special_reg_filter_cat, 0);
+        assert!(app.component_filter.is_empty());
     }
 }

@@ -29,51 +29,46 @@ impl AppTheme {
         match self {
             AppTheme::Modern => {
                 let mut visuals = Visuals::dark();
-                // Soft warm silver-gray text to reduce eye strain
-                let text_col = Color32::from_rgb(214, 218, 226);
+                let text_col = Color32::from_rgb(230, 232, 235);
                 visuals.override_text_color = None;
                 visuals.weak_text_alpha = 0.68;
-                visuals.panel_fill = Color32::from_rgb(33, 35, 39);
-                visuals.window_fill = Color32::from_rgb(36, 38, 42);
-                visuals.extreme_bg_color = Color32::from_rgb(22, 23, 26);
-                visuals.faint_bg_color = Color32::from_rgb(40, 42, 47);
+                visuals.panel_fill = Color32::from_rgb(43, 48, 58);
+                visuals.window_fill = Color32::from_rgb(43, 48, 58);
+                visuals.extreme_bg_color = Color32::from_rgb(30, 34, 40);
+                visuals.faint_bg_color = Color32::from_rgb(38, 42, 49);
 
-                visuals.widgets.noninteractive.bg_fill = Color32::from_rgb(36, 38, 43);
+                visuals.widgets.noninteractive.bg_fill = Color32::from_rgb(43, 48, 58);
                 visuals.widgets.noninteractive.bg_stroke =
-                    Stroke::new(1.0, Color32::from_rgb(58, 61, 68));
+                    Stroke::new(1.0, Color32::from_rgb(62, 69, 84));
                 visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, text_col);
                 visuals.widgets.noninteractive.corner_radius = CornerRadius::same(5);
 
-                visuals.widgets.inactive.bg_fill = Color32::from_rgb(43, 45, 51);
+                visuals.widgets.inactive.bg_fill = Color32::from_rgb(50, 56, 70);
                 visuals.widgets.inactive.bg_stroke =
-                    Stroke::new(1.0, Color32::from_rgb(66, 70, 78));
-                visuals.widgets.inactive.fg_stroke =
-                    Stroke::new(1.0, Color32::from_rgb(208, 212, 220));
+                    Stroke::new(1.0, Color32::from_rgb(69, 77, 94));
+                visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, text_col);
                 visuals.widgets.inactive.corner_radius = CornerRadius::same(5);
 
-                visuals.widgets.hovered.bg_fill = Color32::from_rgb(54, 57, 65);
+                visuals.widgets.hovered.bg_fill = Color32::from_rgb(58, 66, 82);
                 visuals.widgets.hovered.bg_stroke =
-                    Stroke::new(1.2, Color32::from_rgb(115, 160, 205));
-                visuals.widgets.hovered.fg_stroke =
-                    Stroke::new(1.0, Color32::from_rgb(238, 241, 246));
+                    Stroke::new(1.2, Color32::from_rgb(77, 163, 255));
+                visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, Color32::WHITE);
                 visuals.widgets.hovered.corner_radius = CornerRadius::same(5);
 
-                visuals.widgets.active.bg_fill = Color32::from_rgb(62, 92, 128);
+                visuals.widgets.active.bg_fill = Color32::from_rgb(59, 74, 99);
                 visuals.widgets.active.bg_stroke =
-                    Stroke::new(1.5, Color32::from_rgb(135, 180, 222));
-                visuals.widgets.active.fg_stroke =
-                    Stroke::new(1.2, Color32::from_rgb(245, 247, 250));
+                    Stroke::new(1.5, Color32::from_rgb(77, 163, 255));
+                visuals.widgets.active.fg_stroke = Stroke::new(1.2, Color32::WHITE);
                 visuals.widgets.active.corner_radius = CornerRadius::same(5);
 
-                visuals.widgets.open.bg_fill = Color32::from_rgb(50, 54, 62);
+                visuals.widgets.open.bg_fill = Color32::from_rgb(52, 60, 74);
                 visuals.widgets.open.bg_stroke =
-                    Stroke::new(1.2, Color32::from_rgb(115, 160, 205));
-                visuals.widgets.open.fg_stroke =
-                    Stroke::new(1.0, Color32::from_rgb(238, 241, 246));
+                    Stroke::new(1.2, Color32::from_rgb(77, 163, 255));
+                visuals.widgets.open.fg_stroke = Stroke::new(1.0, text_col);
                 visuals.widgets.open.corner_radius = CornerRadius::same(5);
 
-                visuals.selection.bg_fill = Color32::from_rgb(58, 88, 122);
-                visuals.selection.stroke = Stroke::new(1.0, Color32::from_rgb(240, 245, 252));
+                visuals.selection.bg_fill = Color32::from_rgb(59, 74, 99);
+                visuals.selection.stroke = Stroke::new(1.0, text_col);
 
                 visuals.window_corner_radius = CornerRadius::same(8);
                 visuals.window_stroke = Stroke::new(1.0, self.palette().card_border);
@@ -188,44 +183,48 @@ impl AppTheme {
     pub fn palette(&self) -> ThemePalette {
         match self {
             AppTheme::Modern => ThemePalette {
-                canvas_bg: Color32::from_rgb(26, 27, 30),
-                grid_dot: Color32::from_rgb(48, 50, 56),
-                banner_bg: Color32::from_rgb(36, 38, 43),
-                banner_border: Color32::from_rgb(66, 70, 78),
-                banner_title: Color32::from_rgb(135, 180, 218),
-                banner_sub: Color32::from_rgb(140, 192, 158),
-                wire_idle: Color32::from_rgb(124, 130, 142),
-                wire_energized: Color32::from_rgb(225, 105, 85),
-                wire_glow: Color32::from_rgba_unmultiplied(225, 105, 85, 45),
-                l1_rail: Color32::from_rgb(212, 142, 75),
-                l2_rail: Color32::from_rgb(100, 155, 212),
-                rung_badge_bg: Color32::from_rgb(36, 38, 43),
-                rung_badge_sel_bg: Color32::from_rgb(62, 54, 38),
-                rung_badge_hov_bg: Color32::from_rgb(50, 53, 60),
-                rung_badge_border: Color32::from_rgb(62, 65, 73),
-                rung_badge_sel_border: Color32::from_rgb(210, 165, 85),
-                rung_text_dim: Color32::from_rgb(154, 160, 172),
-                rung_text_num: Color32::from_rgb(206, 210, 218),
-                rung_text_sel: Color32::from_rgb(235, 200, 120),
-                symbol_idle: Color32::from_rgb(202, 207, 216),
-                symbol_closed: Color32::from_rgb(105, 195, 135),
-                symbol_subtext: Color32::from_rgb(162, 170, 182),
-                coil_idle: Color32::from_rgb(118, 168, 215),
-                card_bg: Color32::from_rgb(41, 43, 48),
-                card_border: Color32::from_rgb(76, 80, 88),
-                pill_bg: Color32::from_rgb(30, 32, 36),
+                canvas_bg: Color32::from_rgb(30, 34, 40),
+                grid_dot: Color32::from_rgb(44, 50, 59),
+                chrome_bg: Color32::from_rgb(38, 42, 49),
+                tab_selected_bg: Color32::from_rgb(59, 74, 99),
+                banner_bg: Color32::from_rgb(38, 42, 49),
+                banner_border: Color32::from_rgb(62, 69, 84),
+                banner_title: Color32::from_rgb(77, 163, 255),
+                banner_sub: Color32::from_rgb(154, 160, 166),
+                wire_idle: Color32::from_rgb(214, 220, 230),
+                wire_energized: Color32::from_rgb(235, 95, 78),
+                wire_glow: Color32::from_rgba_unmultiplied(235, 95, 78, 45),
+                l1_rail: Color32::from_rgb(228, 152, 76),
+                l2_rail: Color32::from_rgb(77, 163, 255),
+                rung_badge_bg: Color32::from_rgb(38, 42, 49),
+                rung_badge_sel_bg: Color32::from_rgb(59, 74, 99),
+                rung_badge_hov_bg: Color32::from_rgb(52, 60, 74),
+                rung_badge_border: Color32::from_rgb(62, 69, 84),
+                rung_badge_sel_border: Color32::from_rgb(77, 163, 255),
+                rung_text_dim: Color32::from_rgb(154, 160, 166),
+                rung_text_num: Color32::from_rgb(230, 232, 235),
+                rung_text_sel: Color32::WHITE,
+                symbol_idle: Color32::WHITE,
+                symbol_closed: Color32::from_rgb(82, 196, 130),
+                symbol_subtext: Color32::from_rgb(154, 160, 166),
+                coil_idle: Color32::from_rgb(77, 163, 255),
+                card_bg: Color32::from_rgb(43, 48, 58),
+                card_border: Color32::from_rgb(64, 72, 86),
+                pill_bg: Color32::from_rgb(33, 37, 44),
                 pill_active_bg: Color32::from_rgba_unmultiplied(48, 92, 62, 215),
                 comment_bg: Color32::from_rgba_unmultiplied(42, 62, 50, 160),
                 comment_fg: Color32::from_rgb(138, 195, 155),
-                accent_heading: Color32::from_rgb(122, 172, 218),
-                accent_warn: Color32::from_rgb(218, 172, 95),
-                accent_ok: Color32::from_rgb(108, 188, 138),
-                accent_danger: Color32::from_rgb(232, 122, 116),
-                text_primary: Color32::from_rgb(214, 218, 226),
+                accent_heading: Color32::from_rgb(77, 163, 255),
+                accent_warn: Color32::from_rgb(230, 180, 80),
+                accent_ok: Color32::from_rgb(82, 196, 130),
+                accent_danger: Color32::from_rgb(240, 113, 120),
+                text_primary: Color32::from_rgb(230, 232, 235),
             },
             AppTheme::Dark => ThemePalette {
                 canvas_bg: Color32::from_rgb(17, 18, 21),
                 grid_dot: Color32::from_rgb(38, 38, 42),
+                chrome_bg: Color32::from_rgb(22, 23, 27),
+                tab_selected_bg: Color32::from_rgb(45, 62, 92),
                 banner_bg: Color32::from_rgb(29, 31, 37),
                 banner_border: Color32::from_rgb(60, 60, 68),
                 banner_title: Color32::from_rgb(230, 230, 235),
@@ -262,6 +261,8 @@ impl AppTheme {
             AppTheme::Light => ThemePalette {
                 canvas_bg: Color32::from_rgb(247, 249, 252),
                 grid_dot: Color32::from_rgb(210, 218, 230),
+                chrome_bg: Color32::from_rgb(238, 242, 247),
+                tab_selected_bg: Color32::from_rgb(214, 229, 250),
                 banner_bg: Color32::from_rgb(235, 241, 248),
                 banner_border: Color32::from_rgb(185, 198, 218),
                 banner_title: Color32::from_rgb(18, 85, 165),
@@ -303,6 +304,8 @@ impl AppTheme {
 pub struct ThemePalette {
     pub canvas_bg: Color32,
     pub grid_dot: Color32,
+    pub chrome_bg: Color32,
+    pub tab_selected_bg: Color32,
     pub banner_bg: Color32,
     pub banner_border: Color32,
     pub banner_title: Color32,
@@ -436,6 +439,22 @@ mod tests {
                     );
                 }
             }
+
+            let tab_ratio = wcag_contrast_ratio(p.text_primary, p.tab_selected_bg);
+            assert!(
+                tab_ratio >= 4.5,
+                "Theme {:?}: text_primary on tab_selected_bg has contrast {:.2} (< 4.5 WCAG AA)",
+                theme,
+                tab_ratio
+            );
+
+            let chrome_ratio = wcag_contrast_ratio(p.text_primary, p.chrome_bg);
+            assert!(
+                chrome_ratio >= 4.5,
+                "Theme {:?}: text_primary on chrome_bg has contrast {:.2} (< 4.5 WCAG AA)",
+                theme,
+                chrome_ratio
+            );
         }
     }
 }

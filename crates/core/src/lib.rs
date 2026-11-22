@@ -5,6 +5,7 @@ pub mod il_format;
 pub use il_format as ld_format;
 pub mod shape;
 pub mod simulation;
+pub mod validator;
 
 pub use bytecode::{
     BytecodeCompiler, BytecodeInstruction, BytecodeProgram, CompileReport, HardwareIoConfig,
@@ -21,4 +22,9 @@ pub use ladder::{
 pub use il_format::{IlParser, LdParser};
 pub use shape::{ColorRgb, Point2D, Shape, ShapeKind};
 pub use simulation::{PlcSimulator, SimState};
+pub use validator::{
+    branch_contains_any_coil, is_parallel_output_branch, is_structural_topology_rule,
+    validate_program, ProgramValidationReport, ValidationIssue, ValidationPolicy,
+    ValidationSeverity,
+};
 

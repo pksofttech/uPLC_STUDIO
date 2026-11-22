@@ -3,7 +3,9 @@ use egui::{
     StrokeKind, Ui, Vec2,
 };
 use my_canvas_core::{
-    CoilMode, CoilStyle, ContactMode, ContactStyle, Document, InsertPosition, LadderElement, TypeTag,
+    branch_contains_any_coil, is_parallel_output_branch, validate_program, CoilMode, CoilStyle,
+    ContactMode, ContactStyle, Document, InsertPosition, LadderElement, ProgramValidationReport,
+    Rung, TypeTag, ValidationSeverity,
 };
 use crate::icons::{paint_icon, VectorIcon};
 use crate::theme::ThemePalette;
@@ -38,6 +40,8 @@ pub struct CanvasViewport {
     pub is_edit_mode: bool,
     pub is_online_hw_mode: bool,
     pub pending_debug_event: Option<CanvasDebugEvent>,
+    pub show_diagnostics_popover: bool,
+    pub rejection_toast: Option<(String, f64)>,
 }
 
 impl Default for CanvasViewport {
@@ -57,7 +61,22 @@ impl Default for CanvasViewport {
             is_edit_mode: true,
             is_online_hw_mode: false,
             pending_debug_event: None,
+            show_diagnostics_popover: false,
+            rejection_toast: None,
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PlacementViolation {
+    rule_id: &'static str,
+    message: &'static str,
+    suggestion: &'static str,
+}
+
+impl PlacementViolation {
+    fn formatted(&self) -> String {
+        format!("[{}] {}", self.rule_id, self.message)
     }
 }
 
@@ -67,61 +86,165 @@ struct DropTarget {
     target_elem_id: Option<u64>,
     insert_pos: InsertPosition,
     target_label: String,
+    validation_rule_id: Option<&'static str>,
     validation_error: Option<String>,
     create_new_rung: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct PlacementContext {
+    target_is_first: bool,
+    target_is_last: bool,
+    in_branch: bool,
+    has_downstream_after_branch: bool,
+}
+
+fn find_placement_context(rung: &Rung, elem_id: u64) -> PlacementContext {
+    fn walk(
+        elements: &[LadderElement],
+        elem_id: u64,
+        in_branch: bool,
+        has_downstream_after_branch: bool,
+    ) -> Option<PlacementContext> {
+        let last_idx = elements.len().saturating_sub(1);
+        for (idx, el) in elements.iter().enumerate() {
+            let is_first = idx == 0;
+            let is_last = idx == last_idx;
+            if el.id == elem_id {
+                return Some(PlacementContext {
+                    target_is_first: is_first,
+                    target_is_last: is_last,
+                    in_branch,
+                    has_downstream_after_branch,
+                });
+            }
+            if el.element_type == TypeTag::Branch {
+                let child_downstream = has_downstream_after_branch || !is_last;
+                for path in &el.branch_paths {
+                    if let Some(found) = walk(path, elem_id, true, child_downstream) {
+                        return Some(found);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    walk(&rung.elements, elem_id, false, false).unwrap_or_default()
 }
 
 fn validate_placement(
     source_tag: TypeTag,
     target_elem: &LadderElement,
     insert_pos: InsertPosition,
-    target_is_first: bool,
-    _target_is_last: bool,
-) -> Result<InsertPosition, &'static str> {
-    // Rule 1: Label [LBL] must only be placed at the beginning of the network
+    ctx: PlacementContext,
+) -> Result<InsertPosition, PlacementViolation> {
+    // R01: Label [LBL] must only be placed at the beginning of the network
     if source_tag == TypeTag::Label {
         if insert_pos == InsertPosition::TopParallel || insert_pos == InsertPosition::BottomParallel {
-            return Err("LBL cannot be placed in a parallel branch");
+            return Err(PlacementViolation {
+                rule_id: "R01",
+                message: "LBL cannot be placed in a parallel branch",
+                suggestion: "Place LBL at the left rail at the start of the network",
+            });
         }
-        if !target_is_first || insert_pos != InsertPosition::Left {
-            return Err("LBL must be placed at the left rail (beginning of network)");
+        if ctx.in_branch || !ctx.target_is_first || insert_pos != InsertPosition::Left {
+            return Err(PlacementViolation {
+                rule_id: "R01",
+                message: "LBL must be placed at the left rail (start of network)",
+                suggestion: "Drop LBL to the left of the first element",
+            });
         }
     }
 
-    // Rule 2: Cannot place any components after Jump [JMP] (Dead code)
-    if target_elem.element_type == TypeTag::Jump && insert_pos == InsertPosition::Right {
-        return Err("Cannot place elements after JMP instruction");
+    // R01: Cannot place any components after Jump [JMP] or Return [RET] (Dead code)
+    if matches!(target_elem.element_type, TypeTag::Jump | TypeTag::Return)
+        && insert_pos == InsertPosition::Right
+    {
+        return Err(PlacementViolation {
+            rule_id: "R01",
+            message: "Cannot place elements after JMP/RET instruction",
+            suggestion: "Place elements before JMP/RET or in another network",
+        });
     }
 
-    // Rule 3: Output Coils terminate the rung
+    // R07 / R08 / R09 / R10: Strict rules around Output Coils
     if target_elem.element_type == TypeTag::Coil {
         if insert_pos == InsertPosition::Right {
             if source_tag == TypeTag::Coil {
-                // Auto-correct: user dropped coil to the right of coil -> connect parallel coil!
-                return Ok(InsertPosition::BottomParallel);
+                return Err(PlacementViolation {
+                    rule_id: "R08",
+                    message: "Coils cannot be placed in series",
+                    suggestion: "Drop on Top/Bottom Parallel of the Coil instead",
+                });
+            } else if source_tag == TypeTag::Branch {
+                return Err(PlacementViolation {
+                    rule_id: "R10",
+                    message: "Cannot branch from the output side of a Coil",
+                    suggestion: "Move the branch point before the Coil",
+                });
             } else {
-                return Err("Coil terminates the network. Cannot place inputs to the right");
+                return Err(PlacementViolation {
+                    rule_id: "R09",
+                    message: "Coil terminates the branch; cannot place elements after a Coil",
+                    suggestion: "Move input/logic elements before the Coil",
+                });
             }
         }
         if insert_pos == InsertPosition::Left && source_tag == TypeTag::Coil {
-            // Auto-correct: user dropped coil to the left of coil -> connect parallel coil!
-            return Ok(InsertPosition::TopParallel);
+            return Err(PlacementViolation {
+                rule_id: "R08",
+                message: "Coils cannot be placed in series; use Parallel Above/Below",
+                suggestion: "Drop on Top/Bottom Parallel of the Coil instead",
+            });
         }
-        // Cannot parallel a contact across an output coil
         if (insert_pos == InsertPosition::TopParallel || insert_pos == InsertPosition::BottomParallel)
             && source_tag == TypeTag::Contact
         {
-            return Err("Cannot parallel an input contact across an output coil");
+            return Err(PlacementViolation {
+                rule_id: "R07",
+                message: "Cannot parallel an input contact across an output coil",
+                suggestion: "Place input contacts before the output coil",
+            });
+        }
+        if (insert_pos == InsertPosition::TopParallel || insert_pos == InsertPosition::BottomParallel)
+            && source_tag == TypeTag::Coil
+        {
+            if ctx.in_branch && ctx.has_downstream_after_branch {
+                return Err(PlacementViolation {
+                    rule_id: "R21",
+                    message: "Coil cannot be placed inside a branch before a merge with downstream elements",
+                    suggestion: "Place the Coil at the end of the network or in a terminal parallel output branch",
+                });
+            }
+            return Ok(insert_pos);
         }
     }
 
-    // Rule 4: Cannot parallel an output coil across an input contact, or place outputs before contacts
+    // R21: Forbid placing a Coil inside a branch before a merge with downstream elements
+    if source_tag == TypeTag::Coil && ctx.in_branch && ctx.has_downstream_after_branch {
+        return Err(PlacementViolation {
+            rule_id: "R21",
+            message: "Coil cannot be placed inside a branch before a merge with downstream elements",
+            suggestion: "Place the Coil at the end of the network or in a terminal parallel output branch",
+        });
+    }
+
+    // R06 / R07: Cannot parallel an output coil across an input contact, or place outputs before contacts
     if target_elem.element_type == TypeTag::Contact && source_tag == TypeTag::Coil {
         if insert_pos == InsertPosition::TopParallel || insert_pos == InsertPosition::BottomParallel {
-            return Err("Cannot parallel an output coil across an input contact");
+            return Err(PlacementViolation {
+                rule_id: "R07",
+                message: "Cannot parallel an output coil across an input contact",
+                suggestion: "Place output coils at the end of the network",
+            });
         }
         if insert_pos == InsertPosition::Left {
-            return Err("Cannot place an output coil before an input contact");
+            return Err(PlacementViolation {
+                rule_id: "R06",
+                message: "Cannot place an output coil before an input contact",
+                suggestion: "Place output coils at the end of the network",
+            });
         }
     }
     if target_elem.element_type == TypeTag::Contact
@@ -129,17 +252,25 @@ fn validate_placement(
         && source_tag.is_right_aligned()
         && insert_pos == InsertPosition::Left
     {
-        return Err("Cannot place an output instruction before an input contact");
+        return Err(PlacementViolation {
+            rule_id: "R06",
+            message: "Cannot place an output instruction before an input contact",
+            suggestion: "Place output instructions after input contacts",
+        });
     }
     if target_elem.element_type != TypeTag::Coil
         && target_elem.element_type.is_right_aligned()
         && source_tag == TypeTag::Contact
         && insert_pos == InsertPosition::Right
     {
-        return Err("Cannot place an input contact after an output instruction");
+        return Err(PlacementViolation {
+            rule_id: "R09",
+            message: "Cannot place an input contact after an output instruction",
+            suggestion: "Move input contacts before output instructions",
+        });
     }
 
-    // Rule 5: Cannot place a coil before a Function Block
+    // R06: Cannot place a coil before a Function Block
     if matches!(
         target_elem.element_type,
         TypeTag::Ton
@@ -158,10 +289,62 @@ fn validate_placement(
     ) && source_tag == TypeTag::Coil
         && insert_pos == InsertPosition::Left
     {
-        return Err("Cannot place an output coil before a function block");
+        return Err(PlacementViolation {
+            rule_id: "R06",
+            message: "Cannot place an output coil before a function block",
+            suggestion: "Place the coil after the function block",
+        });
+    }
+
+    // R21: Coil must be the terminal element; cannot place Coil before downstream elements
+    if source_tag == TypeTag::Coil
+        && !ctx.target_is_last
+        && matches!(insert_pos, InsertPosition::Left | InsertPosition::Right)
+    {
+        return Err(PlacementViolation {
+            rule_id: "R21",
+            message: "Coil must be the terminal element; cannot place Coil before downstream elements",
+            suggestion: "Place the Coil at the end of the network or in a terminal parallel output branch",
+        });
     }
 
     Ok(insert_pos)
+}
+
+fn validate_rung_append(source_tag: TypeTag, rung: &Rung) -> Result<(), PlacementViolation> {
+    if source_tag == TypeTag::Label && !rung.elements.is_empty() {
+        return Err(PlacementViolation {
+            rule_id: "R01",
+            message: "LBL must be placed at the start of an empty network",
+            suggestion: "Drop LBL to the left of the first element or onto a new network",
+        });
+    }
+    if let Some(last) = rung.elements.last() {
+        if matches!(last.element_type, TypeTag::Jump | TypeTag::Return) {
+            return Err(PlacementViolation {
+                rule_id: "R01",
+                message: "Cannot append elements after JMP/RET instruction",
+                suggestion: "Insert before JMP/RET or create a new network",
+            });
+        }
+        if source_tag == TypeTag::Coil
+            && (last.element_type == TypeTag::Coil || is_parallel_output_branch(last))
+        {
+            return Err(PlacementViolation {
+                rule_id: "R08",
+                message: "Network already ends with a Coil; drop on Top/Bottom Parallel of the Coil instead",
+                suggestion: "Use Parallel Above/Below on the existing Coil for R07 parallel outputs",
+            });
+        }
+        if last.element_type == TypeTag::Branch && branch_contains_any_coil(last) {
+            return Err(PlacementViolation {
+                rule_id: "R21",
+                message: "Cannot append elements after a branch containing a Coil",
+                suggestion: "Coil must terminate directly at the right rail; add a new network or parallel output branch",
+            });
+        }
+    }
+    Ok(())
 }
 
 fn draw_dashed_rect(painter: &Painter, rect: Rect, stroke: Stroke, dash: f32, gap: f32) {
@@ -242,6 +425,33 @@ fn ctx_menu_item(
         );
     }
     resp.clicked()
+}
+
+fn ctx_menu_item_disabled(
+    ui: &mut Ui,
+    label: &str,
+    violation: PlacementViolation,
+    palette: ThemePalette,
+) {
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::hover());
+    ui.painter().text(
+        pos2(rect.min.x + 8.0, rect.center().y),
+        Align2::LEFT_CENTER,
+        label,
+        FontId::proportional(11.5),
+        palette.rung_text_dim.gamma_multiply(0.65),
+    );
+    ui.painter().text(
+        pos2(rect.max.x - 8.0, rect.center().y),
+        Align2::RIGHT_CENTER,
+        format!("[{}]", violation.rule_id),
+        FontId::monospace(9.5),
+        palette.accent_danger.gamma_multiply(0.85),
+    );
+    resp.on_hover_text(format!(
+        "[{}] {}\nFix: {}",
+        violation.rule_id, violation.message, violation.suggestion
+    ));
 }
 
 fn ctx_menu_sep(ui: &mut Ui, palette: ThemePalette) {
@@ -423,6 +633,24 @@ impl CanvasViewport {
             total.max(cell_h)
         } else {
             cell_h
+        }
+    }
+
+    fn element_width(elem: &LadderElement, cell_w: f32) -> f32 {
+        if elem.element_type == TypeTag::Branch {
+            let pad_x = 14.0;
+            let max_path_w = elem
+                .branch_paths
+                .iter()
+                .map(|path| {
+                    path.iter()
+                        .map(|sub| Self::element_width(sub, cell_w))
+                        .sum::<f32>()
+                })
+                .fold(cell_w, f32::max);
+            max_path_w + pad_x * 2.0
+        } else {
+            cell_w
         }
     }
 
@@ -871,6 +1099,11 @@ impl CanvasViewport {
         let mut element_screen_bounds: Vec<(usize, u64, Rect)> = Vec::new();
         let mut rung_y_spans: Vec<(usize, f32, f32)> = Vec::new();
         let mut cur_y = margin_top;
+        if let Some(msg) = doc.last_edit_rejection.take() {
+            self.rejection_toast = Some((msg, ui.input(|i| i.time)));
+        }
+        let validation_report = validate_program(&doc.program);
+        let mut pending_tooltip: Option<(Pos2, Vec<String>, Color32)> = None;
 
         // Collect all element IDs sharing the same address/variable as the selected element (Cross-Reference)
         let ref_element_ids: Vec<u64> = if let Some(sel_id) = doc.selected_element_id {
@@ -1013,6 +1246,12 @@ impl CanvasViewport {
             if badge_hovered {
                 any_interactive_hovered = true;
             }
+            let rung_sev = validation_report.highest_severity_for_rung(r_idx);
+            let rung_val_col = match rung_sev {
+                Some(ValidationSeverity::Error) => Some(palette.accent_danger),
+                Some(ValidationSeverity::Warning) => Some(palette.accent_warn),
+                _ => None,
+            };
             let badge_bg = if is_rung_selected {
                 palette.rung_badge_sel_bg
             } else if badge_hovered {
@@ -1022,6 +1261,8 @@ impl CanvasViewport {
             };
             let badge_border = if is_rung_selected {
                 palette.rung_badge_sel_border
+            } else if let Some(vc) = rung_val_col {
+                vc
             } else {
                 palette.rung_badge_border
             };
@@ -1033,6 +1274,28 @@ impl CanvasViewport {
                 Stroke::new(1.5 * self.zoom, badge_border),
                 StrokeKind::Inside,
             );
+            if let Some(vc) = rung_val_col {
+                let dot_r = 4.5 * self.zoom;
+                let dot_c = pos2(
+                    r_badge_screen.max.x - 5.5 * self.zoom,
+                    r_badge_screen.min.y + 5.5 * self.zoom,
+                );
+                painter.circle_filled(dot_c, dot_r, vc);
+                if badge_hovered && !is_dragging {
+                    let mut lines = Vec::new();
+                    for iss in validation_report.issues_for_rung(r_idx).into_iter().take(4) {
+                        lines.push(format!("[{}] {}", iss.rule_id, iss.message));
+                        lines.push(format!("  Fix: {}", iss.suggestion));
+                    }
+                    if !lines.is_empty() {
+                        pending_tooltip = Some((
+                            pos2(r_badge_screen.max.x + 8.0, r_badge_screen.min.y),
+                            lines,
+                            vc,
+                        ));
+                    }
+                }
+            }
             let top_sub = if label_elem.is_some() { "TARGET" } else { "NETWORK" };
             painter.text(
                 pos2(
@@ -1106,10 +1369,13 @@ impl CanvasViewport {
             } else {
                 let last_idx = rung.elements.len().saturating_sub(1);
                 for (elem_idx, elem) in rung.elements.iter().enumerate() {
-                    // Right-align terminal elements (COIL or trailing output element at the end of the rung)
+                    // Right-align terminal elements (COIL, right-aligned output, or parallel output branch at the end of the rung)
                     let is_last = elem_idx == last_idx;
-                    if elem.element_type.is_right_aligned() && is_last {
-                        let target_x = (margin_right - cell_w - 16.0).max(cur_x + 36.0);
+                    let is_output_branch = is_parallel_output_branch(elem);
+                    if (elem.element_type.is_right_aligned() || is_output_branch) && is_last {
+                        let elem_w = Self::element_width(elem, cell_w);
+                        let right_pad = if is_output_branch { 0.0 } else { 16.0 };
+                        let target_x = (margin_right - elem_w - right_pad).max(cur_x + 36.0);
                         if target_x > cur_x {
                             self.draw_power_wire(
                                 &painter,
@@ -1154,6 +1420,12 @@ impl CanvasViewport {
                         dragging_source_type,
                         elem_idx == 0,
                         is_last,
+                        false,
+                        false,
+                        is_output_branch && is_last,
+                        margin_right,
+                        &validation_report,
+                        &mut pending_tooltip,
                     );
 
                     cur_x = next_x;
@@ -1163,12 +1435,13 @@ impl CanvasViewport {
                     power_in = elem.is_energized && sim_active;
                 }
 
-                // If no right-aligned coil yet, show [+] button at end of elements (only in Edit mode)
-                let has_coil = rung
-                    .elements
-                    .iter()
-                    .any(|e| e.element_type.is_right_aligned());
-                if self.is_edit_mode && !sim_active && !has_coil && cur_x < margin_right - 40.0 {
+                // If no terminal output yet, show [+] button at end of elements (only in Edit mode)
+                let has_terminal_output = rung.elements.iter().any(|e| {
+                    e.element_type.is_right_aligned()
+                        || is_parallel_output_branch(e)
+                        || branch_contains_any_coil(e)
+                });
+                if self.is_edit_mode && !sim_active && !has_terminal_output && cur_x < margin_right - 40.0 {
                     self.draw_add_slot_button(
                         &painter,
                         origin,
@@ -1182,7 +1455,7 @@ impl CanvasViewport {
                     );
                 }
 
-                // Connect tail wire to Right Power Rail
+                // Connect tail wire to Right Power Rail (skip if a terminal parallel output branch already connected each path to L2)
                 if cur_x < margin_right {
                     self.draw_power_wire(
                         &painter,
@@ -1191,14 +1464,14 @@ impl CanvasViewport {
                         rung.is_energized && sim_active,
                         palette,
                     );
-                }
-                // T-junction dot at L2 rail intersection
-                let pt_l2 = self.to_screen(pos2(margin_right, wire_y), origin);
-                if rung.is_energized && sim_active {
-                    painter.circle_filled(pt_l2, 5.5 * self.zoom, palette.wire_glow);
-                    painter.circle_filled(pt_l2, 3.4 * self.zoom, palette.wire_energized);
-                } else {
-                    painter.circle_filled(pt_l2, 3.0 * self.zoom, palette.l2_rail);
+                    // T-junction dot at L2 rail intersection
+                    let pt_l2 = self.to_screen(pos2(margin_right, wire_y), origin);
+                    if rung.is_energized && sim_active {
+                        painter.circle_filled(pt_l2, 5.5 * self.zoom, palette.wire_glow);
+                        painter.circle_filled(pt_l2, 3.4 * self.zoom, palette.wire_energized);
+                    } else {
+                        painter.circle_filled(pt_l2, 3.0 * self.zoom, palette.l2_rail);
+                    }
                 }
             }
 
@@ -1211,12 +1484,10 @@ impl CanvasViewport {
                     self.to_screen(rung_band_world.max, origin),
                 );
                 if hover_pos.map_or(false, |hp| rung_band_screen.contains(hp)) {
-                    let mut append_err = None;
-                    if let Some(src_type) = dragging_source_type {
-                        if src_type == TypeTag::Label && !doc.program.rungs[r_idx].elements.is_empty() {
-                            append_err = Some("LBL must be placed at the start of an empty network".to_string());
-                        }
-                    }
+                    let append_violation = dragging_source_type
+                        .and_then(|src_type| validate_rung_append(src_type, &doc.program.rungs[r_idx]).err());
+                    let append_rule = append_violation.map(|v| v.rule_id);
+                    let append_err = append_violation.map(|v| v.formatted());
                     let slot_col = if append_err.is_some() {
                         palette.accent_danger
                     } else {
@@ -1241,7 +1512,11 @@ impl CanvasViewport {
                         .map(|(_, l)| l.as_str())
                         .or_else(|| self.dragging_elem.as_ref().map(|(_, l)| l.as_str()))
                         .unwrap_or("Element");
-                    let label = format!("Append {} · Network #{:02}", item_lbl, r_idx + 1);
+                    let label = if let Some(rid) = append_rule {
+                        format!("Blocked {} · Network #{:02}", rid, r_idx + 1)
+                    } else {
+                        format!("Append {} · Network #{:02}", item_lbl, r_idx + 1)
+                    };
                     painter.text(
                         pos2(
                             rung_band_screen.center().x,
@@ -1257,6 +1532,7 @@ impl CanvasViewport {
                         target_elem_id: None,
                         insert_pos: InsertPosition::AppendRung,
                         target_label: format!("Network #{:02} (Append)", r_idx + 1),
+                        validation_rule_id: append_rule,
                         validation_error: append_err,
                         create_new_rung: false,
                     });
@@ -1359,6 +1635,7 @@ impl CanvasViewport {
                 target_elem_id: None,
                 insert_pos: InsertPosition::AppendRung,
                 target_label: format!("New Network #{:02}", new_rung_idx + 1),
+                validation_rule_id: None,
                 validation_error: None,
                 create_new_rung: true,
             });
@@ -1369,12 +1646,19 @@ impl CanvasViewport {
                     let world_p = self.to_world(hp, origin);
                     for &(r_idx, r_start_y, r_end_y) in &rung_y_spans {
                         if world_p.y >= r_start_y - 6.0 && world_p.y <= r_end_y + 12.0 {
+                            let append_violation = dragging_source_type.and_then(|src_type| {
+                                doc.program
+                                    .rungs
+                                    .get(r_idx)
+                                    .and_then(|r| validate_rung_append(src_type, r).err())
+                            });
                             drop_target = Some(DropTarget {
                                 rung_idx: r_idx,
                                 target_elem_id: None,
                                 insert_pos: InsertPosition::AppendRung,
                                 target_label: format!("Network #{:02} (Append)", r_idx + 1),
-                                validation_error: None,
+                                validation_rule_id: append_violation.map(|v| v.rule_id),
+                                validation_error: append_violation.map(|v| v.formatted()),
                                 create_new_rung: false,
                             });
                             break;
@@ -1594,6 +1878,39 @@ impl CanvasViewport {
             }
         }
 
+        // Precompute bottom-left STRICT_EDITOR Validation pill hit-box so clicking it never clears selection or starts marquee drag
+        let val_err_count = validation_report.error_count();
+        let val_warn_count = validation_report.warning_count();
+        let val_pill_label = if val_err_count == 0 && val_warn_count == 0 {
+            "✓ STRICT_EDITOR".to_string()
+        } else if val_err_count > 0 && val_warn_count > 0 {
+            format!("✕ {} Err · ⚠ {} Warn", val_err_count, val_warn_count)
+        } else if val_err_count > 0 {
+            format!("✕ {} Err", val_err_count)
+        } else {
+            format!("⚠ {} Warn", val_warn_count)
+        };
+        let validation_pill_rect: Option<Rect> =
+            if viewport_rect.width() >= 320.0 && !is_dragging && self.context_menu_elem.is_none() {
+                let pill_w = (val_pill_label.chars().count() as f32 * 7.2 + 20.0).clamp(118.0, 210.0);
+                let pill_h = 24.0;
+                let offset_x = 10.0;
+                let offset_y = if show_h_bar { bar_thickness + 10.0 } else { 10.0 };
+                let rect = Rect::from_min_size(
+                    pos2(
+                        viewport_rect.min.x + offset_x,
+                        viewport_rect.max.y - pill_h - offset_y,
+                    ),
+                    vec2(pill_w, pill_h),
+                );
+                if hover_pos.map_or(false, |hp| rect.contains(hp)) {
+                    any_interactive_hovered = true;
+                }
+                Some(rect)
+            } else {
+                None
+            };
+
         // Precompute bottom-right Zoom & Fit CAD pill hit-box so clicking it never clears selection or starts marquee drag
         let zoom_pill_rect: Option<Rect> =
             if viewport_rect.width() >= 260.0 && !is_dragging && self.context_menu_elem.is_none() {
@@ -1753,8 +2070,21 @@ impl CanvasViewport {
                 paint_icon(&painter, icon_box.shrink(4.0), drag_icon, border_col);
 
                 // Right top row: compact uppercase pill badge + monospace label
-                let badge_text = if val_err.is_some() { "BLOCKED" } else { action_badge };
-                let badge_w = if val_err.is_some() { 50.0 } else { 38.0 };
+                let val_rule = drop_target.as_ref().and_then(|dt| dt.validation_rule_id);
+                let badge_text = if let Some(rid) = val_rule {
+                    format!("BLOCKED · {}", rid)
+                } else if val_err.is_some() {
+                    "BLOCKED".to_string()
+                } else {
+                    action_badge.to_string()
+                };
+                let badge_w = if val_rule.is_some() {
+                    76.0
+                } else if val_err.is_some() {
+                    50.0
+                } else {
+                    38.0
+                };
                 let badge_rect = Rect::from_center_size(
                     pos2(ghost_rect.min.x + 44.0 + badge_w * 0.5, ghost_rect.min.y + 14.0),
                     vec2(badge_w, 14.0),
@@ -1763,7 +2093,7 @@ impl CanvasViewport {
                 painter.text(
                     badge_rect.center(),
                     Align2::CENTER_CENTER,
-                    badge_text,
+                    &badge_text,
                     FontId::proportional(8.5),
                     Color32::WHITE,
                 );
@@ -1836,6 +2166,303 @@ impl CanvasViewport {
                 palette.banner_border.gamma_multiply(0.9)
             };
             painter.rect_filled(thumb_rect_h, CornerRadius::same(4), thumb_bg);
+        }
+
+        // --- Bottom-Left Floating STRICT_EDITOR Validation Pill & Diagnostics Popover ---
+        if let Some(pill_rect) = validation_pill_rect {
+            let pill_accent = if val_err_count > 0 {
+                palette.accent_danger
+            } else if val_warn_count > 0 {
+                palette.accent_warn
+            } else {
+                palette.accent_ok
+            };
+            let pill_hov = hover_pos.map_or(false, |hp| pill_rect.contains(hp));
+            if pill_hov {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            painter.rect_filled(
+                pill_rect,
+                CornerRadius::same(5),
+                if pill_hov || self.show_diagnostics_popover {
+                    palette.rung_badge_hov_bg
+                } else {
+                    palette.card_bg.gamma_multiply(0.94)
+                },
+            );
+            painter.rect_stroke(
+                pill_rect,
+                CornerRadius::same(5),
+                Stroke::new(
+                    1.1,
+                    pill_accent.gamma_multiply(if val_err_count > 0 || val_warn_count > 0 || self.show_diagnostics_popover {
+                        0.95
+                    } else {
+                        0.65
+                    }),
+                ),
+                StrokeKind::Inside,
+            );
+            painter.text(
+                pill_rect.center(),
+                Align2::CENTER_CENTER,
+                &val_pill_label,
+                FontId::monospace(10.5),
+                pill_accent,
+            );
+            if pill_hov && !self.show_diagnostics_popover {
+                let mut lines = Vec::new();
+                let visible_issues: Vec<_> = validation_report
+                    .issues
+                    .iter()
+                    .filter(|i| i.severity >= ValidationSeverity::Unknown)
+                    .collect();
+                if visible_issues.is_empty() {
+                    lines.push("STRICT_EDITOR: All networks valid (0 errors, 0 warnings)".to_string());
+                } else {
+                    for iss in visible_issues.iter().take(6) {
+                        lines.push(format!(
+                            "Net #{:02} [{}] {}",
+                            iss.rung_idx + 1,
+                            iss.rule_id,
+                            iss.message
+                        ));
+                    }
+                    if visible_issues.len() > 6 {
+                        lines.push(format!("+{} more issue(s)...", visible_issues.len() - 6));
+                    }
+                    lines.push("Click to open Diagnostics Panel".to_string());
+                }
+                pending_tooltip = Some((
+                    pos2(pill_rect.min.x, pill_rect.min.y - 8.0),
+                    lines,
+                    pill_accent,
+                ));
+            }
+            if is_clicked && pill_hov {
+                self.show_diagnostics_popover = !self.show_diagnostics_popover;
+                action = None;
+            }
+
+            // Interactive Diagnostics Popover anchored above the bottom-left pill
+            if self.show_diagnostics_popover {
+                let pop_w = 360.0_f32.min((viewport_rect.width() - 20.0).max(240.0));
+                let pop_max_h = 240.0_f32.min((viewport_rect.height() - 60.0).max(120.0));
+                let pop_x = pill_rect
+                    .min
+                    .x
+                    .clamp(viewport_rect.min.x + 8.0, (viewport_rect.max.x - pop_w - 8.0).max(viewport_rect.min.x + 8.0));
+                let pop_y = (pill_rect.min.y - pop_max_h - 8.0).max(viewport_rect.min.y + 8.0);
+                let mut close_popover = ui.ctx().input(|i| i.key_pressed(egui::Key::Escape));
+                let mut jump_target: Option<(usize, Option<u64>)> = None;
+
+                let area_resp = egui::Area::new(egui::Id::unique("strict_editor_diagnostics_popover"))
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(pos2(pop_x, pop_y))
+                    .show(ui.ctx(), |ui| {
+                        egui::Frame::new()
+                            .fill(palette.card_bg)
+                            .stroke(Stroke::new(1.1, pill_accent.gamma_multiply(0.85)))
+                            .corner_radius(CornerRadius::same(7))
+                            .inner_margin(egui::Margin::symmetric(10, 8))
+                            .shadow(egui::Shadow {
+                                offset: [0, 4],
+                                blur: 14,
+                                spread: 0,
+                                color: Color32::from_black_alpha(if palette.is_light() { 40 } else { 125 }),
+                            })
+                            .show(ui, |ui| {
+                                ui.set_width(pop_w - 20.0);
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "STRICT_EDITOR Diagnostics ({} Err · {} Warn)",
+                                            val_err_count, val_warn_count
+                                        ))
+                                        .strong()
+                                        .size(11.5)
+                                        .color(palette.text_primary),
+                                    );
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if ui
+                                                .add(
+                                                    egui::Button::new(
+                                                        egui::RichText::new("×")
+                                                            .size(13.0)
+                                                            .color(palette.rung_text_dim),
+                                                    )
+                                                    .frame(false),
+                                                )
+                                                .clicked()
+                                            {
+                                                close_popover = true;
+                                            }
+                                        },
+                                    );
+                                });
+                                ui.add_space(4.0);
+                                ui.separator();
+                                ui.add_space(4.0);
+
+                                let diag_issues: Vec<_> = validation_report
+                                    .issues
+                                    .iter()
+                                    .filter(|i| i.severity >= ValidationSeverity::Warning)
+                                    .collect();
+
+                                if diag_issues.is_empty() {
+                                    ui.label(
+                                        egui::RichText::new("✓ All STRICT_EDITOR rules passed")
+                                            .size(11.5)
+                                            .color(palette.accent_ok),
+                                    );
+                                } else {
+                                    egui::ScrollArea::vertical()
+                                        .max_height((pop_max_h - 54.0).max(80.0))
+                                        .show(ui, |ui| {
+                                            for iss in diag_issues {
+                                                let row_col = match iss.severity {
+                                                    ValidationSeverity::Error => palette.accent_danger,
+                                                    ValidationSeverity::Warning => palette.accent_warn,
+                                                    _ => palette.accent_heading,
+                                                };
+                                                let frame_resp = egui::Frame::new()
+                                                    .fill(palette.canvas_bg.gamma_multiply(0.55))
+                                                    .stroke(Stroke::new(0.8, row_col.gamma_multiply(0.45)))
+                                                    .corner_radius(CornerRadius::same(4))
+                                                    .inner_margin(egui::Margin::symmetric(7, 5))
+                                                    .show(ui, |ui| {
+                                                        ui.set_width(ui.available_width());
+                                                        ui.horizontal_wrapped(|ui| {
+                                                            ui.label(
+                                                                egui::RichText::new(format!("[{}]", iss.rule_id))
+                                                                    .monospace()
+                                                                    .strong()
+                                                                    .size(10.5)
+                                                                    .color(row_col),
+                                                            );
+                                                            ui.label(
+                                                                egui::RichText::new(format!("Net #{:02}", iss.rung_idx + 1))
+                                                                    .monospace()
+                                                                    .size(10.0)
+                                                                    .color(palette.rung_text_dim),
+                                                            );
+                                                            ui.label(
+                                                                egui::RichText::new(&iss.message)
+                                                                    .size(10.5)
+                                                                    .color(palette.text_primary),
+                                                            );
+                                                        });
+                                                        ui.label(
+                                                            egui::RichText::new(format!("Fix: {}", iss.suggestion))
+                                                                .size(9.5)
+                                                                .color(palette.rung_text_dim),
+                                                        );
+                                                    });
+                                                let click_resp = ui.interact(
+                                                    frame_resp.response.rect,
+                                                    ui.scope_id().with(("diag_row", iss.rung_idx, iss.rule_id, iss.element_ids.first().copied().unwrap_or(0))),
+                                                    Sense::click(),
+                                                );
+                                                if click_resp.hovered() {
+                                                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                                }
+                                                if click_resp.clicked() {
+                                                    jump_target = Some((iss.rung_idx, iss.element_ids.first().copied()));
+                                                }
+                                                ui.add_space(4.0);
+                                            }
+                                        });
+                                }
+                            });
+                    });
+
+                let pop_rect = area_resp.response.rect;
+                if hover_pos.map_or(false, |hp| pop_rect.contains(hp)) {
+                    any_interactive_hovered = true;
+                }
+                if let Some((r_idx, elem_id)) = jump_target {
+                    self.scroll_to_rung(doc, r_idx);
+                    if let Some(eid) = elem_id {
+                        doc.set_single_selection(Some(r_idx), eid);
+                    } else {
+                        doc.selected_rung_idx = Some(r_idx);
+                        doc.clear_element_selection();
+                    }
+                    action = None;
+                }
+                if primary_pressed {
+                    if let Some(p) = raw_mouse_pos.or(raw_hover_pos) {
+                        if !pop_rect.contains(p) && !pill_rect.contains(p) {
+                            close_popover = true;
+                        }
+                    }
+                }
+                if close_popover {
+                    self.show_diagnostics_popover = false;
+                }
+            }
+        }
+
+        // --- Top-Center R30 Transactional Edit Rejection Toast ---
+        if let Some((ref msg, start_t)) = self.rejection_toast {
+            let elapsed = ui.input(|i| i.time) - start_t;
+            if elapsed < 3.2 {
+                let alpha = if elapsed > 2.7 {
+                    ((3.2 - elapsed) / 0.5).clamp(0.0, 1.0) as f32
+                } else {
+                    1.0
+                };
+                let toast_text = format!("Edit Blocked (R30): {}", msg);
+                let font = FontId::proportional(11.0);
+                let text_w = painter
+                    .layout_no_wrap(toast_text.clone(), font.clone(), palette.text_primary)
+                    .size()
+                    .x;
+                let toast_w = (text_w + 28.0).clamp(180.0, (viewport_rect.width() - 24.0).max(180.0));
+                let toast_h = 28.0;
+                let toast_rect = Rect::from_center_size(
+                    pos2(viewport_rect.center().x, viewport_rect.min.y + 24.0),
+                    vec2(toast_w, toast_h),
+                );
+                painter.add(
+                    egui::Shadow {
+                        offset: [0, 3],
+                        blur: 10,
+                        spread: 0,
+                        color: Color32::from_black_alpha((if palette.is_light() { 36.0 } else { 110.0 } * alpha) as u8),
+                    }
+                    .as_shape(toast_rect, CornerRadius::same(6)),
+                );
+                painter.rect_filled(
+                    toast_rect,
+                    CornerRadius::same(6),
+                    palette.card_bg.gamma_multiply(alpha),
+                );
+                painter.rect_stroke(
+                    toast_rect,
+                    CornerRadius::same(6),
+                    Stroke::new(1.3, palette.accent_danger.gamma_multiply(alpha)),
+                    StrokeKind::Inside,
+                );
+                painter.with_clip_rect(toast_rect.shrink(4.0)).text(
+                    toast_rect.center(),
+                    Align2::CENTER_CENTER,
+                    toast_text,
+                    font,
+                    palette.accent_danger.gamma_multiply(alpha),
+                );
+                ui.ctx().request_repaint();
+            } else {
+                self.rejection_toast = None;
+            }
+        }
+
+        // --- Floating Validation Tooltip Overlay (drawn last so it stays above rails & cards) ---
+        if let Some((anchor, lines, accent)) = pending_tooltip {
+            self.draw_validation_tooltip(&painter, viewport_rect, anchor, &lines, accent, palette);
         }
 
         // --- Bottom-Right Floating Zoom & Fit CAD Pill ([-], 100%, [+], | [Fit]) ---
@@ -1935,7 +2562,17 @@ impl CanvasViewport {
                                     best_r = r_idx;
                                 }
                             }
-                            doc.move_element(drag_id, best_r, None, InsertPosition::AppendRung);
+                            let allowed = doc
+                                .program
+                                .rungs
+                                .get(best_r)
+                                .map_or(true, |r| {
+                                    dragging_source_type
+                                        .map_or(true, |st| validate_rung_append(st, r).is_ok())
+                                });
+                            if allowed {
+                                doc.move_element(drag_id, best_r, None, InsertPosition::AppendRung);
+                            }
                         }
                     }
                 }
@@ -1957,25 +2594,38 @@ impl CanvasViewport {
                 } else if let Some(hp) = hover_pos {
                     if viewport_rect.contains(hp) {
                         let world_p = self.to_world(hp, origin);
-                        let next_id = doc.program.alloc_id();
-                        if let Some(elem) = tool.create_default_element(next_id) {
-                            if doc.program.rungs.is_empty() || world_p.y >= cur_y - 8.0 {
+                        if doc.program.rungs.is_empty() || world_p.y >= cur_y - 8.0 {
+                            let next_id = doc.program.alloc_id();
+                            if let Some(elem) = tool.create_default_element(next_id) {
                                 doc.insert_element_to_new_rung(elem, None);
-                            } else {
-                                // Snap to closest rung by Y
-                                let mut best_r = 0;
-                                let mut min_dist = f32::MAX;
-                                for &(r_idx, r_start_y, r_end_y) in &rung_y_spans {
-                                    let mid_y = (r_start_y + r_end_y) * 0.5;
-                                    let dist = (world_p.y - mid_y).abs();
-                                    if dist < min_dist {
-                                        min_dist = dist;
-                                        best_r = r_idx;
-                                    }
+                            }
+                        } else {
+                            // Snap to closest rung by Y
+                            let mut best_r = 0;
+                            let mut min_dist = f32::MAX;
+                            for &(r_idx, r_start_y, r_end_y) in &rung_y_spans {
+                                let mid_y = (r_start_y + r_end_y) * 0.5;
+                                let dist = (world_p.y - mid_y).abs();
+                                if dist < min_dist {
+                                    min_dist = dist;
+                                    best_r = r_idx;
                                 }
-                                doc.selected_rung_idx = Some(best_r);
-                                doc.selected_element_id = None;
-                                doc.insert_element(elem, default_insert_pos);
+                            }
+                            let allowed = doc
+                                .program
+                                .rungs
+                                .get(best_r)
+                                .map_or(true, |r| {
+                                    tool.element_type()
+                                        .map_or(true, |st| validate_rung_append(st, r).is_ok())
+                                });
+                            if allowed {
+                                let next_id = doc.program.alloc_id();
+                                if let Some(elem) = tool.create_default_element(next_id) {
+                                    doc.selected_rung_idx = Some(best_r);
+                                    doc.selected_element_id = None;
+                                    doc.insert_element(elem, default_insert_pos);
+                                }
                             }
                         }
                     }
@@ -2281,7 +2931,25 @@ impl CanvasViewport {
                                         close_menu = true;
                                     }
                                     ctx_menu_sep(ui, palette);
-                                    if ctx_menu_item(
+                                    let cand_tag = active_tool.element_type().unwrap_or(TypeTag::Contact);
+                                    let (par_err, after_err, before_err) = if let Some(target_el) = doc.element_by_id(el_id) {
+                                        let pctx = doc
+                                            .program
+                                            .rungs
+                                            .get(r_idx)
+                                            .map(|r| find_placement_context(r, el_id))
+                                            .unwrap_or_default();
+                                        (
+                                            validate_placement(cand_tag, target_el, InsertPosition::BottomParallel, pctx).err(),
+                                            validate_placement(cand_tag, target_el, InsertPosition::Right, pctx).err(),
+                                            validate_placement(cand_tag, target_el, InsertPosition::Left, pctx).err(),
+                                        )
+                                    } else {
+                                        (None, None, None)
+                                    };
+                                    if let Some(v) = par_err {
+                                        ctx_menu_item_disabled(ui, "Add Parallel (Below)", v, palette);
+                                    } else if ctx_menu_item(
                                         ui,
                                         "Add Parallel (Below)",
                                         "",
@@ -2292,7 +2960,9 @@ impl CanvasViewport {
                                         action = Some(CanvasAction::AddParallelToSelection);
                                         close_menu = true;
                                     }
-                                    if ctx_menu_item(
+                                    if let Some(v) = after_err {
+                                        ctx_menu_item_disabled(ui, "Add Series (After)", v, palette);
+                                    } else if ctx_menu_item(
                                         ui,
                                         "Add Series (After)",
                                         "",
@@ -2303,7 +2973,9 @@ impl CanvasViewport {
                                         action = Some(CanvasAction::AddSeriesToSelection(true));
                                         close_menu = true;
                                     }
-                                    if ctx_menu_item(
+                                    if let Some(v) = before_err {
+                                        ctx_menu_item_disabled(ui, "Add Series (Before)", v, palette);
+                                    } else if ctx_menu_item(
                                         ui,
                                         "Add Series (Before)",
                                         "",
@@ -2544,6 +3216,62 @@ impl CanvasViewport {
         open_modal_for_id
     }
 
+    fn find_elem_rect_recursive(
+        &self,
+        elem: &LadderElement,
+        start_world: Pos2,
+        cell_w: f32,
+        cell_h: f32,
+        target_id: u64,
+        origin: Pos2,
+    ) -> (Option<Rect>, f32, f32) {
+        if elem.element_type == TypeTag::Branch {
+            let pad_x = 14.0;
+            let inner_start_x = start_world.x + pad_x;
+            let mut max_inner_x = inner_start_x + cell_w;
+            let mut cur_branch_y = start_world.y;
+            let mut found = None;
+
+            for path in &elem.branch_paths {
+                let mut path_x = inner_start_x;
+                let mut path_max_y = cur_branch_y + cell_h;
+                for sub in path {
+                    let (sub_found, nx, my) = self.find_elem_rect_recursive(
+                        sub,
+                        pos2(path_x, cur_branch_y),
+                        cell_w,
+                        cell_h,
+                        target_id,
+                        origin,
+                    );
+                    if sub_found.is_some() {
+                        found = sub_found;
+                    }
+                    path_x = nx;
+                    if my > path_max_y {
+                        path_max_y = my;
+                    }
+                }
+                if path_x > max_inner_x {
+                    max_inner_x = path_x;
+                }
+                cur_branch_y = path_max_y;
+            }
+            (found, max_inner_x + pad_x, cur_branch_y)
+        } else {
+            let found = if elem.id == target_id {
+                let rw = Rect::from_min_size(start_world, vec2(cell_w, cell_h));
+                Some(Rect::from_min_max(
+                    self.to_screen(rw.min, origin),
+                    self.to_screen(rw.max, origin),
+                ))
+            } else {
+                None
+            };
+            (found, start_world.x + cell_w, start_world.y + cell_h)
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn find_selected_rect_on_screen(
         &self,
@@ -2563,53 +3291,114 @@ impl CanvasViewport {
             let mut cur_x = margin_left + 24.0;
             let mut max_y = rung_start_y + cell_h;
 
-            for elem in &rung.elements {
-                if elem.element_type.is_right_aligned() {
-                    let target_x = (margin_right - cell_w - 16.0).max(cur_x + 36.0);
+            let last_idx = rung.elements.len().saturating_sub(1);
+            for (elem_idx, elem) in rung.elements.iter().enumerate() {
+                let is_last = elem_idx == last_idx;
+                let is_output_branch = is_parallel_output_branch(elem);
+                if (elem.element_type.is_right_aligned() || is_output_branch) && is_last {
+                    let elem_w = Self::element_width(elem, cell_w);
+                    let right_pad = if is_output_branch { 0.0 } else { 16.0 };
+                    let target_x = (margin_right - elem_w - right_pad).max(cur_x + 36.0);
                     if target_x > cur_x {
                         cur_x = target_x;
                     }
                 }
-                if elem.element_type == TypeTag::Branch {
-                    let pad_x = 14.0;
-                    let inner_start_x = cur_x + pad_x;
-                    let mut max_inner_x = inner_start_x + cell_w;
-                    let mut cur_branch_y = rung_start_y;
-                    for path in &elem.branch_paths {
-                        let mut path_x = inner_start_x;
-                        for sub in path {
-                            if sub.id == target_id {
-                                let rw = Rect::from_min_size(pos2(path_x, cur_branch_y), vec2(cell_w, cell_h));
-                                return Some(Rect::from_min_max(
-                                    self.to_screen(rw.min, origin),
-                                    self.to_screen(rw.max, origin),
-                                ));
-                            }
-                            path_x += cell_w;
-                        }
-                        if path_x > max_inner_x {
-                            max_inner_x = path_x;
-                        }
-                        cur_branch_y += cell_h;
-                    }
-                    cur_x = max_inner_x + pad_x;
-                    if cur_branch_y > max_y {
-                        max_y = cur_branch_y;
-                    }
-                } else {
-                    if elem.id == target_id {
-                        let rw = Rect::from_min_size(pos2(cur_x, rung_start_y), vec2(cell_w, cell_h));
-                        return Some(Rect::from_min_max(
-                            self.to_screen(rw.min, origin),
-                            self.to_screen(rw.max, origin),
-                        ));
-                    }
-                    cur_x += cell_w;
+                let (found, next_x, elem_max_y) = self.find_elem_rect_recursive(
+                    elem,
+                    pos2(cur_x, rung_start_y),
+                    cell_w,
+                    cell_h,
+                    target_id,
+                    origin,
+                );
+                if found.is_some() {
+                    return found;
+                }
+                cur_x = next_x;
+                if elem_max_y > max_y {
+                    max_y = elem_max_y;
                 }
             }
             cur_y = max_y + 18.0;
         }
         None
+    }
+
+    fn draw_validation_tooltip(
+        &self,
+        painter: &Painter,
+        viewport_rect: Rect,
+        anchor: Pos2,
+        lines: &[String],
+        accent: Color32,
+        palette: ThemePalette,
+    ) {
+        if lines.is_empty() {
+            return;
+        }
+        let font = FontId::proportional(10.5);
+        let line_h = 15.0;
+        let pad_x = 10.0;
+        let pad_y = 7.0;
+        let max_line_w = lines
+            .iter()
+            .map(|l| painter.layout_no_wrap(l.clone(), font.clone(), palette.text_primary).size().x)
+            .fold(120.0_f32, f32::max)
+            .min(380.0);
+        let box_w = max_line_w + pad_x * 2.0;
+        let box_h = lines.len() as f32 * line_h + pad_y * 2.0;
+
+        let bx = anchor
+            .x
+            .clamp(
+                viewport_rect.min.x + 8.0,
+                (viewport_rect.max.x - box_w - 8.0).max(viewport_rect.min.x + 8.0),
+            );
+        let by = if anchor.y - box_h >= viewport_rect.min.y + 8.0 {
+            anchor.y - box_h
+        } else {
+            anchor.y.clamp(
+                viewport_rect.min.y + 8.0,
+                (viewport_rect.max.y - box_h - 8.0).max(viewport_rect.min.y + 8.0),
+            )
+        };
+        let rect = Rect::from_min_size(pos2(bx, by), vec2(box_w, box_h));
+
+        painter.add(
+            egui::Shadow {
+                offset: [0, 3],
+                blur: 10,
+                spread: 0,
+                color: Color32::from_black_alpha(if palette.is_light() { 36 } else { 115 }),
+            }
+            .as_shape(rect, CornerRadius::same(6)),
+        );
+        painter.rect_filled(rect, CornerRadius::same(6), palette.card_bg);
+        painter.rect_stroke(
+            rect,
+            CornerRadius::same(6),
+            Stroke::new(1.2, accent),
+            StrokeKind::Inside,
+        );
+
+        let text_clip = rect.shrink(3.0);
+        for (i, line) in lines.iter().enumerate() {
+            let y = rect.min.y + pad_y + (i as f32 + 0.5) * line_h;
+            let col = if line.starts_with("  Fix:") || line.starts_with("Click to") {
+                palette.rung_text_dim
+            } else if i == 0 {
+                accent
+            } else {
+                palette.text_primary
+            };
+            painter.with_clip_rect(text_clip).text(
+                pos2(rect.min.x + pad_x, y),
+                Align2::LEFT_CENTER,
+                line,
+                font.clone(),
+                col,
+            );
+        }
     }
 
     fn sample_quadratic_bezier(p0: Pos2, p1: Pos2, p2: Pos2, steps: usize) -> Vec<Pos2> {
@@ -2728,6 +3517,12 @@ impl CanvasViewport {
         dragging_source_type: Option<TypeTag>,
         target_is_first: bool,
         target_is_last: bool,
+        in_branch: bool,
+        has_downstream_after_branch: bool,
+        is_terminal_output_branch: bool,
+        margin_right: f32,
+        validation_report: &ProgramValidationReport,
+        pending_tooltip: &mut Option<(Pos2, Vec<String>, Color32)>,
     ) -> (f32, f32) {
         if elem.element_type == TypeTag::Branch {
             let pad_x = 14.0;
@@ -2761,6 +3556,8 @@ impl CanvasViewport {
                 for (sub_idx, sub) in path.iter().enumerate() {
                     let sub_is_first = sub_idx == 0;
                     let sub_is_last = sub_idx == sub_last_idx;
+                    let sub_is_terminal_out =
+                        is_terminal_output_branch && sub_is_last && is_parallel_output_branch(sub);
                     let (nx, my) = self.draw_element_tree(
                         painter,
                         origin,
@@ -2793,6 +3590,12 @@ impl CanvasViewport {
                         dragging_source_type,
                         sub_is_first,
                         sub_is_last,
+                        true,
+                        has_downstream_after_branch || !target_is_last,
+                        sub_is_terminal_out,
+                        margin_right,
+                        validation_report,
+                        pending_tooltip,
                     );
                     path_x = nx;
                     if my > path_max_y {
@@ -2834,6 +3637,30 @@ impl CanvasViewport {
                             painter.circle_filled(pt_l, 3.2 * self.zoom, palette.accent_heading);
                         }
                     }
+                }
+
+                if is_terminal_output_branch {
+                    // TC03 / R07: Each parallel output branch connects directly to the L2 rail (no floating right join bar)
+                    for (i, &wy) in branch_wire_ys.iter().enumerate() {
+                        let end_x = branch_end_xs[i];
+                        if end_x < margin_right {
+                            self.draw_power_wire(
+                                painter,
+                                self.to_screen(pos2(end_x, wy), origin),
+                                self.to_screen(pos2(margin_right, wy), origin),
+                                branch_energized[i] && sim_active,
+                                palette,
+                            );
+                            let pt_l2 = self.to_screen(pos2(margin_right, wy), origin);
+                            if branch_energized[i] && sim_active {
+                                painter.circle_filled(pt_l2, 5.5 * self.zoom, palette.wire_glow);
+                                painter.circle_filled(pt_l2, 3.4 * self.zoom, palette.wire_energized);
+                            } else {
+                                painter.circle_filled(pt_l2, 3.0 * self.zoom, palette.l2_rail);
+                            }
+                        }
+                    }
+                    return (margin_right, cur_branch_y);
                 }
 
                 // Right horizontal extensions to branch_right_x
@@ -2921,7 +3748,8 @@ impl CanvasViewport {
 
             // Detect directional insertion zone when an insert tool OR element drag is active
             let mut hovered_zone: Option<InsertPosition> = None;
-            let mut validation_result: Result<InsertPosition, &'static str> = Ok(InsertPosition::Right);
+            let mut validation_result: Result<InsertPosition, PlacementViolation> =
+                Ok(InsertPosition::Right);
 
             if let Some(hp) = hover_pos {
                 if is_hovered && is_dragging_other {
@@ -2940,7 +3768,13 @@ impl CanvasViewport {
                     };
 
                     if let Some(src_tag) = dragging_source_type {
-                        validation_result = validate_placement(src_tag, elem, raw_zone, target_is_first, target_is_last);
+                        let pctx = PlacementContext {
+                            target_is_first,
+                            target_is_last,
+                            in_branch,
+                            has_downstream_after_branch,
+                        };
+                        validation_result = validate_placement(src_tag, elem, raw_zone, pctx);
                     }
                     hovered_zone = Some(raw_zone);
                 }
@@ -2948,9 +3782,9 @@ impl CanvasViewport {
 
             if is_dragging_other && is_hovered {
                 if let Some(zone) = hovered_zone {
-                    let (effective_zone, val_err) = match validation_result {
-                        Ok(adjusted_zone) => (adjusted_zone, None),
-                        Err(err_msg) => (zone, Some(err_msg.to_string())),
+                    let (effective_zone, val_rule, val_err) = match validation_result {
+                        Ok(adjusted_zone) => (adjusted_zone, None, None),
+                        Err(v) => (zone, Some(v.rule_id), Some(v.formatted())),
                     };
 
                     let pos_name = match effective_zone {
@@ -2970,6 +3804,7 @@ impl CanvasViewport {
                             elem.name,
                             rung_idx + 1
                         ),
+                        validation_rule_id: val_rule,
                         validation_error: val_err,
                         create_new_rung: false,
                     });
@@ -2990,8 +3825,35 @@ impl CanvasViewport {
                 self.context_menu_pos = mouse_pos.or(hover_pos);
             }
 
-            let is_valid = validation_result.is_ok();
-            let hovered_zone_with_validity = hovered_zone.map(|z| (z, is_valid));
+            let blocked_rule = validation_result.err().map(|v| v.rule_id);
+            let hovered_zone_with_validity = hovered_zone.map(|z| (z, blocked_rule));
+
+            let elem_issues = validation_report.issues_for_element(elem.id);
+            let elem_validation = elem_issues
+                .iter()
+                .max_by_key(|i| i.severity)
+                .filter(|i| i.severity >= ValidationSeverity::Unknown)
+                .map(|i| (i.severity, i.rule_id));
+
+            if is_hovered && !is_dragging_other && !is_being_dragged && !elem_issues.is_empty() {
+                if let Some((top_sev, _)) = elem_validation {
+                    let accent = match top_sev {
+                        ValidationSeverity::Error => palette.accent_danger,
+                        ValidationSeverity::Warning => palette.accent_warn,
+                        _ => palette.accent_heading,
+                    };
+                    let mut lines = Vec::new();
+                    for iss in elem_issues.iter().take(3) {
+                        lines.push(format!("[{}] {}", iss.rule_id, iss.message));
+                        lines.push(format!("  Fix: {}", iss.suggestion));
+                    }
+                    *pending_tooltip = Some((
+                        pos2(rect_screen.min.x, rect_screen.min.y - 6.0),
+                        lines,
+                        accent,
+                    ));
+                }
+            }
 
             self.draw_modern_element(
                 painter,
@@ -3003,6 +3865,7 @@ impl CanvasViewport {
                 sim_active,
                 power_in,
                 hovered_zone_with_validity,
+                elem_validation,
                 default_contact_style,
                 default_coil_style,
                 palette,
@@ -3038,7 +3901,8 @@ impl CanvasViewport {
         is_hovered: bool,
         sim_active: bool,
         power_in: bool,
-        hovered_zone: Option<(InsertPosition, bool)>,
+        hovered_zone: Option<(InsertPosition, Option<&'static str>)>,
+        elem_validation: Option<(ValidationSeverity, &'static str)>,
         default_contact_style: ContactStyle,
         default_coil_style: CoilStyle,
         palette: ThemePalette,
@@ -3128,8 +3992,46 @@ impl CanvasViewport {
             );
         }
 
+        // Live STRICT_EDITOR Validation Overlay (subtle outline + compact top-left rule pill)
+        if let Some((sev, rule_id)) = elem_validation {
+            let val_col = match sev {
+                ValidationSeverity::Error => palette.accent_danger,
+                ValidationSeverity::Warning => palette.accent_warn,
+                _ => palette.accent_heading,
+            };
+            let val_box = rect_screen.shrink(2.5 * self.zoom);
+            if !is_selected && !is_cross_ref {
+                painter.rect_filled(
+                    val_box,
+                    6.0 * self.zoom,
+                    val_col.gamma_multiply(0.08),
+                );
+                painter.rect_stroke(
+                    val_box,
+                    6.0 * self.zoom,
+                    Stroke::new(1.6 * self.zoom, val_col.gamma_multiply(0.85)),
+                    StrokeKind::Inside,
+                );
+            }
+            let pill_w = 26.0 * self.zoom;
+            let pill_h = 13.0 * self.zoom;
+            let pill_rect = Rect::from_min_size(
+                pos2(val_box.min.x + 2.0 * self.zoom, val_box.min.y + 2.0 * self.zoom),
+                vec2(pill_w, pill_h),
+            );
+            painter.rect_filled(pill_rect, 3.0 * self.zoom, val_col);
+            painter.text(
+                pill_rect.center(),
+                Align2::CENTER_CENTER,
+                rule_id,
+                FontId::monospace((8.0 * self.zoom).max(6.0)),
+                Color32::WHITE,
+            );
+        }
+
         // Precision CAD Insertion Snap Guides
-        if let Some((zone, is_valid)) = hovered_zone {
+        if let Some((zone, blocked_rule)) = hovered_zone {
+            let is_valid = blocked_rule.is_none();
             let z = self.zoom;
             let guide_col = if is_valid {
                 palette.accent_heading
@@ -3154,14 +4056,14 @@ impl CanvasViewport {
                     painter.circle_filled(top_pt, 3.5 * z, guide_col);
                     painter.circle_filled(bot_pt, 3.5 * z, guide_col);
 
-                    let pill_txt = if !is_valid {
-                        "Blocked"
+                    let pill_txt = if let Some(rid) = blocked_rule {
+                        format!("Blocked {}", rid)
                     } else if is_left {
-                        "Before"
+                        "Before".to_string()
                     } else {
-                        "After"
+                        "After".to_string()
                     };
-                    let pill_w = if !is_valid { 48.0 * z } else { 42.0 * z };
+                    let pill_w = if blocked_rule.is_some() { 64.0 * z } else { 42.0 * z };
                     let pill_rect = Rect::from_center_size(pos2(beam_x, mid_y), vec2(pill_w, 16.0 * z));
                     painter.rect_filled(pill_rect, 8.0 * z, guide_col);
                     painter.text(
@@ -3193,8 +4095,12 @@ impl CanvasViewport {
                     painter.circle_filled(pos2(lx, mid_y), 3.0 * z, guide_col);
                     painter.circle_filled(pos2(rx, mid_y), 3.0 * z, guide_col);
 
-                    let pill_txt = if is_valid { "+ Parallel" } else { "Blocked" };
-                    let pill_w = if is_valid { 56.0 * z } else { 48.0 * z };
+                    let pill_txt = if let Some(rid) = blocked_rule {
+                        format!("Blocked {}", rid)
+                    } else {
+                        "+ Parallel".to_string()
+                    };
+                    let pill_w = if blocked_rule.is_some() { 64.0 * z } else { 56.0 * z };
                     let pill_rect = Rect::from_center_size(pos2(center.x, branch_y), vec2(pill_w, 16.0 * z));
                     painter.rect_filled(pill_rect, 8.0 * z, guide_col);
                     painter.text(
@@ -3215,8 +4121,12 @@ impl CanvasViewport {
                         5.0 * z,
                         3.5 * z,
                     );
-                    let pill_txt = if is_valid { "+ Append" } else { "Blocked" };
-                    let pill_w = if is_valid { 54.0 * z } else { 48.0 * z };
+                    let pill_txt = if let Some(rid) = blocked_rule {
+                        format!("Blocked {}", rid)
+                    } else {
+                        "+ Append".to_string()
+                    };
+                    let pill_w = if blocked_rule.is_some() { 64.0 * z } else { 54.0 * z };
                     let pill_rect = Rect::from_center_size(center, vec2(pill_w, 16.0 * z));
                     painter.rect_filled(pill_rect, 8.0 * z, guide_col);
                     painter.text(
@@ -5000,51 +5910,201 @@ mod tests {
         };
         let ton = LadderElement::new_ton(4, "T0", "T0", 1000);
 
-        // Rule 1: Label [LBL]
-        assert!(validate_placement(TypeTag::Label, &contact, InsertPosition::Left, true, false).is_ok());
-        assert!(validate_placement(TypeTag::Label, &contact, InsertPosition::Left, false, false).is_err());
-        assert!(validate_placement(TypeTag::Label, &contact, InsertPosition::Right, true, false).is_err());
-        assert!(validate_placement(TypeTag::Label, &contact, InsertPosition::TopParallel, true, false).is_err());
+        let ctx_first = PlacementContext {
+            target_is_first: true,
+            target_is_last: false,
+            in_branch: false,
+            has_downstream_after_branch: false,
+        };
+        let ctx_mid = PlacementContext {
+            target_is_first: false,
+            target_is_last: false,
+            in_branch: false,
+            has_downstream_after_branch: false,
+        };
+        let ctx_last = PlacementContext {
+            target_is_first: false,
+            target_is_last: true,
+            in_branch: false,
+            has_downstream_after_branch: false,
+        };
 
-        // Rule 2: Cannot place any components after Jump [JMP]
-        assert!(validate_placement(TypeTag::Contact, &jmp, InsertPosition::Right, false, true).is_err());
-        assert!(validate_placement(TypeTag::Contact, &jmp, InsertPosition::Left, false, true).is_ok());
-
-        // Rule 3: Output Coils terminate the rung & auto-correction
-        // Dropping coil to the right of coil -> auto-correct to BottomParallel
+        // Rule 1 (R01): Label [LBL]
+        assert!(validate_placement(TypeTag::Label, &contact, InsertPosition::Left, ctx_first).is_ok());
         assert_eq!(
-            validate_placement(TypeTag::Coil, &coil, InsertPosition::Right, false, true).unwrap(),
-            InsertPosition::BottomParallel
+            validate_placement(TypeTag::Label, &contact, InsertPosition::Left, ctx_mid).unwrap_err().rule_id,
+            "R01"
         );
-        // Dropping coil to the left of coil -> auto-correct to TopParallel
         assert_eq!(
-            validate_placement(TypeTag::Coil, &coil, InsertPosition::Left, false, true).unwrap(),
+            validate_placement(TypeTag::Label, &contact, InsertPosition::Right, ctx_first).unwrap_err().rule_id,
+            "R01"
+        );
+        assert_eq!(
+            validate_placement(TypeTag::Label, &contact, InsertPosition::TopParallel, ctx_first).unwrap_err().rule_id,
+            "R01"
+        );
+
+        // Rule 2 (R01): Cannot place any components after Jump [JMP] or Return [RET]
+        assert_eq!(
+            validate_placement(TypeTag::Contact, &jmp, InsertPosition::Right, ctx_last).unwrap_err().rule_id,
+            "R01"
+        );
+        assert!(validate_placement(TypeTag::Contact, &jmp, InsertPosition::Left, ctx_last).is_ok());
+
+        // Rule 3 (STRICT_EDITOR R07/R08/R09/R10): Output Coils terminate the branch
+        // Dropping coil to the right or left of coil -> STRICT R08 ERROR (no auto-convert)
+        assert_eq!(
+            validate_placement(TypeTag::Coil, &coil, InsertPosition::Right, ctx_last).unwrap_err().rule_id,
+            "R08"
+        );
+        assert_eq!(
+            validate_placement(TypeTag::Coil, &coil, InsertPosition::Left, ctx_last).unwrap_err().rule_id,
+            "R08"
+        );
+        // Dropping coil on TopParallel / BottomParallel of coil -> ALLOWED (R07 parallel output branch)
+        assert_eq!(
+            validate_placement(TypeTag::Coil, &coil, InsertPosition::TopParallel, ctx_last).unwrap(),
             InsertPosition::TopParallel
         );
-        // Contact cannot be placed to the right of coil
-        assert!(validate_placement(TypeTag::Contact, &coil, InsertPosition::Right, false, true).is_err());
-        // Contact cannot parallel across coil
-        assert!(validate_placement(TypeTag::Contact, &coil, InsertPosition::BottomParallel, false, true).is_err());
+        assert_eq!(
+            validate_placement(TypeTag::Coil, &coil, InsertPosition::BottomParallel, ctx_last).unwrap(),
+            InsertPosition::BottomParallel
+        );
+        // Branch after coil -> R10 ERROR
+        assert_eq!(
+            validate_placement(TypeTag::Branch, &coil, InsertPosition::Right, ctx_last).unwrap_err().rule_id,
+            "R10"
+        );
+        // Contact cannot be placed to the right of coil -> R09 ERROR
+        assert_eq!(
+            validate_placement(TypeTag::Contact, &coil, InsertPosition::Right, ctx_last).unwrap_err().rule_id,
+            "R09"
+        );
+        // Contact cannot parallel across coil -> R07 ERROR
+        assert_eq!(
+            validate_placement(TypeTag::Contact, &coil, InsertPosition::BottomParallel, ctx_last).unwrap_err().rule_id,
+            "R07"
+        );
 
-        // Rule 4: Cannot parallel an output coil across an input contact
-        assert!(validate_placement(TypeTag::Coil, &contact, InsertPosition::BottomParallel, true, false).is_err());
-        assert!(validate_placement(TypeTag::Coil, &contact, InsertPosition::TopParallel, true, false).is_err());
-        assert!(validate_placement(TypeTag::Coil, &contact, InsertPosition::Left, true, false).is_err());
+        // Rule 4 (R06/R07): Cannot parallel an output coil across an input contact
+        assert_eq!(
+            validate_placement(TypeTag::Coil, &contact, InsertPosition::BottomParallel, ctx_first).unwrap_err().rule_id,
+            "R07"
+        );
+        assert_eq!(
+            validate_placement(TypeTag::Coil, &contact, InsertPosition::TopParallel, ctx_first).unwrap_err().rule_id,
+            "R07"
+        );
+        assert_eq!(
+            validate_placement(TypeTag::Coil, &contact, InsertPosition::Left, ctx_first).unwrap_err().rule_id,
+            "R06"
+        );
 
-        // Rule 5: Cannot place an output coil before a function block
-        assert!(validate_placement(TypeTag::Coil, &ton, InsertPosition::Left, false, false).is_err());
+        // Rule 5 (R06): Cannot place an output coil before a function block
+        assert_eq!(
+            validate_placement(TypeTag::Coil, &ton, InsertPosition::Left, ctx_mid).unwrap_err().rule_id,
+            "R06"
+        );
 
         // Non-Coil right-aligned outputs (e.g. UartSend, MbMaster) vs Contact & Coil chaining
         let mut uart_tx = LadderElement::new_wire(6);
         uart_tx.element_type = TypeTag::UartSend;
         let mut uart_rx = LadderElement::new_wire(7);
         uart_rx.element_type = TypeTag::UartRecv;
-        assert!(validate_placement(TypeTag::Contact, &uart_tx, InsertPosition::Right, false, true).is_err());
-        assert!(validate_placement(TypeTag::UartSend, &contact, InsertPosition::Left, true, false).is_err());
-        // Chaining Coil after an output FB (e.g. UartSend / MbMaster -> Coil) remains allowed
-        assert!(validate_placement(TypeTag::Coil, &uart_tx, InsertPosition::Right, false, true).is_ok());
+        assert_eq!(
+            validate_placement(TypeTag::Contact, &uart_tx, InsertPosition::Right, ctx_last).unwrap_err().rule_id,
+            "R09"
+        );
+        assert_eq!(
+            validate_placement(TypeTag::UartSend, &contact, InsertPosition::Left, ctx_first).unwrap_err().rule_id,
+            "R06"
+        );
+        // Chaining Coil after an output FB (e.g. UartSend / MbMaster -> Coil) remains allowed at terminal position
+        assert!(validate_placement(TypeTag::Coil, &uart_tx, InsertPosition::Right, ctx_last).is_ok());
         // Cannot place Coil before UartRecv
-        assert!(validate_placement(TypeTag::Coil, &uart_rx, InsertPosition::Left, false, false).is_err());
+        assert_eq!(
+            validate_placement(TypeTag::Coil, &uart_rx, InsertPosition::Left, ctx_mid).unwrap_err().rule_id,
+            "R06"
+        );
+
+        // Rule R21: Coil inside branch before merge with downstream elements is blocked
+        let ctx_branch_before_merge = PlacementContext {
+            target_is_first: true,
+            target_is_last: true,
+            in_branch: true,
+            has_downstream_after_branch: true,
+        };
+        assert_eq!(
+            validate_placement(TypeTag::Coil, &contact, InsertPosition::Right, ctx_branch_before_merge)
+                .unwrap_err()
+                .rule_id,
+            "R21"
+        );
+        assert_eq!(
+            validate_placement(TypeTag::Coil, &coil, InsertPosition::BottomParallel, ctx_branch_before_merge)
+                .unwrap_err()
+                .rule_id,
+            "R21"
+        );
+        // Rule R21: Coil placed right of a non-last contact (before downstream elements) is blocked
+        assert_eq!(
+            validate_placement(TypeTag::Coil, &contact, InsertPosition::Right, ctx_first)
+                .unwrap_err()
+                .rule_id,
+            "R21"
+        );
+        // Coil placed right of the last contact (no downstream elements) is allowed
+        assert!(validate_placement(TypeTag::Coil, &contact, InsertPosition::Right, ctx_last).is_ok());
+    }
+
+    #[test]
+    fn test_validate_rung_append_rules() {
+        let mut rung = Rung::new(0);
+        // Empty rung accepts Label or Coil
+        assert!(validate_rung_append(TypeTag::Label, &rung).is_ok());
+        assert!(validate_rung_append(TypeTag::Coil, &rung).is_ok());
+
+        // Non-empty rung with Coil blocks appending another Coil (R08) and Label (R01)
+        rung.elements.push(LadderElement::new_contact(1, "%IX0.0", "A", ContactMode::NormallyOpen));
+        rung.elements.push(LadderElement::new_coil(2, "%QX0.0", "Q1", CoilMode::Normal));
+        assert_eq!(validate_rung_append(TypeTag::Label, &rung).unwrap_err().rule_id, "R01");
+        assert_eq!(validate_rung_append(TypeTag::Coil, &rung).unwrap_err().rule_id, "R08");
+
+        // Rung ending in JMP blocks appending anything (R01)
+        let mut jmp_rung = Rung::new(1);
+        jmp_rung.elements.push(LadderElement {
+            id: 3,
+            element_type: TypeTag::Jump,
+            name: "L1".to_string(),
+            ..Default::default()
+        });
+        assert_eq!(validate_rung_append(TypeTag::Contact, &jmp_rung).unwrap_err().rule_id, "R01");
+
+        // R21: Rung ending in a Branch containing a Coil blocks appending downstream elements
+        let mut branch_coil_rung = Rung::new(2);
+        branch_coil_rung.elements.push(LadderElement::new_branch(
+            10,
+            vec![
+                vec![
+                    LadderElement::new_contact(11, "%IX0.0", "A", ContactMode::NormallyOpen),
+                    LadderElement::new_coil(12, "%QX0.1", "Q1", CoilMode::Normal),
+                ],
+                vec![LadderElement::new_contact(
+                    13,
+                    "%IX0.1",
+                    "B",
+                    ContactMode::NormallyOpen,
+                )],
+            ],
+        ));
+        assert_eq!(
+            validate_rung_append(TypeTag::Coil, &branch_coil_rung).unwrap_err().rule_id,
+            "R21"
+        );
+        assert_eq!(
+            validate_rung_append(TypeTag::Contact, &branch_coil_rung).unwrap_err().rule_id,
+            "R21"
+        );
     }
 
     #[test]
@@ -5054,6 +6114,7 @@ mod tests {
             target_elem_id: None,
             insert_pos: InsertPosition::AppendRung,
             target_label: "New Network #03".to_string(),
+            validation_rule_id: None,
             validation_error: None,
             create_new_rung: true,
         };

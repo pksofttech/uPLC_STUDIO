@@ -4,7 +4,7 @@ members = ["crates/*", "apps/*"]
 exclude = ["firmware/rp2040-embassy", "firmware/stm32f103c6-embassy"]
 
 [workspace.package]
-version = "0.1.4"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
@@ -15,6 +15,7 @@ uplc-vm = { path = "crates/vm" }
 
 egui = "0.37"
 eframe = { version = "0.37", default-features = false, features = [
+    "clipboard",
     "default_fonts",
     "wgpu",
     "x11",

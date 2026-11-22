@@ -174,11 +174,11 @@ fn test_drag_drop_toolbar_elements() {
     assert_eq!(doc.program.rungs[0].elements[0].element_type, my_canvas_core::TypeTag::Branch);
     assert_eq!(doc.program.rungs[0].elements[0].branch_paths.len(), 2);
 
-    // 3. Drop an element appending to Rung
+    // 3. Drop an element appending to Rung (Contact before terminal Coil, valid under STRICT_EDITOR R08/R30)
     let append_id = doc.program.alloc_id();
     doc.selected_rung_idx = Some(0);
     doc.insert_element(
-        LadderElement::new_coil(append_id, "Y10", "LAMP", my_canvas_core::CoilMode::Normal),
+        LadderElement::new_contact(append_id, "X12", "INTERLOCK", ContactMode::NormallyOpen),
         InsertPosition::AppendRung,
     );
     assert!(doc.program.rungs[0].elements.iter().any(|e| e.id == append_id));

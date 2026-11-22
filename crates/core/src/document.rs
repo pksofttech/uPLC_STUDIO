@@ -34,6 +34,9 @@ pub struct Document {
     pub undo_stack: Vec<LadderProgram>,
     #[serde(skip)]
     pub redo_stack: Vec<LadderProgram>,
+    /// Last transactional edit rejection message (Rule R30), consumed by the UI for toast feedback.
+    #[serde(skip)]
+    pub last_edit_rejection: Option<String>,
 }
 
 impl Default for Document {
@@ -51,6 +54,7 @@ impl Default for Document {
             is_dirty: false,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            last_edit_rejection: None,
         }
     }
 }
@@ -74,6 +78,7 @@ impl Document {
             is_dirty: false,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            last_edit_rejection: None,
         }
     }
 
@@ -144,10 +149,7 @@ impl Document {
         if !prev_hw.is_empty() {
             self.program.hardware = prev_hw;
         }
-        self.simulator.reset(&mut self.program);
-        for val in self.simulator.inputs.values_mut() {
-            *val = false;
-        }
+        self.simulator = PlcSimulator::default();
         self.undo_stack.clear();
         self.redo_stack.clear();
         self.selected_rung_idx = Some(0);
@@ -155,6 +157,7 @@ impl Document {
         self.selected_element_ids.clear();
         self.file_path = None;
         self.is_dirty = false;
+        self.last_edit_rejection = None;
     }
 
     pub fn clear_element_selection(&mut self) {
@@ -738,6 +741,39 @@ impl Document {
         self.is_dirty = true;
     }
 
+    /// Rule R30 Transactional Edit Guard: roll back if an edit introduces new structural/topology errors.
+    #[allow(clippy::too_many_arguments)]
+    fn rollback_if_structural_regression(
+        &mut self,
+        before_structural_errors: usize,
+        prev_program: LadderProgram,
+        pushed_undo: bool,
+        prev_rung: Option<usize>,
+        prev_sel_id: Option<u64>,
+        prev_sel_ids: Vec<u64>,
+        prev_dirty: bool,
+    ) -> bool {
+        let report = crate::validator::validate_program(&self.program);
+        let after = report.structural_errors();
+        if after.len() > before_structural_errors {
+            if pushed_undo {
+                self.undo_stack.pop();
+            }
+            self.program = prev_program;
+            self.selected_rung_idx = prev_rung;
+            self.selected_element_id = prev_sel_id;
+            self.selected_element_ids = prev_sel_ids;
+            self.is_dirty = prev_dirty;
+            self.last_edit_rejection = after
+                .first()
+                .map(|i| format!("[{}] {}", i.rule_id, i.message));
+            true
+        } else {
+            self.last_edit_rejection = None;
+            false
+        }
+    }
+
     /// Drag & Drop: Move an existing element `dragged_id` to `target_rung_idx` (relative to `target_elem_id` or appended to rung)
     pub fn move_element(
         &mut self,
@@ -752,21 +788,46 @@ impl Document {
         if target_rung_idx >= self.program.rungs.len() {
             return self.move_element_to_new_rung(dragged_id, None);
         }
+        let before_errs = crate::validator::validate_program(&self.program)
+            .structural_errors()
+            .len();
+        let prev_program = self.program.clone();
+        let prev_rung = self.selected_rung_idx;
+        let prev_sel_id = self.selected_element_id;
+        let prev_sel_ids = self.selected_element_ids.clone();
+        let prev_dirty = self.is_dirty;
+        let pushed_undo = self.undo_stack.last() != Some(&self.program);
+
         self.push_undo_snapshot();
         let elem = match self.take_element_by_id(dragged_id) {
             Some(el) => el,
             None => {
-                self.undo_stack.pop();
+                if pushed_undo {
+                    self.undo_stack.pop();
+                }
                 return false;
             }
         };
 
         self.selected_rung_idx = Some(target_rung_idx.min(self.program.rungs.len().saturating_sub(1)));
         self.selected_element_id = target_elem_id;
+        self.selected_element_ids = target_elem_id.into_iter().collect();
         self.insert_existing_element(elem, pos);
         self.selected_element_id = Some(dragged_id);
         self.selected_element_ids = vec![dragged_id];
         self.is_dirty = true;
+
+        if self.rollback_if_structural_regression(
+            before_errs,
+            prev_program,
+            pushed_undo,
+            prev_rung,
+            prev_sel_id,
+            prev_sel_ids,
+            prev_dirty,
+        ) {
+            return false;
+        }
         true
     }
 
@@ -819,6 +880,16 @@ impl Document {
     }
 
     pub fn insert_element(&mut self, mut elem: LadderElement, pos: InsertPosition) {
+        let before_errs = crate::validator::validate_program(&self.program)
+            .structural_errors()
+            .len();
+        let prev_program = self.program.clone();
+        let prev_rung = self.selected_rung_idx;
+        let prev_sel_id = self.selected_element_id;
+        let prev_sel_ids = self.selected_element_ids.clone();
+        let prev_dirty = self.is_dirty;
+        let pushed_undo = self.undo_stack.last() != Some(&self.program);
+
         self.push_undo_snapshot();
         if elem.id == 0 {
             elem.id = self.program.alloc_id();
@@ -831,9 +902,28 @@ impl Document {
             }
         }
         self.insert_existing_element(elem, pos);
+        self.rollback_if_structural_regression(
+            before_errs,
+            prev_program,
+            pushed_undo,
+            prev_rung,
+            prev_sel_id,
+            prev_sel_ids,
+            prev_dirty,
+        );
     }
 
     pub fn insert_parallel_to_selection(&mut self, mut elem: LadderElement, top: bool) {
+        let before_errs = crate::validator::validate_program(&self.program)
+            .structural_errors()
+            .len();
+        let prev_program = self.program.clone();
+        let prev_rung = self.selected_rung_idx;
+        let prev_sel_id = self.selected_element_id;
+        let prev_sel_ids = self.selected_element_ids.clone();
+        let prev_dirty = self.is_dirty;
+        let pushed_undo = self.undo_stack.last() != Some(&self.program);
+
         self.push_undo_snapshot();
         if elem.id == 0 {
             elem.id = self.program.alloc_id();
@@ -851,9 +941,28 @@ impl Document {
             InsertPosition::BottomParallel
         };
         self.insert_existing_element(elem, pos);
+        self.rollback_if_structural_regression(
+            before_errs,
+            prev_program,
+            pushed_undo,
+            prev_rung,
+            prev_sel_id,
+            prev_sel_ids,
+            prev_dirty,
+        );
     }
 
     pub fn insert_series_to_selection(&mut self, mut elem: LadderElement, after: bool) {
+        let before_errs = crate::validator::validate_program(&self.program)
+            .structural_errors()
+            .len();
+        let prev_program = self.program.clone();
+        let prev_rung = self.selected_rung_idx;
+        let prev_sel_id = self.selected_element_id;
+        let prev_sel_ids = self.selected_element_ids.clone();
+        let prev_dirty = self.is_dirty;
+        let pushed_undo = self.undo_stack.last() != Some(&self.program);
+
         self.push_undo_snapshot();
         if elem.id == 0 {
             elem.id = self.program.alloc_id();
@@ -871,6 +980,15 @@ impl Document {
             InsertPosition::Left
         };
         self.insert_existing_element(elem, pos);
+        self.rollback_if_structural_regression(
+            before_errs,
+            prev_program,
+            pushed_undo,
+            prev_rung,
+            prev_sel_id,
+            prev_sel_ids,
+            prev_dirty,
+        );
     }
 
     fn insert_existing_element(&mut self, mut elem: LadderElement, pos: InsertPosition) {
@@ -1067,9 +1185,10 @@ impl Document {
     pub fn load_from_il_str(&mut self, content: &str) -> Result<(), String> {
         let mut prog = IlParser::parse(content)?;
         prog.sync_symbols_from_elements_and_io();
-        self.push_undo_snapshot();
+        self.undo_stack.clear();
+        self.redo_stack.clear();
         self.program = prog;
-        self.simulator.reset(&mut self.program);
+        self.simulator = PlcSimulator::default();
         self.selected_rung_idx = Some(0);
         self.selected_element_id = None;
         self.selected_element_ids.clear();
@@ -1218,6 +1337,16 @@ impl Document {
         if els.is_empty() {
             return Vec::new();
         }
+        let before_errs = crate::validator::validate_program(&self.program)
+            .structural_errors()
+            .len();
+        let prev_program = self.program.clone();
+        let prev_rung = self.selected_rung_idx;
+        let prev_sel_id = self.selected_element_id;
+        let prev_sel_ids = self.selected_element_ids.clone();
+        let prev_dirty = self.is_dirty;
+        let pushed_undo = self.undo_stack.last() != Some(&self.program);
+
         self.push_undo_snapshot();
         self.sync_next_element_id();
         if self.program.rungs.is_empty() {
@@ -1242,6 +1371,18 @@ impl Document {
         self.selected_element_id = new_ids.first().copied();
         self.selected_element_ids = new_ids.clone();
         self.is_dirty = true;
+
+        if self.rollback_if_structural_regression(
+            before_errs,
+            prev_program,
+            pushed_undo,
+            prev_rung,
+            prev_sel_id,
+            prev_sel_ids,
+            prev_dirty,
+        ) {
+            return Vec::new();
+        }
         new_ids
     }
 
@@ -1544,6 +1685,62 @@ mod clipboard_find_tests {
         assert_eq!(doc.undo_stack.len(), undo_before + 1);
         doc.undo();
         assert_eq!(doc.program.rungs[0].elements[0].name, "%IX0.0");
+    }
+
+    #[test]
+    fn r30_transactional_edit_rejects_coil_in_series_and_branch_merge() {
+        let mut doc = Document::new_empty();
+        // 1. Inserting a first Contact onto an empty rung (incomplete R02 draft) MUST be allowed
+        let c1 = LadderElement::new_contact(1, "%IX0.0", "A", ContactMode::NormallyOpen);
+        doc.insert_element(c1, InsertPosition::AppendRung);
+        assert_eq!(doc.program.rungs[0].elements.len(), 1);
+        assert!(doc.last_edit_rejection.is_none());
+
+        // Add terminal Coil Q0
+        let q0 = LadderElement::new_coil(2, "%QX0.0", "Q0", CoilMode::Normal);
+        doc.insert_element(q0, InsertPosition::AppendRung);
+        assert_eq!(doc.program.rungs[0].elements.len(), 2);
+        assert!(doc.last_edit_rejection.is_none());
+
+        // 2. Pasting another Coil in series (Right of Q0) -> rejected by R30 (R08)
+        doc.set_single_selection(Some(0), 2);
+        let q1 = LadderElement::new_coil(3, "%QX0.1", "Q1", CoilMode::Normal);
+        let snapshot_before = doc.program.clone();
+        let pasted = doc.paste_elements(&[q1.clone()], InsertPosition::Right);
+        assert!(pasted.is_empty(), "series coil paste must be rolled back");
+        assert_eq!(doc.program, snapshot_before);
+        assert!(doc
+            .last_edit_rejection
+            .as_deref()
+            .unwrap_or("")
+            .contains("[R08]"));
+
+        // 3. Build parallel contact branch before Q0, then try moving a Coil into the branch -> rejected by R30 (R21)
+        doc.set_single_selection(Some(0), 1);
+        let c2 = LadderElement::new_contact(4, "%IX0.1", "B", ContactMode::NormallyOpen);
+        doc.insert_parallel_to_selection(c2, false);
+        assert!(doc.last_edit_rejection.is_none());
+
+        doc.add_rung();
+        let q_other = LadderElement::new_coil(5, "%QX0.2", "Q2", CoilMode::Normal);
+        doc.insert_element(q_other, InsertPosition::AppendRung);
+        let snapshot_before_move = doc.program.clone();
+        let moved = doc.move_element(5, 0, Some(1), InsertPosition::Right);
+        assert!(!moved, "moving coil into branch before merge must be rolled back");
+        assert_eq!(doc.program, snapshot_before_move);
+        assert!(doc
+            .last_edit_rejection
+            .as_deref()
+            .unwrap_or("")
+            .contains("[R21]"));
+
+        // 4. Deleting an offending element from an already-invalid draft MUST always be allowed
+        doc.program.rungs[0]
+            .elements
+            .push(LadderElement::new_coil(99, "%QX0.3", "BAD", CoilMode::Normal));
+        doc.set_single_selection(Some(0), 99);
+        doc.delete_selected_element();
+        assert!(doc.element_by_id(99).is_none());
     }
 }
 

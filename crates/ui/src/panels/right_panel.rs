@@ -47,7 +47,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                            hover: &str|
              -> bool {
                 let fill = if active {
-                    accent.gamma_multiply(0.18)
+                    palette.tab_selected_bg
                 } else {
                     Color32::TRANSPARENT
                 };
@@ -57,11 +57,7 @@ pub fn render(ui: &mut Ui, app: &mut CanvasApp) {
                     Stroke::NONE
                 };
                 let text_col = if active {
-                    if inactive_tint.is_some() {
-                        accent
-                    } else {
-                        palette.text_primary
-                    }
+                    palette.text_primary
                 } else {
                     inactive_tint.unwrap_or(palette.rung_text_dim)
                 };

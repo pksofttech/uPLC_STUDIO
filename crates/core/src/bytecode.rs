@@ -1685,6 +1685,20 @@ impl BytecodeCompiler {
         let mut mem_table: HashMap<(u8, bool), MemoryMapEntry> = HashMap::new();
         let mut ctx = CompileCtx::default();
 
+        // R20 / R37 Gate: block compilation on any STRICT_EDITOR validation ERROR
+        let val_report = crate::validator::validate_program(prog);
+        for issue in &val_report.issues {
+            if issue.severity == crate::validator::ValidationSeverity::Error {
+                ctx.report.error(format!(
+                    "Network #{:02} [{}]: {} ({})",
+                    issue.rung_idx + 1,
+                    issue.rule_id,
+                    issue.message,
+                    issue.suggestion
+                ));
+            }
+        }
+
         // Pre-populate IO mappings in memory table
         for (idx, io) in prog.io_mappings.iter().enumerate() {
             let (addr, canonical, region, sym, hw_pin) =
@@ -3287,6 +3301,38 @@ END_PROGRAM
         assert_eq!(snap.fw_feature_level, 0);
         assert!(snap.firmware_supports(1));
         assert!(!snap.firmware_supports(2));
+    }
+
+    #[test]
+    fn test_compile_report_blocks_r21_coil_before_branch_merge() {
+        let mut prog = LadderProgram::new_empty();
+        let br = LadderElement::new_branch(
+            10,
+            vec![
+                vec![
+                    LadderElement::new_contact(1, "%IX0.0", "A", ContactMode::NormallyOpen),
+                    LadderElement::new_coil(2, "%QX0.1", "Q1", CoilMode::Normal),
+                ],
+                vec![LadderElement::new_contact(
+                    3,
+                    "%IX0.0",
+                    "A",
+                    ContactMode::NormallyOpen,
+                )],
+            ],
+        );
+        prog.rungs[0].elements = vec![
+            br,
+            LadderElement::new_coil(4, "%QX0.0", "Q0", CoilMode::Normal),
+        ];
+
+        let (_bc, report) = BytecodeCompiler::compile_program_with_report(&prog);
+        assert!(!report.is_ok(), "R21 violation must fail compilation");
+        assert!(
+            report.errors.iter().any(|e| e.contains("[R21]")),
+            "expected [R21] error in report, got: {:?}",
+            report.errors
+        );
     }
 }
 
