@@ -17,7 +17,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # Pin to Ubuntu 22.04 (GLIBC 2.35) for broad Linux compatibility (avoids GLIBC_2.43 from ubuntu-latest)
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             archive_ext: tar.gz
             bin_name: laduino-plc
